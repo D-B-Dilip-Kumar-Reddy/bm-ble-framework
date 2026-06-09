@@ -3,6 +3,8 @@ import asyncio
 import pytest
 from bleak import BleakError
 
+from bmd_ble import CHARACTERISTIC_INCOMING, CHARACTERISTIC_CAM_STATUS, \
+    CHARACTERISTIC_TIMECODE
 from bmd_ble.camera_controller import BMDCameraController
 from bmd_ble.scanner import DiscoveredCamera
 
@@ -210,3 +212,150 @@ async def test_connect_scanning_failure_is_propagated(monkeypatch):
 
     assert "No camera found" in str(exc_info.value)
     assert controller._client is None
+
+
+@pytest.mark.asyncio
+async def test_disconnect_does_nothing_when_client_is_none():
+    discovered = DiscoveredCamera(
+        address="AA:BB:CC:DD:EE:01",
+        ble_name="BMPCC 6K G2",
+        rssi=-45,
+    )
+
+    controller = BMDCameraController(discovered)
+
+    await controller.disconnect()
+
+    assert controller._client is None
+
+
+@pytest.mark.asyncio
+async def test_disconnect_does_not_disconnect_when_client_not_connected():
+    discovered = DiscoveredCamera(
+        address="AA:BB:CC:DD:EE:02",
+        ble_name="BMPCC 6K G2",
+        rssi=-50,
+    )
+
+    controller = BMDCameraController(discovered)
+
+    class FakeDisconnectedClient:
+        is_connected = False
+
+        def __init__(self):
+            self.disconnect_called = False
+            self.stop_notify_called = False
+
+        async def stop_notify(self, char):
+            self.stop_notify_called = True
+
+        async def disconnect(self):
+            self.disconnect_called = True
+
+    fake_client = FakeDisconnectedClient()
+    controller._client = fake_client
+
+    await controller.disconnect()
+
+    assert fake_client.stop_notify_called is False
+    assert fake_client.disconnect_called is False
+
+
+@pytest.mark.asyncio
+async def test_disconnect_stops_notifications_and_disconnects_when_connected():
+    discovered = DiscoveredCamera(
+        address="AA:BB:CC:DD:EE:03",
+        ble_name="BMPCC 6K G2",
+        rssi=-55,
+    )
+
+    controller = BMDCameraController(discovered)
+
+    class FakeConnectedClient:
+        is_connected = True
+
+        def __init__(self):
+            self.stopped_notifications = []
+            self.disconnect_called = False
+
+        async def stop_notify(self, char):
+            self.stopped_notifications.append(char)
+
+        async def disconnect(self):
+            self.disconnect_called = True
+
+    fake_client = FakeConnectedClient()
+    controller._client = fake_client
+
+    await controller.disconnect()
+
+    assert fake_client.stopped_notifications == [
+        CHARACTERISTIC_INCOMING,
+        CHARACTERISTIC_CAM_STATUS,
+        CHARACTERISTIC_TIMECODE,
+    ]
+    assert fake_client.disconnect_called is True
+
+
+@pytest.mark.asyncio
+async def test_disconnect_ignores_bleak_error_from_stop_notify():
+    discovered = DiscoveredCamera(
+        address="AA:BB:CC:DD:EE:04",
+        ble_name="BMPCC 6K G2",
+        rssi=-60,
+    )
+
+    controller = BMDCameraController(discovered)
+
+    class StopNotifyFailingClient:
+        is_connected = True
+
+        def __init__(self):
+            self.stop_notify_calls = []
+            self.disconnect_called = False
+
+        async def stop_notify(self, char):
+            self.stop_notify_calls.append(char)
+            raise BleakError("notification already stopped")
+
+        async def disconnect(self):
+            self.disconnect_called = True
+
+    fake_client = StopNotifyFailingClient()
+    controller._client = fake_client
+
+    await controller.disconnect()
+
+    assert fake_client.stop_notify_calls == [
+        CHARACTERISTIC_INCOMING,
+        CHARACTERISTIC_CAM_STATUS,
+        CHARACTERISTIC_TIMECODE,
+    ]
+    assert fake_client.disconnect_called is True
+
+
+@pytest.mark.asyncio
+async def test_disconnect_propagates_disconnect_error():
+    discovered = DiscoveredCamera(
+        address="AA:BB:CC:DD:EE:05",
+        ble_name="BMPCC 6K G2",
+        rssi=-65,
+    )
+
+    controller = BMDCameraController(discovered)
+
+    class DisconnectFailingClient:
+        is_connected = True
+
+        async def stop_notify(self, char):
+            return None
+
+        async def disconnect(self):
+            raise BleakError("disconnect failed")
+
+    controller._client = DisconnectFailingClient()
+
+    with pytest.raises(BleakError) as exc_info:
+        await controller.disconnect()
+
+    assert "disconnect failed" in str(exc_info.value)
