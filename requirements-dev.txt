@@ -1,0 +1,8 @@
+-r requirements.txt
+
+# Testing
+pytest>=7.4.0
+pytest-asyncio>=0.23.0  # Async test support
+pytest-mock>=3.12.0     # Mocking helpers
+pytest-cov>=4.1.0       # Coverage (optional)
+pytest-timeout>=2.2.0   # For long BLE tests
