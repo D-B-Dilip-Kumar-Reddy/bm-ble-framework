@@ -36,7 +36,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-MODELS_DIR  = Path(__file__).parent.parent / "payloads" / "models"
+MODELS_DIR = Path(__file__).resolve().parents[2] / "payloads" / "models"
 
 # Registry of all known (model_key, firmware) pairs.
 # Add a new tuple here after creating the corresponding JSON file.
