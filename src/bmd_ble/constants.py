@@ -40,7 +40,7 @@ GAP_CHARACTERISTIC_DEVICE_NAME =      normalize_uuid("2a00")                   #
 GAP_CHARACTERISTIC_APPEARANCE =       normalize_uuid("2a01")                   # Read
 # Readable characteristic that identifies the generic device category/type.
 
-BMD_INFO_SERVICE_UUID =               normalize_uuid("180a")
+DEVICE_INFO_SERVICE_UUID =               normalize_uuid("180a")
 # Standard Bluetooth Device Information Service.
 # Provides manufacturer and model information for the camera.
 CHARACTERISTIC_MANUFACTURER_INFO =    normalize_uuid("2a29")                   # Read

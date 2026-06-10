@@ -1,11 +1,13 @@
 import asyncio
 import logging
-from typing import Optional
+import struct
+from typing import Optional, Dict, Any
 
 from bleak import BleakClient, BleakError
 
 from .constants import BLE_CONNECT_TIMEOUT_S, CHARACTERISTIC_INCOMING, \
-    CHARACTERISTIC_CAM_STATUS, CHARACTERISTIC_TIMECODE
+    CHARACTERISTIC_CAM_STATUS, CHARACTERISTIC_TIMECODE, GAP_CHARACTERISTIC_DEVICE_NAME, \
+    GAP_CHARACTERISTIC_APPEARANCE
 from .scanner import DiscoveredCamera, scan_for_camera
 
 logger = logging.getLogger(__name__)
@@ -23,7 +25,7 @@ class BMDCameraController:
         self.discovered = discovered
         self._client: Optional[BleakClient] = None
 
-    # ── Connection ────────────────────────────────────────────────────────────
+    # ── Connection ──────────────────────────────────────────────────────────────────────
 
     async def connect(self) -> None:
         """
@@ -82,10 +84,11 @@ class BMDCameraController:
             f"Disconnected from {self.discovered.address}"
         )
 
+    # ── Services ────────────────────────────────────────────────────────────────────────
+
     async def get_services(self) -> None:
         """
             Get GATT services in a way that works across Bleak versions.
-
             Some Bleak versions expose services via client.services after connection.
             Older versions may expose get_services().
         """
@@ -100,3 +103,62 @@ class BMDCameraController:
         if get_services_method:
             return await get_services_method()
         raise RuntimeError("Unable to retrieve GATT services from BleakClient")
+
+    # ── Device identity/Info ────────────────────────────────────────────────────────────
+
+    def _decode_utf8_characteristic(value: Optional[bytes]) -> Optional[str]:
+        """
+        Decode a UTF-8/string BLE characteristic.
+        Used for:
+        - Device Name
+        - Manufacturer Name
+        - Model Number / Model Info
+        """
+        if value is None:
+            return None
+        return value.decode("utf-8", errors="replace").strip("\x00").strip()
+
+    def _decode_appearance(value: Optional[bytes]) -> Optional[int]:
+        """
+        Decode GAP Appearance characteristic.
+        BLE Appearance characteristic is a 16-bit unsigned integer,
+        little-endian encoded.
+        """
+        if value is None or len(value) < 2:
+            return None
+        return struct.unpack("<H", value[:2])[0]
+
+    async def _read_metadata_characteristic(self, characteristic_uuid: str) -> Optional[
+        bytes]:
+        """
+        Read a BLE metadata characteristic safely.
+        Returns raw bytes if the characteristic is available,
+        otherwise returns None.
+        """
+        try:
+            return bytes(await self._client.read_gatt_char(characteristic_uuid))
+        except Exception:
+            return None
+
+    async def read_gap_identity_metadata(self) -> Dict[str, Any]:
+        """
+        Read metadata from the Generic Access Profile service.
+        Reads:
+        - Device Name
+        - Appearance
+        """
+        device_name_raw = await self._read_metadata_characteristic(
+            GAP_CHARACTERISTIC_DEVICE_NAME
+        )
+        appearance_raw = await self._read_metadata_characteristic(
+            GAP_CHARACTERISTIC_APPEARANCE
+        )
+        return {
+            "device_name": self._decode_utf8_characteristic(device_name_raw),
+            "appearance": self._decode_appearance(appearance_raw),
+            "raw": {
+                "device_name": device_name_raw,
+                "appearance": appearance_raw,
+            },
+        }
+
