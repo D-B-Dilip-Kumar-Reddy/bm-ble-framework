@@ -34,6 +34,8 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from bmd_ble import CHARACTERISTIC_INCOMING
+
 logger = logging.getLogger(__name__)
 
 MODELS_DIR = Path(__file__).resolve().parents[2] / "payloads" / "models"
@@ -61,6 +63,7 @@ class CameraProfile:
 
     # BLE
     ble_name:                 str      # Default advertisement name from _meta.ble_name
+    incoming_uuid: str
 
     # Raw JSON for reference
     _raw: dict = field(default_factory=dict, repr=False, compare=False)
@@ -89,12 +92,14 @@ class CameraProfile:
     @classmethod
     def _from_raw(cls, model_key: str, firmware: str, raw: dict) -> "CameraProfile":
         meta = raw.get("_meta", {})
+        ble = raw.get("ble", {})
         profile = cls(
             model_key=model_key,
             model_name=meta.get("model", model_key),
             firmware=firmware,
             status=meta.get("status", "UNKNOWN"),
             ble_name=meta.get("ble_name", ""),
+            incoming_uuid=ble.get("characteristic_incoming", CHARACTERISTIC_INCOMING),
             _raw=raw,
         )
         return profile
