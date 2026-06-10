@@ -5,5 +5,9 @@
     "firmware": "v7.9",
     "ble_name": "A:026881AD",
     "status": "UNVERIFIED"
+  },
+  "ble": {
+    "incoming_property": "indicate",
+    "_comment": "Use this to overwrite default service/characteristic UUIDs in constants.py"
   }
 }
