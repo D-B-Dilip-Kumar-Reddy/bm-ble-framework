@@ -68,10 +68,10 @@ class TestServiceUuids:
             constants.GENERIC_ACCESS_PROFILE_SERVICE_UUID
             == "00001800-0000-1000-8000-00805f9b34fb"
         )
-        assert constants.BMD_INFO_SERVICE_UUID == "0000180a-0000-1000-8000-00805f9b34fb"
+        assert constants.DEVICE_INFO_SERVICE_UUID == "0000180a-0000-1000-8000-00805f9b34fb"
 
         assert UUID_128_RE.match(constants.GENERIC_ACCESS_PROFILE_SERVICE_UUID)
-        assert UUID_128_RE.match(constants.BMD_INFO_SERVICE_UUID)
+        assert UUID_128_RE.match(constants.DEVICE_INFO_SERVICE_UUID)
 
     def test_bmd_service_uuid_is_valid_128_bit_uuid(self):
         """The BMD camera-control service is a fixed vendor-specific UUID."""
