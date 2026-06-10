@@ -73,7 +73,30 @@ class BMDCameraController:
                     await self._client.stop_notify(char)
                 except BleakError:
                     pass
+                except KeyError:
+                    # Notification was not active or already stopped
+                    pass
+
             await self._client.disconnect()
         logger.info(
             f"Disconnected from {self.discovered.address}"
         )
+
+    async def get_services(self) -> None:
+        """
+            Get GATT services in a way that works across Bleak versions.
+
+            Some Bleak versions expose services via client.services after connection.
+            Older versions may expose get_services().
+        """
+        if not self._client:
+            raise RuntimeError(
+                f"[{self.discovered.ble_name}] is not connected to a BLE client."
+                f"Failed to get GATT services from {self.discovered.ble_name}")
+        services = getattr(self._client, "services", None)
+        if services:
+            return services
+        get_services_method = getattr(self._client, "get_services", None)
+        if get_services_method:
+            return await get_services_method()
+        raise RuntimeError("Unable to retrieve GATT services from BleakClient")

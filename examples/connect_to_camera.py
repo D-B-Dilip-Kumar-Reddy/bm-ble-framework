@@ -5,8 +5,8 @@ from bmd_ble import CameraProfile
 from bmd_ble.camera_controller import BMDCameraController
 from bmd_ble.scanner import scan_for_camera
 
-MODEL_KEY = "POCKET_6K_G2"
-FIRMWARE = "v7.9"
+MODEL_KEY = "POCKET_6K_PRO"
+FIRMWARE = "v8.6"
 
 async def main():
     cam_profile = CameraProfile.for_model(model_key=MODEL_KEY, firmware=FIRMWARE)
