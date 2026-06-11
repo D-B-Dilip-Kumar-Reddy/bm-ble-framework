@@ -19,11 +19,12 @@ import asyncio
 import inspect
 import logging
 import sys
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
 
-from bleak import BleakClient, BleakError
+from bleak import BleakClient
+
 
 # Allow running this file directly from either repo root or examples/ without
 # installing the package. Walk upward until we find src/bmd_ble.
@@ -43,7 +44,6 @@ from bmd_ble import constants  # noqa: E402
 from bmd_ble.camera_profile import CameraProfile  # noqa: E402
 from bmd_ble.scanner import DiscoveredCamera, scan_for_camera  # noqa: E402
 
-
 DEFAULT_MODEL_KEY = "POCKET_6K_G2"
 DEFAULT_FIRMWARE = "v7.9"
 
@@ -51,6 +51,7 @@ DEFAULT_FIRMWARE = "v7.9"
 @dataclass(frozen=True)
 class ExpectedUuid:
     """UUID value collected from constants.py."""
+
     const_name: str
     uuid: str
     kind: str  # "service" or "characteristic"
@@ -60,6 +61,7 @@ class ExpectedUuid:
 @dataclass(frozen=True)
 class DiscoveredCharacteristic:
     """Characteristic discovered from the connected BLE camera."""
+
     service_uuid: str
     uuid: str
     description: str
@@ -69,6 +71,7 @@ class DiscoveredCharacteristic:
 @dataclass(frozen=True)
 class DiscoveredService:
     """Service discovered from the connected BLE camera."""
+
     uuid: str
     description: str
 
@@ -164,15 +167,16 @@ async def resolve_camera(args: argparse.Namespace) -> DiscoveredCamera:
     return await scan_for_camera(profile.ble_name, timeout=args.timeout)
 
 
-def collect_discovered(services) -> tuple[dict[str, DiscoveredService], dict[str, DiscoveredCharacteristic]]:
+def collect_discovered(
+    services,
+) -> tuple[dict[str, DiscoveredService], dict[str, DiscoveredCharacteristic]]:
     discovered_services: dict[str, DiscoveredService] = {}
     discovered_characteristics: dict[str, DiscoveredCharacteristic] = {}
 
     for service in services:
         service_uuid = normalize_uuid(service.uuid)
         discovered_services[service_uuid] = DiscoveredService(
-            uuid=service_uuid,
-            description=getattr(service, "description", "")
+            uuid=service_uuid, description=getattr(service, "description", "")
         )
 
         for char in service.characteristics:
@@ -204,7 +208,9 @@ def print_discovered_services_and_chars(
 
     for service_uuid, service in discovered_services.items():
         expected_service = expected.get(service_uuid)
-        service_label = expected_service.display_name if expected_service else "NOT_DEFINED_IN_CONSTANTS"
+        service_label = (
+            expected_service.display_name if expected_service else "NOT_DEFINED_IN_CONSTANTS"
+        )
 
         print()
         print("SERVICE")
@@ -214,8 +220,10 @@ def print_discovered_services_and_chars(
 
         for char in chars_by_service.get(service_uuid, []):
             expected_char = expected.get(char.uuid)
-            char_label = expected_char.display_name if expected_char else names.get(
-                char.uuid, "NOT_DEFINED_IN_CONSTANTS"
+            char_label = (
+                expected_char.display_name
+                if expected_char
+                else names.get(char.uuid, "NOT_DEFINED_IN_CONSTANTS")
             )
             print()
             print("  CHARACTERISTIC")
@@ -236,9 +244,7 @@ def print_comparison(
     Returns:
         True if there is at least one mismatch, False otherwise.
     """
-    expected_services = {
-        uuid: item for uuid, item in expected.items() if item.kind == "service"
-    }
+    expected_services = {uuid: item for uuid, item in expected.items() if item.kind == "service"}
     expected_characteristics = {
         uuid: item for uuid, item in expected.items() if item.kind == "characteristic"
     }
@@ -260,7 +266,9 @@ def print_comparison(
     print("=" * 80)
 
     if not missing_services and not missing_characteristics:
-        print("OK: All service/characteristic UUIDs defined in constants.py were found on the camera.")
+        print(
+            "OK: All service/characteristic UUIDs defined in constants.py were found on the camera."
+        )
     else:
         print("MISMATCH: Some UUIDs defined in constants.py were not found on the camera.")
 
@@ -308,12 +316,8 @@ def print_comparison(
     print(f"Extra characteristics    : {len(extra_characteristics)}")
 
     return bool(
-        missing_services
-        or missing_characteristics
-        or extra_services
-        or extra_characteristics
+        missing_services or missing_characteristics or extra_services or extra_characteristics
     )
-
 
 
 async def run(args: argparse.Namespace) -> int:
@@ -341,7 +345,6 @@ async def run(args: argparse.Namespace) -> int:
             discovered_characteristics=discovered_characteristics,
             expected=expected,
         )
-
 
     if args.strict and has_mismatch:
         return 1

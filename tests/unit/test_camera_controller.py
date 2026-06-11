@@ -1,10 +1,7 @@
-import asyncio
-
 import pytest
 from bleak import BleakError
 
-from bmd_ble import CHARACTERISTIC_INCOMING, CHARACTERISTIC_CAM_STATUS, \
-    CHARACTERISTIC_TIMECODE
+from bmd_ble import CHARACTERISTIC_CAM_STATUS, CHARACTERISTIC_INCOMING, CHARACTERISTIC_TIMECODE
 from bmd_ble.camera_controller import BMDCameraController
 from bmd_ble.scanner import DiscoveredCamera
 
@@ -143,7 +140,7 @@ async def test_connect_raises_runtime_error_on_timeout(monkeypatch):
 
     async def fake_wait_for(coro, timeout):
         coro.close()
-        raise asyncio.TimeoutError()
+        raise TimeoutError()
 
     monkeypatch.setattr(
         "bmd_ble.camera_controller.BleakClient",

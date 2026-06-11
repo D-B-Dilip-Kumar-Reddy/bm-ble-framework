@@ -27,6 +27,7 @@ ADDING A NEW CAMERA
 3. Add the model key to KNOWN_PROFILES below.
 4. Run pytest — the parametrize fixtures pick up new profiles automatically.
 """
+
 from __future__ import annotations
 
 import json
@@ -43,7 +44,7 @@ MODELS_DIR = Path(__file__).resolve().parents[2] / "payloads" / "models"
 # Registry of all known (model_key, firmware) pairs.
 # Add a new tuple here after creating the corresponding JSON file.
 KNOWN_PROFILES: list[tuple[str, str]] = [
-    ("POCKET_6K_G2",       "v7.9"),
+    ("POCKET_6K_G2", "v7.9"),
 ]
 
 
@@ -56,13 +57,14 @@ class CameraProfile:
     as defaults that need verification.  Use the `is_verified` property to
     check whether this profile is safe for production use.
     """
-    model_key:   str
-    model_name:  str
-    firmware:    str
-    status:      str
+
+    model_key: str
+    model_name: str
+    firmware: str
+    status: str
 
     # BLE
-    ble_name:                 str      # Default advertisement name from _meta.ble_name
+    ble_name: str  # Default advertisement name from _meta.ble_name
     incoming_uuid: str
 
     # Raw JSON for reference
@@ -71,7 +73,7 @@ class CameraProfile:
     # ── Construction ─────────────────────────────────────────────────────────
 
     @classmethod
-    def for_model(cls, model_key: str, firmware: str) -> "CameraProfile":
+    def for_model(cls, model_key: str, firmware: str) -> CameraProfile:
         """
         Load and return a CameraProfile for (model_key, firmware).
 
@@ -90,7 +92,7 @@ class CameraProfile:
         return cls._from_raw(model_key, firmware, raw)
 
     @classmethod
-    def _from_raw(cls, model_key: str, firmware: str, raw: dict) -> "CameraProfile":
+    def _from_raw(cls, model_key: str, firmware: str, raw: dict) -> CameraProfile:
         meta = raw.get("_meta", {})
         ble = raw.get("ble", {})
         profile = cls(
