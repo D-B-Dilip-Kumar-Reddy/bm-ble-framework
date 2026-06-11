@@ -35,7 +35,7 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from bmd_ble import CHARACTERISTIC_INCOMING
+from .constants import CHARACTERISTIC_INCOMING
 
 logger = logging.getLogger(__name__)
 
