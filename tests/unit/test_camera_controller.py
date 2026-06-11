@@ -2,12 +2,13 @@
 
 The tests in this module validate ``BMDCameraController`` without requiring real
 Bluetooth hardware. Fake BLE clients are used to exercise connection handling,
-disconnection cleanup, service discovery, GAP metadata reads, and decoder
-helpers.
+disconnection cleanup, service discovery, GAP metadata reads, Device
+Information Service metadata reads, and decoder helpers.
 
 The controller receives both a runtime ``DiscoveredCamera`` object and a static
 camera profile object. The profile controls model-specific behavior, including
-whether GAP metadata reads are considered reliable for that camera/firmware.
+whether GAP and Device Information metadata reads are considered reliable for a
+specific camera/firmware combination.
 """
 
 from types import SimpleNamespace
@@ -20,33 +21,39 @@ from bmd_ble.constants import (
     BLE_CONNECT_TIMEOUT_S,
     CHARACTERISTIC_CAM_STATUS,
     CHARACTERISTIC_INCOMING,
+    CHARACTERISTIC_MANUFACTURER_INFO,
+    CHARACTERISTIC_MODEL_INFO,
     CHARACTERISTIC_TIMECODE,
     GAP_CHARACTERISTIC_APPEARANCE,
     GAP_CHARACTERISTIC_DEVICE_NAME,
 )
 from bmd_ble.scanner import DiscoveredCamera
 
-
 MODEL_KEY = "POCKET_6K_G2"
 FIRMWARE = "v7.9"
 ADDRESS = "AA:BB:CC:DD:EE:01"
 BLE_NAME = "A:AF3DC814"
+MANUFACTURER_NAME = "Blackmagic Design"
+MODEL_NAME = "Blackmagic Pocket Cinema Camera 6K G2"
 
 
-def make_profile(gap_metadata_readable: bool = True) -> SimpleNamespace:
-    """Return a minimal camera profile object used by the controller tests.
+def make_profile(
+    gap_metadata_readable: bool = True,
+    device_info_metadata_readable: bool = True,
+) -> SimpleNamespace:
+    """Return a minimal camera profile object used by controller tests.
 
-    ``BMDCameraController`` only needs the profile object to expose the
-    attributes used by the current controller implementation. A
-    ``SimpleNamespace`` keeps the tests independent from profile loading and
-    verifies that the controller uses the supplied profile instead of loading it
-    again.
+    The controller only needs the profile object to expose the attributes used
+    by the current implementation. ``SimpleNamespace`` keeps these tests
+    independent from profile file loading and verifies that the controller uses
+    the supplied profile instead of loading the profile again.
     """
     return SimpleNamespace(
         model_key=MODEL_KEY,
         firmware=FIRMWARE,
         ble_name=BLE_NAME,
         gap_metadata_readable=gap_metadata_readable,
+        device_info_metadata_readable=device_info_metadata_readable,
     )
 
 
@@ -129,7 +136,7 @@ class TestBMDCameraControllerInitialization:
     """Construction and initial-state tests."""
 
     def test_initializes_with_discovered_camera_and_profile(self) -> None:
-        """Controller should retain the discovered camera and supplied profile object."""
+        """Controller should retain the discovered camera and supplied profile."""
         discovered = make_discovered()
         profile = make_profile()
 
@@ -140,6 +147,13 @@ class TestBMDCameraControllerInitialization:
         assert controller._client is None
         assert controller.gap_device_name is None
         assert controller.gap_appearance is None
+
+    def test_initializes_device_information_attributes_to_none(self) -> None:
+        """Device Information metadata attributes should start unset."""
+        controller = BMDCameraController(make_discovered(), make_profile())
+
+        assert controller.manufacturer_info is None
+        assert controller.model_info is None
 
 
 class TestBMDCameraControllerConnect:
@@ -345,7 +359,7 @@ class TestBMDCameraControllerServices:
 
 
 class TestBMDCameraControllerDecoders:
-    """Tests for pure GAP decoder helpers."""
+    """Tests for pure BLE metadata decoder helpers."""
 
     def test_decode_utf8_characteristic_strips_null_padding(self) -> None:
         """UTF-8 characteristic values should strip trailing null padding."""
@@ -380,8 +394,8 @@ class TestBMDCameraControllerDecoders:
         assert BMDCameraController._decode_appearance(value) is None
 
 
-class TestBMDCameraControllerMetadata:
-    """Safe metadata-read and GAP aggregation tests."""
+class TestBMDCameraControllerGapMetadata:
+    """Safe GAP metadata-read and aggregation tests."""
 
     @pytest.mark.asyncio
     async def test_read_gap_identity_metadata_returns_early_when_profile_disables_gap_reads(
@@ -397,21 +411,6 @@ class TestBMDCameraControllerMetadata:
 
         assert result is None
         assert controller._client is None
-        assert controller.gap_device_name is None
-        assert controller.gap_appearance is None
-
-    @pytest.mark.asyncio
-    async def test_read_gap_identity_metadata_does_not_raise_for_disabled_profile_without_client(
-        self,
-    ) -> None:
-        """Disabled GAP reads should return before checking whether a client exists."""
-        controller = BMDCameraController(
-            make_discovered(),
-            make_profile(gap_metadata_readable=False),
-        )
-
-        await controller.read_gap_identity_metadata()
-
         assert controller.gap_device_name is None
         assert controller.gap_appearance is None
 
@@ -433,56 +432,6 @@ class TestBMDCameraControllerMetadata:
         assert client.read_calls == []
         assert controller.gap_device_name is None
         assert controller.gap_appearance is None
-
-    @pytest.mark.asyncio
-    async def test_read_metadata_characteristic_raises_without_client(self) -> None:
-        """Reading metadata before client creation should raise ``RuntimeError``."""
-        controller = BMDCameraController(make_discovered(), make_profile())
-
-        with pytest.raises(RuntimeError, match="Camera is not connected"):
-            await controller._read_metadata_characteristic(GAP_CHARACTERISTIC_DEVICE_NAME)
-
-    @pytest.mark.asyncio
-    async def test_read_metadata_characteristic_returns_none_when_disconnected(self) -> None:
-        """Disconnected clients should not attempt a GATT read."""
-        controller = BMDCameraController(make_discovered(), make_profile())
-        client = FakeBleakClient(ADDRESS)
-        client.is_connected = False
-        controller._client = client
-
-        result = await controller._read_metadata_characteristic(GAP_CHARACTERISTIC_DEVICE_NAME)
-
-        assert result is None
-        assert client.read_calls == []
-
-    @pytest.mark.asyncio
-    async def test_read_metadata_characteristic_returns_bytes(self) -> None:
-        """Successful GATT reads should be normalized to immutable ``bytes``."""
-        controller = BMDCameraController(make_discovered(), make_profile())
-        client = FakeBleakClient(ADDRESS)
-        client.is_connected = True
-        client.read_values[GAP_CHARACTERISTIC_DEVICE_NAME] = bytearray(b"A:026881AD")
-        controller._client = client
-
-        result = await controller._read_metadata_characteristic(GAP_CHARACTERISTIC_DEVICE_NAME)
-
-        assert result == b"A:026881AD"
-        assert isinstance(result, bytes)
-        assert client.read_calls == [GAP_CHARACTERISTIC_DEVICE_NAME]
-
-    @pytest.mark.asyncio
-    async def test_read_metadata_characteristic_returns_none_on_read_error(self) -> None:
-        """GATT read exceptions should be treated as best-effort metadata failures."""
-        controller = BMDCameraController(make_discovered(), make_profile())
-        client = FakeBleakClient(ADDRESS)
-        client.is_connected = True
-        client.read_errors[GAP_CHARACTERISTIC_DEVICE_NAME] = RuntimeError("unreachable")
-        controller._client = client
-
-        result = await controller._read_metadata_characteristic(GAP_CHARACTERISTIC_DEVICE_NAME)
-
-        assert result is None
-        assert client.read_calls == [GAP_CHARACTERISTIC_DEVICE_NAME]
 
     @pytest.mark.asyncio
     async def test_read_gap_identity_metadata_sets_gap_attributes(self) -> None:
@@ -552,3 +501,224 @@ class TestBMDCameraControllerMetadata:
 
         with pytest.raises(RuntimeError, match="Camera BLE client is disconnected"):
             await controller.read_gap_identity_metadata()
+
+
+class TestBMDCameraControllerMetadataCharacteristicReads:
+    """Tests for the shared best-effort characteristic read helper."""
+
+    @pytest.mark.asyncio
+    async def test_read_metadata_characteristic_raises_without_client(self) -> None:
+        """Reading metadata before client creation should raise ``RuntimeError``."""
+        controller = BMDCameraController(make_discovered(), make_profile())
+
+        with pytest.raises(RuntimeError, match="Camera is not connected"):
+            await controller._read_metadata_characteristic(GAP_CHARACTERISTIC_DEVICE_NAME)
+
+    @pytest.mark.asyncio
+    async def test_read_metadata_characteristic_returns_none_when_disconnected(self) -> None:
+        """Disconnected clients should not attempt a GATT read."""
+        controller = BMDCameraController(make_discovered(), make_profile())
+        client = FakeBleakClient(ADDRESS)
+        client.is_connected = False
+        controller._client = client
+
+        result = await controller._read_metadata_characteristic(GAP_CHARACTERISTIC_DEVICE_NAME)
+
+        assert result is None
+        assert client.read_calls == []
+
+    @pytest.mark.asyncio
+    async def test_read_metadata_characteristic_returns_bytes(self) -> None:
+        """Successful GATT reads should be normalized to immutable ``bytes``."""
+        controller = BMDCameraController(make_discovered(), make_profile())
+        client = FakeBleakClient(ADDRESS)
+        client.is_connected = True
+        client.read_values[GAP_CHARACTERISTIC_DEVICE_NAME] = bytearray(b"A:026881AD")
+        controller._client = client
+
+        result = await controller._read_metadata_characteristic(GAP_CHARACTERISTIC_DEVICE_NAME)
+
+        assert result == b"A:026881AD"
+        assert isinstance(result, bytes)
+        assert client.read_calls == [GAP_CHARACTERISTIC_DEVICE_NAME]
+
+    @pytest.mark.asyncio
+    async def test_read_metadata_characteristic_returns_none_on_read_error(self) -> None:
+        """GATT read exceptions should be treated as best-effort metadata failures."""
+        controller = BMDCameraController(make_discovered(), make_profile())
+        client = FakeBleakClient(ADDRESS)
+        client.is_connected = True
+        client.read_errors[GAP_CHARACTERISTIC_DEVICE_NAME] = RuntimeError("unreachable")
+        controller._client = client
+
+        result = await controller._read_metadata_characteristic(GAP_CHARACTERISTIC_DEVICE_NAME)
+
+        assert result is None
+        assert client.read_calls == [GAP_CHARACTERISTIC_DEVICE_NAME]
+
+
+class TestBMDCameraControllerDeviceInformationMetadata:
+    """Device Information Service metadata-read tests."""
+
+    @pytest.mark.asyncio
+    async def test_read_device_information_metadata_returns_early_when_profile_disables_reads(
+        self,
+    ) -> None:
+        """Profiles with unreliable Device Info reads should skip all GATT access."""
+        controller = BMDCameraController(
+            make_discovered(),
+            make_profile(device_info_metadata_readable=False),
+        )
+
+        result = await controller.read_device_information_metadata()
+
+        assert result is None
+        assert controller._client is None
+        assert controller.manufacturer_info is None
+        assert controller.model_info is None
+
+    @pytest.mark.asyncio
+    async def test_read_device_information_metadata_does_not_require_client_when_disabled(
+        self,
+    ) -> None:
+        """Disabled Device Info reads should return before checking client state."""
+        controller = BMDCameraController(
+            make_discovered(),
+            make_profile(device_info_metadata_readable=False),
+        )
+
+        await controller.read_device_information_metadata()
+
+        assert controller.manufacturer_info is None
+        assert controller.model_info is None
+
+    @pytest.mark.asyncio
+    async def test_read_device_information_metadata_does_not_read_when_profile_disables_reads(
+        self,
+    ) -> None:
+        """Disabled Device Info reads should not call ``read_gatt_char``."""
+        controller = BMDCameraController(
+            make_discovered(),
+            make_profile(device_info_metadata_readable=False),
+        )
+        client = FakeBleakClient(ADDRESS)
+        client.is_connected = True
+        controller._client = client
+
+        await controller.read_device_information_metadata()
+
+        assert client.read_calls == []
+        assert controller.manufacturer_info is None
+        assert controller.model_info is None
+
+    @pytest.mark.asyncio
+    async def test_read_device_information_metadata_raises_without_client_when_enabled(
+        self,
+    ) -> None:
+        """Enabled Device Info reads should require an initialized BLE client."""
+        controller = BMDCameraController(make_discovered(), make_profile())
+
+        with pytest.raises(RuntimeError, match="Camera is not connected"):
+            await controller.read_device_information_metadata()
+
+    @pytest.mark.asyncio
+    async def test_read_device_information_metadata_raises_when_client_is_disconnected(
+        self,
+    ) -> None:
+        """Enabled Device Info reads should require an active BLE connection."""
+        controller = BMDCameraController(make_discovered(), make_profile())
+        client = FakeBleakClient(ADDRESS)
+        client.is_connected = False
+        controller._client = client
+
+        with pytest.raises(RuntimeError, match="Camera BLE client is disconnected"):
+            await controller.read_device_information_metadata()
+
+    @pytest.mark.asyncio
+    async def test_read_device_information_metadata_sets_manufacturer_and_model(
+        self,
+    ) -> None:
+        """Readable manufacturer and model characteristics should populate attributes."""
+        controller = BMDCameraController(make_discovered(), make_profile())
+        client = FakeBleakClient(ADDRESS)
+        client.is_connected = True
+        client.read_values = {
+            CHARACTERISTIC_MANUFACTURER_INFO: MANUFACTURER_NAME.encode(),
+            CHARACTERISTIC_MODEL_INFO: MODEL_NAME.encode(),
+        }
+        controller._client = client
+
+        result = await controller.read_device_information_metadata()
+
+        assert result is None
+        assert controller.manufacturer_info == MANUFACTURER_NAME
+        assert controller.model_info == MODEL_NAME
+        assert client.read_calls == [
+            CHARACTERISTIC_MANUFACTURER_INFO,
+            CHARACTERISTIC_MODEL_INFO,
+        ]
+
+    @pytest.mark.asyncio
+    async def test_read_device_information_metadata_strips_null_padding(
+        self,
+    ) -> None:
+        """Device Info string values should use the shared UTF-8 decoder."""
+        controller = BMDCameraController(make_discovered(), make_profile())
+        client = FakeBleakClient(ADDRESS)
+        client.is_connected = True
+        client.read_values = {
+            CHARACTERISTIC_MANUFACTURER_INFO: b"Blackmagic Design\x00\x00",
+            CHARACTERISTIC_MODEL_INFO: b"Pocket Cinema Camera\x00\x00",
+        }
+        controller._client = client
+
+        await controller.read_device_information_metadata()
+
+        assert controller.manufacturer_info == "Blackmagic Design"
+        assert controller.model_info == "Pocket Cinema Camera"
+
+    @pytest.mark.asyncio
+    async def test_read_device_information_metadata_skips_model_after_disconnect(
+        self,
+    ) -> None:
+        """Model Info should not be read if Manufacturer read disconnects the client."""
+        controller = BMDCameraController(make_discovered(), make_profile())
+        client = FakeBleakClient(ADDRESS)
+        client.is_connected = True
+        controller._client = client
+
+        async def fake_manufacturer_read(characteristic_uuid: str) -> None:
+            client.read_calls.append(characteristic_uuid)
+            client.is_connected = False
+            return None
+
+        controller._read_metadata_characteristic = fake_manufacturer_read
+
+        result = await controller.read_device_information_metadata()
+
+        assert result is None
+        assert controller.manufacturer_info is None
+        assert controller.model_info is None
+        assert client.read_calls == [CHARACTERISTIC_MANUFACTURER_INFO]
+
+    @pytest.mark.asyncio
+    async def test_read_device_information_metadata_reads_model_after_manufacturer_error(
+        self,
+    ) -> None:
+        """Model Info should still be attempted if manufacturer read fails but stays connected."""
+        controller = BMDCameraController(make_discovered(), make_profile())
+        client = FakeBleakClient(ADDRESS)
+        client.is_connected = True
+        client.read_errors[CHARACTERISTIC_MANUFACTURER_INFO] = RuntimeError("unreachable")
+        client.read_values[CHARACTERISTIC_MODEL_INFO] = MODEL_NAME.encode()
+        controller._client = client
+
+        result = await controller.read_device_information_metadata()
+
+        assert result is None
+        assert controller.manufacturer_info is None
+        assert controller.model_info == MODEL_NAME
+        assert client.read_calls == [
+            CHARACTERISTIC_MANUFACTURER_INFO,
+            CHARACTERISTIC_MODEL_INFO,
+        ]

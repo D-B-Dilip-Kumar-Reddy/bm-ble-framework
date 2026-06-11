@@ -12,5 +12,8 @@
   },
   "gap_meta_data": {
     "readable": false
+  },
+  "device_info_meta_data": {
+    "readable": false
   }
 }

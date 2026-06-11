@@ -9,6 +9,8 @@ from .constants import (
     BLE_CONNECT_TIMEOUT_S,
     CHARACTERISTIC_CAM_STATUS,
     CHARACTERISTIC_INCOMING,
+    CHARACTERISTIC_MANUFACTURER_INFO,
+    CHARACTERISTIC_MODEL_INFO,
     CHARACTERISTIC_TIMECODE,
     GAP_CHARACTERISTIC_APPEARANCE,
     GAP_CHARACTERISTIC_DEVICE_NAME,
@@ -28,8 +30,12 @@ class BMDCameraController:
         self._profile = profile
 
         self._client: BleakClient | None = None
-        self.gap_device_name = None
-        self.gap_appearance = None
+
+        # GAP / Device info
+        self.gap_device_name: str | None = None
+        self.gap_appearance: str | None = None
+        self.manufacturer_info: str | None = None
+        self.model_info: str | None = None
 
     # ── Connection ──────────────────────────────────────────────────────────────────────
 
@@ -174,4 +180,33 @@ class BMDCameraController:
             appearance_raw = await self._read_metadata_characteristic(GAP_CHARACTERISTIC_APPEARANCE)
         self.gap_device_name = self._decode_utf8_characteristic(device_name_raw)
         self.gap_appearance = self._decode_appearance(appearance_raw)
+        return
+
+    async def read_device_information_metadata(self) -> None:
+        """
+        Read metadata from the standard Bluetooth Device Information Service.
+        This reads the Manufacturer Name and Model Number characteristics from the
+        Device Information Service.
+        Expected values for Blackmagic cameras include:
+        - Manufacturer Name: "Blackmagic Design"
+        - Model Number / Model Info: camera model name
+        Reads are best-effort. If a characteristic is missing, unreadable, or the
+        camera disconnects during the read, the corresponding attribute remains
+        ``None``.
+        """
+        if not self._profile.device_info_metadata_readable:
+            logger.info("Reading GAP metadata is not realiable for this device")
+            return
+        if self._client is None:
+            raise RuntimeError("Camera is not connected")
+        if not self._client.is_connected:
+            raise RuntimeError("Camera BLE client is disconnected")
+        manufacturer_raw = await self._read_metadata_characteristic(
+            CHARACTERISTIC_MANUFACTURER_INFO
+        )
+        model_raw = None
+        if self._client.is_connected:
+            model_raw = await self._read_metadata_characteristic(CHARACTERISTIC_MODEL_INFO)
+        self.manufacturer_info = self._decode_utf8_characteristic(manufacturer_raw)
+        self.model_info = self._decode_utf8_characteristic(model_raw)
         return
