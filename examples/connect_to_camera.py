@@ -13,7 +13,7 @@ async def main():
     cam_profile = CameraProfile.for_model(model_key=MODEL_KEY, firmware=FIRMWARE)
     discovered_camera = await scan_for_camera(cam_profile.ble_name)
     print(discovered_camera)
-    cam = BMDCameraController(discovered_camera)
+    cam = BMDCameraController(discovered=discovered_camera, profile=cam_profile)
     await cam.connect()
     print(f"Connected to {cam.discovered.ble_name}")
     await asyncio.sleep(5)

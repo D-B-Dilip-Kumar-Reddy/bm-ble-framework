@@ -4,6 +4,7 @@ import struct
 
 from bleak import BleakClient, BleakError
 
+from . import CameraProfile
 from .constants import (
     BLE_CONNECT_TIMEOUT_S,
     CHARACTERISTIC_CAM_STATUS,
@@ -22,8 +23,10 @@ class BMDCameraController:
     Async controller for one Blackmagic Design camera over BLE.
     """
 
-    def __init__(self, discovered: DiscoveredCamera) -> None:
+    def __init__(self, discovered: DiscoveredCamera, profile: CameraProfile) -> None:
         self.discovered = discovered
+        self._profile = profile
+
         self._client: BleakClient | None = None
         self.gap_device_name = None
         self.gap_appearance = None
@@ -105,6 +108,9 @@ class BMDCameraController:
     def _decode_utf8_characteristic(value: bytes | None) -> str | None:
         """
         Decode a UTF-8/string BLE characteristic.
+
+        BLE string characteristics may contain null padding and trailing whitespace.
+        Invalid UTF-8 bytes are replaced instead of raising decode errors.
         Used for:
         - Device Name
         - Manufacturer Name
@@ -113,7 +119,8 @@ class BMDCameraController:
         logger.debug(f"Decoding UTF-8/string BLE characteristic -> {value}")
         if value is None:
             return None
-        return value.decode("utf-8", errors="replace").strip("\x00").strip()
+
+        return value.decode("utf-8", errors="replace").strip(" \t\r\n\x00")
 
     @staticmethod
     def _decode_appearance(value: bytes | None) -> int | None:
