@@ -160,6 +160,9 @@ class BMDCameraController:
         GAP reads are best-effort. Some camera models may disconnect or reject reads
         for GAP Device Name / Appearance.
         """
+        if not self._profile.gap_metadata_readable:
+            logger.info("Reading GAP metadata is not realiable for this device")
+            return
         if self._client is None:
             raise RuntimeError("Camera is not connected")
         if not self._client.is_connected:
