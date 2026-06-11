@@ -35,7 +35,6 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from tools.query import gap_meta_data
 from .constants import CHARACTERISTIC_INCOMING
 
 logger = logging.getLogger(__name__)
