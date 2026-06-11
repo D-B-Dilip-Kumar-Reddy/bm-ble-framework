@@ -9,5 +9,8 @@
   "ble": {
     "incoming_property": "indicate",
     "_comment": "Use this to overwrite default service/characteristic UUIDs in constants.py"
+  },
+  "gap_meta_data": {
+    "readable": true
   }
 }

@@ -35,6 +35,7 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from tools.query import gap_meta_data
 from .constants import CHARACTERISTIC_INCOMING
 
 logger = logging.getLogger(__name__)
@@ -65,7 +66,10 @@ class CameraProfile:
 
     # BLE
     ble_name: str  # Default advertisement name from _meta.ble_name
-    incoming_uuid: str
+    incoming_uuid: str # To override default uuid in constants.py
+    
+    # GAP Metadata
+    gap_metadata_readable: bool
 
     # Raw JSON for reference
     _raw: dict = field(default_factory=dict, repr=False, compare=False)
@@ -95,6 +99,7 @@ class CameraProfile:
     def _from_raw(cls, model_key: str, firmware: str, raw: dict) -> CameraProfile:
         meta = raw.get("_meta", {})
         ble = raw.get("ble", {})
+        gap_meta_data = raw.get("gap_meta_data", {})
         profile = cls(
             model_key=model_key,
             model_name=meta.get("model", model_key),
@@ -102,6 +107,21 @@ class CameraProfile:
             status=meta.get("status", "UNKNOWN"),
             ble_name=meta.get("ble_name", ""),
             incoming_uuid=ble.get("characteristic_incoming", CHARACTERISTIC_INCOMING),
+            gap_metadata_readable=gap_meta_data.get("readable", False),
             _raw=raw,
         )
         return profile
+
+
+
+# ── Registry helpers ────────────────────────────────────────────────────────────────────
+
+_profile_cache: dict[tuple[str, str], CameraProfile] = {}
+
+
+def get_profile(model_key: str, firmware: str) -> CameraProfile:
+    """Cached profile loader. Returns same instance for repeated calls."""
+    key = (model_key, firmware)
+    if key not in _profile_cache:
+        _profile_cache[key] = CameraProfile.for_model(model_key, firmware)
+    return _profile_cache[key]

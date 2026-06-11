@@ -6,10 +6,10 @@ Query BLE GATT services/characteristics from a Blackmagic camera and compare
 what the camera exposes against the UUIDs defined in bmd_ble.constants.
 
 Usage:
-    python examples/ble_services_chars.py
-    python examples/ble_services_chars.py --address AA:BB:CC:DD:EE:FF
-    python examples/ble_services_chars.py --name "BMPCC 6K G2"
-    python examples/ble_services_chars.py --strict
+    python tools/query/ble_services_chars.py
+    python tools/query/ble_services_chars.py --address AA:BB:CC:DD:EE:FF
+    python tools/query/ble_services_chars.py --name "BMPCC 6K G2"
+    python tools/query/ble_services_chars.py --strict
 """
 
 from __future__ import annotations

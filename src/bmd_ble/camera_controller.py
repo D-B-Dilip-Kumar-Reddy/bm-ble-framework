@@ -5,6 +5,8 @@ from typing import Any
 
 from bleak import BleakClient, BleakError
 
+from . import CameraProfile
+from .camera_profile import get_profile
 from .constants import (
     BLE_CONNECT_TIMEOUT_S,
     CHARACTERISTIC_CAM_STATUS,
@@ -26,6 +28,8 @@ class BMDCameraController:
     def __init__(self, discovered: DiscoveredCamera) -> None:
         self.discovered = discovered
         self._client: BleakClient | None = None
+        self.gap_device_name = None
+        self.gap_appearance = None
 
     # ── Connection ──────────────────────────────────────────────────────────────────────
 
@@ -100,6 +104,7 @@ class BMDCameraController:
 
     # ── Device identity/Info ────────────────────────────────────────────────────────────
 
+    @staticmethod
     def _decode_utf8_characteristic(value: bytes | None) -> str | None:
         """
         Decode a UTF-8/string BLE characteristic.
@@ -108,16 +113,19 @@ class BMDCameraController:
         - Manufacturer Name
         - Model Number / Model Info
         """
+        logger.debug(f"Decoding UTF-8/string BLE characteristic -> {value}")
         if value is None:
             return None
         return value.decode("utf-8", errors="replace").strip("\x00").strip()
 
+    @staticmethod
     def _decode_appearance(value: bytes | None) -> int | None:
         """
         Decode GAP Appearance characteristic.
         BLE Appearance characteristic is a 16-bit unsigned integer,
         little-endian encoded.
         """
+        logger.debug(f"Decoding GAP Appearance characteristic -> {value}")
         if value is None or len(value) < 2:
             return None
         return struct.unpack("<H", value[:2])[0]
@@ -125,28 +133,40 @@ class BMDCameraController:
     async def _read_metadata_characteristic(self, characteristic_uuid: str) -> bytes | None:
         """
         Read a BLE metadata characteristic safely.
-        Returns raw bytes if the characteristic is available,
-        otherwise returns None.
         """
+        if self._client is None:
+            raise RuntimeError("Camera is not connected")
+        if not self._client.is_connected:
+            logger.warning(
+                "Cannot read %s because BLE client is disconnected",
+                characteristic_uuid,
+            )
+            return None
         try:
-            return bytes(await self._client.read_gatt_char(characteristic_uuid))
-        except Exception:
+            value = await self._client.read_gatt_char(characteristic_uuid)
+            logger.info("Read %s: %r", characteristic_uuid, value)
+            return bytes(value)
+        except Exception as exc:
+            logger.warning("Failed to read %s: %s", characteristic_uuid, exc)
             return None
 
-    async def read_gap_identity_metadata(self) -> dict[str, Any]:
+    async def read_gap_identity_metadata(self) -> None:
         """
         Read metadata from the Generic Access Profile service.
-        Reads:
-        - Device Name
-        - Appearance
+        GAP reads are best-effort. Some camera models may disconnect or reject reads
+        for GAP Device Name / Appearance.
         """
+        if self._client is None:
+            raise RuntimeError("Camera is not connected")
+        if not self._client.is_connected:
+            raise RuntimeError("Camera BLE client is disconnected")
+
         device_name_raw = await self._read_metadata_characteristic(GAP_CHARACTERISTIC_DEVICE_NAME)
-        appearance_raw = await self._read_metadata_characteristic(GAP_CHARACTERISTIC_APPEARANCE)
-        return {
-            "device_name": self._decode_utf8_characteristic(device_name_raw),
-            "appearance": self._decode_appearance(appearance_raw),
-            "raw": {
-                "device_name": device_name_raw,
-                "appearance": appearance_raw,
-            },
-        }
+        appearance_raw = None
+        if self._client.is_connected:
+            appearance_raw = await self._read_metadata_characteristic(GAP_CHARACTERISTIC_APPEARANCE)
+        self.gap_device_name = self._decode_utf8_characteristic(device_name_raw)
+        self.gap_appearance = self._decode_appearance(appearance_raw)
+        return
+
+
