@@ -1,12 +1,9 @@
 import asyncio
 import logging
 import struct
-from typing import Any
 
 from bleak import BleakClient, BleakError
 
-from . import CameraProfile
-from .camera_profile import get_profile
 from .constants import (
     BLE_CONNECT_TIMEOUT_S,
     CHARACTERISTIC_CAM_STATUS,
@@ -168,5 +165,3 @@ class BMDCameraController:
         self.gap_device_name = self._decode_utf8_characteristic(device_name_raw)
         self.gap_appearance = self._decode_appearance(appearance_raw)
         return
-
-

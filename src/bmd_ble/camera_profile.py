@@ -65,8 +65,8 @@ class CameraProfile:
 
     # BLE
     ble_name: str  # Default advertisement name from _meta.ble_name
-    incoming_uuid: str # To override default uuid in constants.py
-    
+    incoming_uuid: str  # To override default uuid in constants.py
+
     # GAP Metadata
     gap_metadata_readable: bool
 
@@ -110,7 +110,6 @@ class CameraProfile:
             _raw=raw,
         )
         return profile
-
 
 
 # ── Registry helpers ────────────────────────────────────────────────────────────────────
