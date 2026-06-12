@@ -22,12 +22,9 @@ import re
 
 from bmd_ble import constants
 
-
 # Matches normalized lowercase 128-bit UUID strings, for example:
 # "291d567a-6d75-11e6-8b77-86f30ca893d3".
-UUID_128_RE = re.compile(
-    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
-)
+UUID_128_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
 
 class TestUuidNormalization:
@@ -35,17 +32,11 @@ class TestUuidNormalization:
 
     def test_normalize_uuid_expands_16_bit_uuid_to_bluetooth_base_uuid(self):
         """A lowercase 16-bit UUID is expanded to the Bluetooth base UUID."""
-        assert (
-            constants.normalize_uuid("180a")
-            == "0000180a-0000-1000-8000-00805f9b34fb"
-        )
+        assert constants.normalize_uuid("180a") == "0000180a-0000-1000-8000-00805f9b34fb"
 
     def test_normalize_uuid_is_case_insensitive_for_16_bit_uuid(self):
         """An uppercase 16-bit UUID is lowercased before expansion."""
-        assert (
-            constants.normalize_uuid("2A29")
-            == "00002a29-0000-1000-8000-00805f9b34fb"
-        )
+        assert constants.normalize_uuid("2A29") == "00002a29-0000-1000-8000-00805f9b34fb"
 
     def test_normalize_uuid_lowercases_and_preserves_128_bit_uuid(self):
         """A 128-bit UUID keeps its structure and is normalized to lowercase."""
@@ -65,8 +56,7 @@ class TestServiceUuids:
     def test_standard_service_uuids_are_normalized_128_bit_uuids(self):
         """Standard Bluetooth service UUIDs are exposed as full 128-bit UUIDs."""
         assert (
-            constants.GENERIC_ACCESS_PROFILE_SERVICE_UUID
-            == "00001800-0000-1000-8000-00805f9b34fb"
+            constants.GENERIC_ACCESS_PROFILE_SERVICE_UUID == "00001800-0000-1000-8000-00805f9b34fb"
         )
         assert constants.DEVICE_INFO_SERVICE_UUID == "0000180a-0000-1000-8000-00805f9b34fb"
 
@@ -154,8 +144,14 @@ class TestCharacteristicNames:
 
     def test_expected_characteristic_labels_are_present(self):
         """Each known characteristic maps to its expected display label."""
-        assert constants.CHARACTERISTIC_NAMES[constants.GAP_CHARACTERISTIC_DEVICE_NAME] == "DEVICE_NAME (Read)"
-        assert constants.CHARACTERISTIC_NAMES[constants.GAP_CHARACTERISTIC_APPEARANCE] == "APPEARANCE (Read)"
+        assert (
+            constants.CHARACTERISTIC_NAMES[constants.GAP_CHARACTERISTIC_DEVICE_NAME]
+            == "DEVICE_NAME (Read)"
+        )
+        assert (
+            constants.CHARACTERISTIC_NAMES[constants.GAP_CHARACTERISTIC_APPEARANCE]
+            == "APPEARANCE (Read)"
+        )
         assert constants.CHARACTERISTIC_NAMES[constants.CHARACTERISTIC_MANUFACTURER_INFO] == (
             "CAMERA MANUFACTURER INFO(Read)"
         )
@@ -168,7 +164,9 @@ class TestCharacteristicNames:
         assert constants.CHARACTERISTIC_NAMES[constants.CHARACTERISTIC_INCOMING] == (
             "INCOMING_CONTROL (Indicate)"
         )
-        assert constants.CHARACTERISTIC_NAMES[constants.CHARACTERISTIC_TIMECODE] == "TIMECODE (Notify)"
+        assert (
+            constants.CHARACTERISTIC_NAMES[constants.CHARACTERISTIC_TIMECODE] == "TIMECODE (Notify)"
+        )
         assert constants.CHARACTERISTIC_NAMES[constants.CHARACTERISTIC_CAM_STATUS] == (
             "CAMERA_STATUS (Notify)"
         )
