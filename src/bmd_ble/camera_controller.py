@@ -167,7 +167,7 @@ class BMDCameraController:
         for GAP Device Name / Appearance.
         """
         if not self._profile.gap_metadata_readable:
-            logger.info("Reading GAP metadata is not realiable for this device")
+            logger.info("Reading GAP metadata is not reliable for this device")
             return
         if self._client is None:
             raise RuntimeError("Camera is not connected")
@@ -185,17 +185,23 @@ class BMDCameraController:
     async def read_device_information_metadata(self) -> None:
         """
         Read metadata from the standard Bluetooth Device Information Service.
+
         This reads the Manufacturer Name and Model Number characteristics from the
         Device Information Service.
+
         Expected values for Blackmagic cameras include:
         - Manufacturer Name: "Blackmagic Design"
         - Model Number / Model Info: camera model name
-        Reads are best-effort. If a characteristic is missing, unreadable, or the
-        camera disconnects during the read, the corresponding attribute remains
-        ``None``.
+
+        Reads are best-effort. Some camera models may disconnect or reject reads for
+        these standard characteristics. If the camera profile marks Device Information
+        metadata as unreliable, the method returns without attempting GATT reads.
+
+        If a characteristic is missing, unreadable, or the camera disconnects during
+        the read, the corresponding controller attribute remains ``None``.
         """
         if not self._profile.device_info_metadata_readable:
-            logger.info("Reading GAP metadata is not realiable for this device")
+            logger.info("Reading Device Info metadata is not reliable for this device")
             return
         if self._client is None:
             raise RuntimeError("Camera is not connected")
