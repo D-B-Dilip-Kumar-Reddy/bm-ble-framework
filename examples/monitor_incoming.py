@@ -36,8 +36,7 @@ async def main() -> None:
 
     await cam.subscribe_incoming()
     logging.info(
-        "Listening for INCOMING_CONTROL notifications for %d s — "
-        "trigger camera actions now …",
+        "Listening for INCOMING_CONTROL notifications for %d s — trigger camera actions now …",
         MONITOR_DURATION_S,
     )
 

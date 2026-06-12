@@ -106,9 +106,7 @@ class BMDCameraController:
             callback(characteristic: BleakGATTCharacteristic, data: bytearray)
         """
         if self._client is None:
-            raise RuntimeError(
-                f"[{self.discovered.ble_name}] Cannot subscribe: not connected"
-            )
+            raise RuntimeError(f"[{self.discovered.ble_name}] Cannot subscribe: not connected")
         if not self._client.is_connected:
             raise RuntimeError(
                 f"[{self.discovered.ble_name}] Cannot subscribe: BLE client is disconnected"
