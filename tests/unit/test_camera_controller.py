@@ -797,7 +797,8 @@ async def test_subscribe_incoming_registers_custom_callback():
     controller = BMDCameraController(make_discovered(), make_profile())
     controller._client = FakeConnectedBleakClient(ADDRESS)
 
-    custom_callback = lambda _char, _data: None
+    def custom_callback(_char, _data):
+        pass
 
     await controller.subscribe_incoming(callback=custom_callback)
 
