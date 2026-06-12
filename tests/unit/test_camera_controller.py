@@ -66,6 +66,22 @@ def make_discovered(
     return DiscoveredCamera(address=address, ble_name=ble_name, rssi=rssi)
 
 
+class FakeConnectedBleakClient:
+    """Fake client that is already connected and records start_notify calls."""
+
+    is_connected = True
+
+    def __init__(self, address: str) -> None:
+        self.address = address
+        self.notified: dict[str, object] = {}
+
+    async def connect(self) -> None:
+        pass
+
+    async def start_notify(self, uuid: str, callback: object) -> None:
+        self.notified[uuid] = callback
+
+
 class FakeBleakClient:
     """Async fake for the subset of ``BleakClient`` used by the controller."""
 
@@ -735,3 +751,75 @@ class TestBMDCameraControllerDeviceInformationMetadata:
         assert controller.manufacturer_info is None
         assert controller.model_info is None
         assert client.read_calls == [CHARACTERISTIC_MANUFACTURER_INFO]
+
+
+# ── subscribe_incoming ────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_subscribe_incoming_raises_when_client_is_none():
+    controller = BMDCameraController(make_discovered(), make_profile())
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await controller.subscribe_incoming()
+
+    assert "not connected" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_subscribe_incoming_raises_when_client_not_connected():
+    controller = BMDCameraController(make_discovered(), make_profile())
+
+    class FakeDisconnectedClient:
+        is_connected = False
+
+    controller._client = FakeDisconnectedClient()
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await controller.subscribe_incoming()
+
+    assert "disconnected" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_subscribe_incoming_registers_default_callback():
+    controller = BMDCameraController(make_discovered(), make_profile())
+    controller._client = FakeConnectedBleakClient(ADDRESS)
+
+    await controller.subscribe_incoming()
+
+    assert CHARACTERISTIC_INCOMING in controller._client.notified
+    assert controller._client.notified[CHARACTERISTIC_INCOMING] == controller._log_incoming
+
+
+@pytest.mark.asyncio
+async def test_subscribe_incoming_registers_custom_callback():
+    controller = BMDCameraController(make_discovered(), make_profile())
+    controller._client = FakeConnectedBleakClient(ADDRESS)
+
+    custom_callback = lambda _char, _data: None
+
+    await controller.subscribe_incoming(callback=custom_callback)
+
+    assert controller._client.notified[CHARACTERISTIC_INCOMING] is custom_callback
+
+
+def test_log_incoming_formats_bytes_as_uppercase_hex(caplog):
+    import logging
+
+    controller = BMDCameraController(make_discovered(), make_profile())
+    with caplog.at_level(logging.DEBUG, logger="bmd_ble.camera_controller"):
+        controller._log_incoming(None, bytearray([0x00, 0x06, 0x0A, 0xFF]))
+
+    assert "00 06 0A FF" in caplog.text
+
+
+def test_log_incoming_includes_camera_identity_prefix(caplog):
+    import logging
+
+    controller = BMDCameraController(make_discovered(), make_profile())
+    with caplog.at_level(logging.DEBUG, logger="bmd_ble.camera_controller"):
+        controller._log_incoming(None, bytearray([0xAB]))
+
+    assert BLE_NAME in caplog.text
+    assert ADDRESS in caplog.text

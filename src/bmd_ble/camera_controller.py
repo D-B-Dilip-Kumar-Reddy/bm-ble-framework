@@ -1,6 +1,8 @@
 import asyncio
 import logging
 import struct
+from collections.abc import Callable
+from typing import Any
 
 from bleak import BleakClient, BleakError, BleakGATTServiceCollection
 
@@ -86,6 +88,47 @@ class BMDCameraController:
 
             await self._client.disconnect()
             logger.info(f"Disconnected from {self.discovered.address}")
+
+    # ── Notifications ────────────────────────────────────────────────────────────────────
+
+    async def subscribe_incoming(
+        self,
+        callback: Callable[[Any, bytearray], None] | None = None,
+    ) -> None:
+        """
+        Subscribe to INCOMING_CONTROL notifications.
+
+        Must be called after connect(). If no callback is supplied the default
+        handler logs every notification as uppercase hex pairs at DEBUG level,
+        matching the sniffer output format for direct comparison.
+
+        The callback signature follows Bleak 0.21+:
+            callback(characteristic: BleakGATTCharacteristic, data: bytearray)
+        """
+        if self._client is None:
+            raise RuntimeError(
+                f"[{self.discovered.ble_name}] Cannot subscribe: not connected"
+            )
+        if not self._client.is_connected:
+            raise RuntimeError(
+                f"[{self.discovered.ble_name}] Cannot subscribe: BLE client is disconnected"
+            )
+        handler = callback if callback is not None else self._log_incoming
+        await self._client.start_notify(CHARACTERISTIC_INCOMING, handler)
+        logger.info(
+            "[%s @ %s] Subscribed to INCOMING_CONTROL",
+            self.discovered.ble_name,
+            self.discovered.address,
+        )
+
+    def _log_incoming(self, _characteristic: Any, data: bytearray) -> None:
+        """Default INCOMING_CONTROL handler — logs raw bytes as uppercase hex."""
+        logger.debug(
+            "[%s @ %s] RX: %s",
+            self.discovered.ble_name,
+            self.discovered.address,
+            " ".join(f"{b:02X}" for b in data),
+        )
 
     # ── Services ────────────────────────────────────────────────────────────────────────
 
