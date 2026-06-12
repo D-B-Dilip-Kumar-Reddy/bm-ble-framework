@@ -2,9 +2,9 @@ import asyncio
 import logging
 import struct
 
-from bleak import BleakClient, BleakError
+from bleak import BleakClient, BleakError, BleakGATTServiceCollection
 
-from . import CameraProfile
+from .camera_profile import CameraProfile
 from .constants import (
     BLE_CONNECT_TIMEOUT_S,
     CHARACTERISTIC_CAM_STATUS,
@@ -33,7 +33,7 @@ class BMDCameraController:
 
         # GAP / Device info
         self.gap_device_name: str | None = None
-        self.gap_appearance: str | None = None
+        self.gap_appearance: int | None = None
         self.manufacturer_info: str | None = None
         self.model_info: str | None = None
 
@@ -85,11 +85,11 @@ class BMDCameraController:
                     pass
 
             await self._client.disconnect()
-        logger.info(f"Disconnected from {self.discovered.address}")
+            logger.info(f"Disconnected from {self.discovered.address}")
 
     # ── Services ────────────────────────────────────────────────────────────────────────
 
-    async def get_services(self) -> None:
+    async def get_services(self) -> BleakGATTServiceCollection:
         """
         Get GATT services in a way that works across Bleak versions.
         Some Bleak versions expose services via client.services after connection.
@@ -144,8 +144,6 @@ class BMDCameraController:
         """
         Read a BLE metadata characteristic safely.
         """
-        if self._client is None:
-            raise RuntimeError("Camera is not connected")
         if not self._client.is_connected:
             logger.warning(
                 "Cannot read %s because BLE client is disconnected",
@@ -156,7 +154,7 @@ class BMDCameraController:
             value = await self._client.read_gatt_char(characteristic_uuid)
             logger.info("Read %s: %r", characteristic_uuid, value)
             return bytes(value)
-        except Exception as exc:
+        except (BleakError, OSError) as exc:
             logger.warning("Failed to read %s: %s", characteristic_uuid, exc)
             return None
 
@@ -171,16 +169,10 @@ class BMDCameraController:
             return
         if self._client is None:
             raise RuntimeError("Camera is not connected")
-        if not self._client.is_connected:
-            raise RuntimeError("Camera BLE client is disconnected")
-
         device_name_raw = await self._read_metadata_characteristic(GAP_CHARACTERISTIC_DEVICE_NAME)
-        appearance_raw = None
-        if self._client.is_connected:
-            appearance_raw = await self._read_metadata_characteristic(GAP_CHARACTERISTIC_APPEARANCE)
+        appearance_raw = await self._read_metadata_characteristic(GAP_CHARACTERISTIC_APPEARANCE)
         self.gap_device_name = self._decode_utf8_characteristic(device_name_raw)
         self.gap_appearance = self._decode_appearance(appearance_raw)
-        return
 
     async def read_device_information_metadata(self) -> None:
         """
@@ -205,14 +197,9 @@ class BMDCameraController:
             return
         if self._client is None:
             raise RuntimeError("Camera is not connected")
-        if not self._client.is_connected:
-            raise RuntimeError("Camera BLE client is disconnected")
         manufacturer_raw = await self._read_metadata_characteristic(
             CHARACTERISTIC_MANUFACTURER_INFO
         )
-        model_raw = None
-        if self._client.is_connected:
-            model_raw = await self._read_metadata_characteristic(CHARACTERISTIC_MODEL_INFO)
+        model_raw = await self._read_metadata_characteristic(CHARACTERISTIC_MODEL_INFO)
         self.manufacturer_info = self._decode_utf8_characteristic(manufacturer_raw)
         self.model_info = self._decode_utf8_characteristic(model_raw)
-        return

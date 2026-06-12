@@ -6,15 +6,12 @@ from bmd_ble.camera_controller import BMDCameraController
 from bmd_ble.camera_profile import CameraProfile
 from bmd_ble.scanner import scan_for_camera
 
-# MODEL_KEY = "POCKET_6K_PRO"
-# FIRMWARE = "v8.6"
-
 
 async def run(args: argparse.Namespace):
     model_key = args.model_key
     firmware = args.firmware
     cam_profile = CameraProfile.for_model(model_key=model_key, firmware=firmware)
-    discovered_camera = await scan_for_camera(cam_profile.ble_name)
+    discovered_camera = await scan_for_camera(cam_profile.ble_name, timeout=args.timeout)
     print(discovered_camera)
     cam = BMDCameraController(discovered=discovered_camera, profile=cam_profile)
     await cam.connect()

@@ -5,6 +5,7 @@ bmd_ble — Blackmagic BLE Camera Control Framework
 from .camera_profile import (
     KNOWN_PROFILES,
     CameraProfile,
+    get_profile,
 )
 from .constants import (
     BLE_SCAN_TIMEOUT_S,
@@ -40,4 +41,5 @@ __all__ = [
     "GAP_CHARACTERISTIC_DEVICE_NAME",
     "GENERIC_ACCESS_PROFILE_SERVICE_UUID",
     "KNOWN_PROFILES",
+    "get_profile",
 ]
