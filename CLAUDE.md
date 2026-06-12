@@ -10,6 +10,7 @@ Python package (`bmd_ble`) for automated Blackmagic Design camera control over B
 - Photo capture
 - Video playback / gallery browsing — send play, pause, forward, backward commands and observe behaviour
 - Video and photo metadata capture
+- Storage media monitoring — SD card state, remaining space, slot status (used to diagnose recording, capture, and playback failures)
 
 **End-user API:** Python scripts only. No CLI.
 
@@ -72,7 +73,12 @@ If `status == "UNVERIFIED"` in a profile JSON, log a prominent warning at sessio
 ### 9. Graceful degradation for reads only
 **Reads** (metadata, GAP info, device info) are best-effort — return `None` on failure, do not raise. **Writes** are verification-first — they must confirm success or raise. Write degradation is never silent.
 
-### 10. Async-first
+### 10. Storage-aware operations
+Before recording or photo capture, verify the storage media is ready (card inserted, not full, not in an error state). After recording or capture, confirm storage state has updated (e.g. remaining space decreased, clip count increased). Storage state is part of `CameraState` and is updated from notifications — never polled in a loop.
+
+If storage state is unknown or unhealthy at operation time, raise `BMDStorageError` before attempting the command. Do not let the camera silently fail to save media.
+
+### 11. Async-first
 All I/O is async. No blocking calls anywhere. Use `asyncio.wait_for()` for all timeouts.
 
 ---
@@ -84,12 +90,12 @@ src/bmd_ble/
   __init__.py               # Public API surface — what scripts import from
   constants.py              # BLE UUIDs and timing constants (fixed by spec)
   exceptions.py             # BMDConnectionError, BMDTimeoutError, BMDCommandError,
-                            # BMDVerificationError, BMDUnsupportedError
+                            # BMDVerificationError, BMDUnsupportedError, BMDStorageError
   scanner.py                # BLE discovery by advertisement name
   camera_profile.py         # Load, validate, and cache model/firmware profiles
   camera_controller.py      # BLE transport layer — raw bytes only
   notification_router.py    # Buffer and route INCOMING_CONTROL notifications by (category, param)
-  state.py                  # CameraState dataclass — updated from notifications only
+  state.py                  # CameraState + StorageState dataclasses — updated from notifications only
   session.py                # CameraSession context manager — user-facing API
   protocol/
     __init__.py
@@ -201,6 +207,69 @@ All protocol values come from sniffer captures. `status` is set to `"VERIFIED"` 
 
 ---
 
+## Storage Media Monitoring
+
+Storage state is read on connect and updated from `CAMERA_STATUS` notifications. It is tracked in `StorageState` (part of `CameraState`) and covers:
+
+- Slot presence (card inserted or not)
+- Card status (ready, formatting, write-protected, error)
+- Remaining recording time (derived from free space + current codec/quality/FPS)
+- Remaining photo capacity
+
+### How storage state gates operations
+
+| Operation | Pre-condition check | Post-condition check |
+|---|---|---|
+| Record start | Card ready, remaining time > 0 | `CameraState.is_recording` becomes `True` |
+| Record stop | Camera is recording | `CameraState.is_recording` becomes `False`, remaining time decreased |
+| Photo capture | Card ready, remaining photos > 0 | Remaining photo count decreased |
+| Playback | Card ready, media index readable | Playback state transitions to playing |
+
+If the pre-condition fails, raise `BMDStorageError` immediately — do not attempt the command.
+
+Storage characteristics to monitor are per-camera. Add them to the payload JSON under `storage` as they are confirmed via sniffer.
+
+---
+
+## Logging Conventions
+
+All loggers use `logging.getLogger(__name__)`. Do not create named loggers with custom string names.
+
+### Log levels
+
+| Level | When to use |
+|---|---|
+| `DEBUG` | Raw BLE bytes (TX and RX), characteristic UUIDs being read, internal state transitions |
+| `INFO` | Operation boundaries (connect, disconnect, command sent, verification passed) |
+| `WARNING` | Best-effort read failures, unverified profile loaded, CAMERA_STATUS unreliable |
+| `ERROR` | Verification failures, storage pre-condition failures, unexpected disconnects |
+
+### Format
+
+Every log line that involves a camera operation must include the camera identity. Use a consistent prefix:
+
+```
+[POCKET_6K_G2 @ AA:BB:CC:DD:EE:01] Recording start — sending command
+[POCKET_6K_G2 @ AA:BB:CC:DD:EE:01] TX: 00 06 00 00 0a 01 01 00 01
+[POCKET_6K_G2 @ AA:BB:CC:DD:EE:01] RX echo: 00 06 00 00 0a 01 01 00 01 — verified ✓
+[POCKET_6K_G2 @ AA:BB:CC:DD:EE:01] Storage: 00:42:17 remaining
+```
+
+The `CameraSession` (or `CameraController`) must inject the identity prefix so that every log line from any module is unambiguously tied to the camera that produced it.
+
+### BLE byte logging
+
+Log raw bytes as uppercase hex pairs separated by spaces — matching the format used by Wireshark and nRF Sniffer. This allows direct copy-paste comparison with sniffer captures:
+
+```python
+logger.debug("TX: %s", " ".join(f"{b:02X}" for b in packet))
+logger.debug("RX echo: %s", " ".join(f"{b:02X}" for b in response))
+```
+
+Log TX bytes immediately before writing to `OUTGOING_CONTROL`. Log RX bytes immediately when they arrive on `INCOMING_CONTROL`, before any decoding.
+
+---
+
 ## Verification Strategy
 
 For every write command:
@@ -263,3 +332,7 @@ CI runs on Windows only, Python 3.11 and 3.12, via GitHub Actions. Unit tests mu
 - Never import `camera_controller`, `notification_router`, or `protocol/` directly in scripts — use `session.py`
 - Never catch `Exception` broadly — catch specific BLE and OS exceptions only
 - Never add a new camera to `KNOWN_PROFILES` before its JSON payload exists
+- Never start recording or photo capture without first checking storage state
+- Never poll storage state in a loop — read once on connect, update from notifications
+- Never log raw BLE bytes as plain integers or Python `repr` — use uppercase hex pairs to match sniffer output
+- Never omit the camera identity prefix from operation log lines
