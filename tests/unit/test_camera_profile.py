@@ -17,11 +17,12 @@ Coverage:
   - verification_table() output format
   - KNOWN_PROFILES registry completeness
 """
+
 import json
 
 import pytest
 
-from bmd_ble.camera_profile import CameraProfile, KNOWN_PROFILES
+from bmd_ble.camera_profile import KNOWN_PROFILES, CameraProfile
 
 
 def test_known_profiles_contains_pocket_6k_g2_v79():
@@ -82,11 +83,7 @@ def test_camera_profile_uses_defaults_when_meta_missing():
 
 
 def test_camera_profile_uses_partial_meta_defaults():
-    raw = {
-        "_meta": {
-            "model": "Pocket 6K G2"
-        }
-    }
+    raw = {"_meta": {"model": "Pocket 6K G2"}}
 
     profile = CameraProfile._from_raw("POCKET_6K_G2", "v7.9", raw)
 
@@ -99,13 +96,10 @@ def test_camera_profile_uses_partial_meta_defaults():
 
 
 def test_camera_profile_handles_empty_meta_dict():
-    raw = {
-        "_meta": {}
-    }
+    raw = {"_meta": {}}
 
     profile = CameraProfile._from_raw("POCKET_6K_G2", "v7.9", raw)
 
     assert profile.model_name == "POCKET_6K_G2"
     assert profile.status == "UNKNOWN"
     assert profile.ble_name == ""
-
