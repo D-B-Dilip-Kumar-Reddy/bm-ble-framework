@@ -94,6 +94,8 @@ class BMDCameraController:
     async def subscribe_incoming(
         self,
         callback: Callable[[Any, bytearray], None] | None = None,
+        retries: int = 3,
+        retry_delay_s: float = 2.0,
     ) -> None:
         """
         Subscribe to INCOMING_CONTROL notifications.
@@ -104,6 +106,10 @@ class BMDCameraController:
 
         The callback signature follows Bleak 0.21+:
             callback(characteristic: BleakGATTCharacteristic, data: bytearray)
+
+        Older camera firmware (e.g. PCC 6K G2 v7.9) needs a moment after connect
+        before it accepts CCCD writes. ``retries`` and ``retry_delay_s`` handle
+        that transparently — the default values cover the observed timing gap.
         """
         if self._client is None:
             raise RuntimeError(f"[{self.discovered.ble_name}] Cannot subscribe: not connected")
@@ -112,12 +118,33 @@ class BMDCameraController:
                 f"[{self.discovered.ble_name}] Cannot subscribe: BLE client is disconnected"
             )
         handler = callback if callback is not None else self._log_incoming
-        await self._client.start_notify(CHARACTERISTIC_INCOMING, handler)
-        logger.info(
-            "[%s @ %s] Subscribed to INCOMING_CONTROL",
-            self.discovered.ble_name,
-            self.discovered.address,
-        )
+        last_exc: BleakError | None = None
+        for attempt in range(1, retries + 1):
+            try:
+                await self._client.start_notify(CHARACTERISTIC_INCOMING, handler)
+                logger.info(
+                    "[%s @ %s] Subscribed to INCOMING_CONTROL",
+                    self.discovered.ble_name,
+                    self.discovered.address,
+                )
+                return
+            except BleakError as exc:
+                last_exc = exc
+                if attempt < retries:
+                    logger.warning(
+                        "[%s @ %s] start_notify attempt %d/%d failed (%s) — retrying in %.1f s",
+                        self.discovered.ble_name,
+                        self.discovered.address,
+                        attempt,
+                        retries,
+                        exc,
+                        retry_delay_s,
+                    )
+                    await asyncio.sleep(retry_delay_s)
+        raise RuntimeError(
+            f"[{self.discovered.ble_name}] Could not subscribe to INCOMING_CONTROL "
+            f"after {retries} attempts: {last_exc}"
+        ) from last_exc
 
     def _log_incoming(self, _characteristic: Any, data: bytearray) -> None:
         """Default INCOMING_CONTROL handler — logs raw bytes as uppercase hex."""

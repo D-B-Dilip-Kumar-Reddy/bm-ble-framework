@@ -824,3 +824,62 @@ def test_log_incoming_includes_camera_identity_prefix(caplog):
 
     assert BLE_NAME in caplog.text
     assert ADDRESS in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_subscribe_incoming_retries_on_transient_bleak_error(monkeypatch):
+    """Older firmware (e.g. 6K G2 v7.9) raises BleakError on first CCCD write;
+    subscribe_incoming must retry and succeed on the next attempt."""
+    controller = BMDCameraController(make_discovered(), make_profile())
+    call_count = 0
+
+    class FlakyClient:
+        is_connected = True
+
+        def __init__(self, address):
+            self.address = address
+            self.notified: dict = {}
+
+        async def start_notify(self, uuid, callback):
+            nonlocal call_count
+            call_count += 1
+            if call_count < 2:
+                raise BleakError("Could not start notify on 000E: Unreachable")
+            self.notified[uuid] = callback
+
+    async def fake_sleep(_):
+        pass
+
+    controller._client = FlakyClient(ADDRESS)
+    monkeypatch.setattr("bmd_ble.camera_controller.asyncio.sleep", fake_sleep)
+
+    await controller.subscribe_incoming()
+
+    assert call_count == 2
+    assert CHARACTERISTIC_INCOMING in controller._client.notified
+
+
+@pytest.mark.asyncio
+async def test_subscribe_incoming_raises_after_all_retries_exhausted(monkeypatch):
+    controller = BMDCameraController(make_discovered(), make_profile())
+
+    class AlwaysFailClient:
+        is_connected = True
+
+        def __init__(self, address):
+            self.address = address
+
+        async def start_notify(self, uuid, callback):
+            raise BleakError("Could not start notify on 000E: Unreachable")
+
+    async def fake_sleep(_):
+        pass
+
+    controller._client = AlwaysFailClient(ADDRESS)
+    monkeypatch.setattr("bmd_ble.camera_controller.asyncio.sleep", fake_sleep)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await controller.subscribe_incoming(retries=2)
+
+    assert "Could not subscribe to INCOMING_CONTROL" in str(exc_info.value)
+    assert "after 2 attempts" in str(exc_info.value)
