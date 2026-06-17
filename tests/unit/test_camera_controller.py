@@ -19,6 +19,7 @@ from bleak import BleakError
 from bmd_ble.camera_controller import BMDCameraController
 from bmd_ble.constants import (
     BLE_CONNECT_TIMEOUT_S,
+    CHARACTERISTIC_BMD_DEVICE_NAME,
     CHARACTERISTIC_CAM_STATUS,
     CHARACTERISTIC_INCOMING,
     CHARACTERISTIC_MANUFACTURER_INFO,
@@ -97,6 +98,7 @@ class FakeBleakClient:
         self.read_values: dict[str, bytes | bytearray] = {}
         self.read_errors: dict[str, Exception] = {}
         self.read_calls: list[str] = []
+        self.written: dict[str, bytes] = {}
 
     async def connect(self) -> None:
         """Simulate a successful BLE connection."""
@@ -122,6 +124,10 @@ class FakeBleakClient:
         if error is not None:
             raise error
         return self.read_values[characteristic_uuid]
+
+    async def write_gatt_char(self, characteristic_uuid: str, data: bytes | bytearray) -> None:
+        """Record GATT writes."""
+        self.written[characteristic_uuid] = bytes(data)
 
 
 class FakeBleakClientWithGetServices(FakeBleakClient):
@@ -266,6 +272,18 @@ class TestBMDCameraControllerConnect:
 
         with pytest.raises(RuntimeError, match=rf"\[{BLE_NAME}\] Connect failed"):
             await controller.connect()
+
+    @pytest.mark.asyncio
+    async def test_connect_writes_device_name_to_camera(self, monkeypatch) -> None:
+        """connect() must write the BMD device name immediately after the BLE link
+        is established so the camera keeps the GATT session open."""
+        controller = BMDCameraController(make_discovered(), make_profile())
+        monkeypatch.setattr("bmd_ble.camera_controller.BleakClient", FakeBleakClient)
+
+        await controller.connect()
+
+        assert CHARACTERISTIC_BMD_DEVICE_NAME in controller._client.written
+        assert controller._client.written[CHARACTERISTIC_BMD_DEVICE_NAME] == b"bmd-ble"
 
 
 class TestBMDCameraControllerDisconnect:
