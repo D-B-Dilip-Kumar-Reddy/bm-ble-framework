@@ -9,7 +9,6 @@ from bleak import BleakClient, BleakError, BleakGATTServiceCollection
 from .camera_profile import CameraProfile
 from .constants import (
     BLE_CONNECT_TIMEOUT_S,
-    CHARACTERISTIC_BMD_DEVICE_NAME,
     CHARACTERISTIC_CAM_STATUS,
     CHARACTERISTIC_INCOMING,
     CHARACTERISTIC_MANUFACTURER_INFO,
@@ -67,10 +66,6 @@ class BMDCameraController:
         self._client = BleakClient(address)
         try:
             await asyncio.wait_for(self._client.connect(), timeout=BLE_CONNECT_TIMEOUT_S)
-            # BMD cameras require a device-name write immediately after connect.
-            # Without it, older firmware (e.g. 6K G2 v7.9) closes the GATT session
-            # before any characteristic subscription can be made.
-            await self._client.write_gatt_char(CHARACTERISTIC_BMD_DEVICE_NAME, b"bmd-ble")
         except (TimeoutError, BleakError) as exc:
             raise RuntimeError(f"[{self.discovered.ble_name}] Connect failed: {exc}") from exc
 
