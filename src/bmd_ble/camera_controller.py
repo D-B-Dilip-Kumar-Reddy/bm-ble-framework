@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import logging
 import struct
 from collections.abc import Callable
@@ -38,6 +39,8 @@ class BMDCameraController:
         self._intentional_disconnect: bool = False
         self._reconnecting: bool = False
         self._incoming_callback: Callable[[Any, bytearray], None] | None = None
+        self._conn_gen: int = 0
+        self._connect_lock: asyncio.Lock = asyncio.Lock()
 
         # GAP / Device info
         self.gap_device_name: str | None = None
@@ -55,40 +58,65 @@ class BMDCameraController:
         BLE name only), :func:`~scanner.scan_for_camera` is called first to
         resolve the address.
         """
-        self._intentional_disconnect = False
-        address = self.discovered.address
-        if not address:
-            logger.info(f"No address — scanning for '{self.discovered.ble_name}' …")
-            found = await scan_for_camera(self.discovered.ble_name)
-            address = found.address
-            # Update our discovered record with the resolved address
-            self.discovered = DiscoveredCamera(
-                address=address,
-                ble_name=found.ble_name,
-                rssi=found.rssi,
+        async with self._connect_lock:
+            self._intentional_disconnect = False
+
+            if self._client and self._client.is_connected:
+                logger.debug(
+                    "[%s] connect() called while already connected — no-op.",
+                    self.discovered.ble_name,
+                )
+                return
+
+            address = self.discovered.address
+            if not address:
+                logger.info(f"No address — scanning for '{self.discovered.ble_name}' …")
+                found = await scan_for_camera(self.discovered.ble_name)
+                address = found.address
+                # Update our discovered record with the resolved address
+                self.discovered = DiscoveredCamera(
+                    address=address,
+                    ble_name=found.ble_name,
+                    rssi=found.rssi,
+                )
+
+            self._conn_gen += 1
+            my_gen = self._conn_gen
+
+            def on_disconnect(client: BleakClient) -> None:
+                if self._conn_gen != my_gen:
+                    logger.debug(
+                        "Stale on_disconnect (gen %d, current %d) — ignored.",
+                        my_gen,
+                        self._conn_gen,
+                    )
+                    return
+                self._connected.clear()
+                if self._intentional_disconnect:
+                    logger.info("Disconnected (intentional).")
+                    return
+                if self._reconnecting:
+                    logger.debug(
+                        "Reconnect already in progress — ignoring duplicate disconnect event."
+                    )
+                    return
+                logger.warning("Disconnected unexpectedly!")
+                asyncio.get_event_loop().create_task(self._reconnect_loop())
+
+            logger.info(f"Connecting to '{self.discovered.ble_name}' at {address} …")
+
+            self._client = BleakClient(address, disconnected_callback=on_disconnect)
+            try:
+                await asyncio.wait_for(self._client.connect(), timeout=BLE_CONNECT_TIMEOUT_S)
+            except (TimeoutError, BleakError) as exc:
+                self._client = None
+                raise RuntimeError(
+                    f"[{self.discovered.ble_name}] Connect failed: {exc}"
+                ) from exc
+            self._connected.set()
+            logger.info(
+                f"Connected to {self.discovered.address} ({self.discovered.ble_name})"
             )
-
-        def on_disconnect(client: BleakClient) -> None:
-            self._connected.clear()
-            if self._intentional_disconnect:
-                # Suppress reconnect — we initiated the disconnect ourselves.
-                logger.info("Disconnected (intentional).")
-                return
-            if self._reconnecting:
-                logger.debug("Reconnect already in progress — ignoring duplicate disconnect event.")
-                return
-            logger.warning("Disconnected unexpectedly!")
-            asyncio.get_event_loop().create_task(self._reconnect_loop())
-
-        logger.info(f"Connecting to '{self.discovered.ble_name}' at {address} …")
-
-        self._client = BleakClient(address, disconnected_callback=on_disconnect)
-        try:
-            await asyncio.wait_for(self._client.connect(), timeout=BLE_CONNECT_TIMEOUT_S)
-        except (TimeoutError, BleakError) as exc:
-            raise RuntimeError(f"[{self.discovered.ble_name}] Connect failed: {exc}") from exc
-        self._connected.set()
-        logger.info(f"Connected to {self.discovered.address} ({self.discovered.ble_name})")
 
     async def disconnect(self) -> None:
         self._intentional_disconnect = True
@@ -114,17 +142,38 @@ class BMDCameraController:
 
     async def _reconnect_loop(self) -> None:
         self._reconnecting = True
+        stale = self._client
+        _cleaned_stale = False
         try:
             for attempt in range(1, RECONNECT_MAX_ATTEMPTS + 1):
+                # Pre-delay check: camera may already be connected (e.g. from a previous
+                # explicit reconnect attempt that succeeded just before this loop started).
+                if stale and stale.is_connected:
+                    logger.info("Camera already connected — aborting reconnect loop.")
+                    self._connected.set()
+                    return
+
                 delay = RECONNECT_DELAY_S * attempt
                 logger.warning(f"Reconnect {attempt}/{RECONNECT_MAX_ATTEMPTS} in {delay:.0f}s …")
                 await asyncio.sleep(delay)
 
-                # Camera may have auto-reconnected at OS level during the delay.
-                if self._client and self._client.is_connected:
+                # Post-delay check: OS/WinRT may have auto-restored the session.
+                if stale and stale.is_connected:
                     logger.info("Camera auto-reconnected — skipping explicit reconnect.")
                     self._connected.set()
                     return
+
+                # Camera is still gone. Clear stale subscriptions exactly once before
+                # the first explicit connect attempt (best-effort; errors suppressed).
+                if not _cleaned_stale and stale is not None:
+                    for char in [
+                        CHARACTERISTIC_INCOMING,
+                        CHARACTERISTIC_CAM_STATUS,
+                        CHARACTERISTIC_TIMECODE,
+                    ]:
+                        with contextlib.suppress(Exception):
+                            await stale.stop_notify(char)
+                    _cleaned_stale = True
 
                 try:
                     await self.connect()
@@ -170,10 +219,24 @@ class BMDCameraController:
                 f"[{self.discovered.ble_name}] Cannot subscribe: BLE client is disconnected"
             )
         handler = callback if callback is not None else self._log_incoming
+        my_gen = self._conn_gen
+
+        def guarded_handler(char: Any, data: bytearray) -> None:
+            if self._conn_gen != my_gen:
+                logger.debug(
+                    "[%s @ %s] Dropping stale notification (gen %d, current %d)",
+                    self.discovered.ble_name,
+                    self.discovered.address,
+                    my_gen,
+                    self._conn_gen,
+                )
+                return
+            handler(char, data)
+
         last_exc: BleakError | None = None
         for attempt in range(1, retries + 1):
             try:
-                await self._client.start_notify(CHARACTERISTIC_INCOMING, handler)
+                await self._client.start_notify(CHARACTERISTIC_INCOMING, guarded_handler)
                 logger.info(
                     "[%s @ %s] Subscribed to INCOMING_CONTROL",
                     self.discovered.ble_name,
