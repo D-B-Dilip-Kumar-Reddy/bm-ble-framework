@@ -36,6 +36,8 @@ class BMDCameraController:
         self._client: BleakClient | None = None
         self._connected = asyncio.Event()
         self._intentional_disconnect: bool = False
+        self._reconnecting: bool = False
+        self._incoming_callback: Callable[[Any, bytearray], None] | None = None
 
         # GAP / Device info
         self.gap_device_name: str | None = None
@@ -53,6 +55,7 @@ class BMDCameraController:
         BLE name only), :func:`~scanner.scan_for_camera` is called first to
         resolve the address.
         """
+        self._intentional_disconnect = False
         address = self.discovered.address
         if not address:
             logger.info(f"No address — scanning for '{self.discovered.ble_name}' …")
@@ -70,6 +73,9 @@ class BMDCameraController:
             if self._intentional_disconnect:
                 # Suppress reconnect — we initiated the disconnect ourselves.
                 logger.info("Disconnected (intentional).")
+                return
+            if self._reconnecting:
+                logger.debug("Reconnect already in progress — ignoring duplicate disconnect event.")
                 return
             logger.warning("Disconnected unexpectedly!")
             asyncio.get_event_loop().create_task(self._reconnect_loop())
@@ -107,18 +113,33 @@ class BMDCameraController:
     # ── Reconnect ───────────────────────────────────────────────────────────────────────
 
     async def _reconnect_loop(self) -> None:
-        for attempt in range(1, RECONNECT_MAX_ATTEMPTS + 1):
-            delay = RECONNECT_DELAY_S * attempt
-            logger.warning(f"Reconnect {attempt}/{RECONNECT_MAX_ATTEMPTS} in {delay:.0f}s …")
-            await asyncio.sleep(delay)
-            try:
-                await self.connect()
-                logger.info("Reconnected ✓")
-                return
-            except RuntimeError as exc:
-                logger.error(f"Reconnect attempt {attempt} failed: {exc}")
+        self._reconnecting = True
+        try:
+            for attempt in range(1, RECONNECT_MAX_ATTEMPTS + 1):
+                delay = RECONNECT_DELAY_S * attempt
+                logger.warning(f"Reconnect {attempt}/{RECONNECT_MAX_ATTEMPTS} in {delay:.0f}s …")
+                await asyncio.sleep(delay)
 
-        logger.critical(f"All {RECONNECT_MAX_ATTEMPTS} reconnect attempts failed. Camera offline.")
+                # Camera may have auto-reconnected at OS level during the delay.
+                if self._client and self._client.is_connected:
+                    logger.info("Camera auto-reconnected — skipping explicit reconnect.")
+                    self._connected.set()
+                    return
+
+                try:
+                    await self.connect()
+                    logger.info("Reconnected ✓")
+                    if self._incoming_callback is not None:
+                        await self.subscribe_incoming(callback=self._incoming_callback)
+                    return
+                except RuntimeError as exc:
+                    logger.error(f"Reconnect attempt {attempt} failed: {exc}")
+
+            logger.critical(
+                f"All {RECONNECT_MAX_ATTEMPTS} reconnect attempts failed. Camera offline."
+            )
+        finally:
+            self._reconnecting = False
 
     # ── Notifications ────────────────────────────────────────────────────────────────────
 
@@ -158,6 +179,7 @@ class BMDCameraController:
                     self.discovered.ble_name,
                     self.discovered.address,
                 )
+                self._incoming_callback = handler
                 last_exc = None
                 return
             except BleakError as exc:
