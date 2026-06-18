@@ -21,6 +21,8 @@ from bmd_ble.scanner import scan_for_camera
 
 MODEL_KEY = "POCKET_6K_G2"
 FIRMWARE = "v7.9"
+# MODEL_KEY = "POCKET_6K_PRO"
+# FIRMWARE = "v8.6"
 MONITOR_DURATION_S = 60
 
 
@@ -33,14 +35,19 @@ async def main() -> None:
 
     cam = BMDCameraController(discovered=discovered, profile=cam_profile)
     await cam.connect()
+    await asyncio.sleep(5)
+    if cam._client.is_connected:
+        print(f"Connected to {cam.discovered.ble_name}")
+        await cam.subscribe_incoming()
+        logging.info(
+            "Listening for INCOMING_CONTROL notifications for %d s — trigger camera actions now …",
+            MONITOR_DURATION_S,
+        )
 
-    await cam.subscribe_incoming()
-    logging.info(
-        "Listening for INCOMING_CONTROL notifications for %d s — trigger camera actions now …",
-        MONITOR_DURATION_S,
-    )
+        await asyncio.sleep(MONITOR_DURATION_S)
 
-    await asyncio.sleep(MONITOR_DURATION_S)
+    else:
+        print(f"Could not connect to {cam.discovered.ble_name}")
 
     await cam.disconnect()
 

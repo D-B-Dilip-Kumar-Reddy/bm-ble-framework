@@ -16,6 +16,8 @@ from .constants import (
     CHARACTERISTIC_TIMECODE,
     GAP_CHARACTERISTIC_APPEARANCE,
     GAP_CHARACTERISTIC_DEVICE_NAME,
+    RECONNECT_DELAY_S,
+    RECONNECT_MAX_ATTEMPTS,
 )
 from .scanner import DiscoveredCamera, scan_for_camera
 
@@ -32,6 +34,8 @@ class BMDCameraController:
         self._profile = profile
 
         self._client: BleakClient | None = None
+        self._connected = asyncio.Event()
+        self._intentional_disconnect: bool = False
 
         # GAP / Device info
         self.gap_device_name: str | None = None
@@ -61,17 +65,27 @@ class BMDCameraController:
                 rssi=found.rssi,
             )
 
+        def on_disconnect(client: BleakClient) -> None:
+            self._connected.clear()
+            if self._intentional_disconnect:
+                # Suppress reconnect — we initiated the disconnect ourselves.
+                logger.info("Disconnected (intentional).")
+                return
+            logger.warning("Disconnected unexpectedly!")
+            asyncio.get_event_loop().create_task(self._reconnect_loop())
+
         logger.info(f"Connecting to '{self.discovered.ble_name}' at {address} …")
 
-        self._client = BleakClient(address)
+        self._client = BleakClient(address, disconnected_callback=on_disconnect)
         try:
             await asyncio.wait_for(self._client.connect(), timeout=BLE_CONNECT_TIMEOUT_S)
         except (TimeoutError, BleakError) as exc:
             raise RuntimeError(f"[{self.discovered.ble_name}] Connect failed: {exc}") from exc
-
+        self._connected.set()
         logger.info(f"Connected to {self.discovered.address} ({self.discovered.ble_name})")
 
     async def disconnect(self) -> None:
+        self._intentional_disconnect = True
         if self._client and self._client.is_connected:
             for char in [
                 CHARACTERISTIC_INCOMING,
@@ -87,7 +101,24 @@ class BMDCameraController:
                     pass
 
             await self._client.disconnect()
+            self._connected.clear()
             logger.info(f"Disconnected from {self.discovered.address}")
+
+    # ── Reconnect ───────────────────────────────────────────────────────────────────────
+
+    async def _reconnect_loop(self) -> None:
+        for attempt in range(1, RECONNECT_MAX_ATTEMPTS + 1):
+            delay = RECONNECT_DELAY_S * attempt
+            logger.warning(f"Reconnect {attempt}/{RECONNECT_MAX_ATTEMPTS} in {delay:.0f}s …")
+            await asyncio.sleep(delay)
+            try:
+                await self.connect()
+                logger.info("Reconnected ✓")
+                return
+            except RuntimeError as exc:
+                logger.error(f"Reconnect attempt {attempt} failed: {exc}")
+
+        logger.critical(f"All {RECONNECT_MAX_ATTEMPTS} reconnect attempts failed. Camera offline.")
 
     # ── Notifications ────────────────────────────────────────────────────────────────────
 
@@ -95,7 +126,7 @@ class BMDCameraController:
         self,
         callback: Callable[[Any, bytearray], None] | None = None,
         retries: int = 3,
-        retry_delay_s: float = 2.0,
+        retry_delay_s: float = 10.0,
     ) -> None:
         """
         Subscribe to INCOMING_CONTROL notifications.
@@ -127,20 +158,29 @@ class BMDCameraController:
                     self.discovered.ble_name,
                     self.discovered.address,
                 )
+                last_exc = None
                 return
             except BleakError as exc:
                 last_exc = exc
-                if attempt < retries:
-                    logger.warning(
-                        "[%s @ %s] start_notify attempt %d/%d failed (%s) — retrying in %.1f s",
-                        self.discovered.ble_name,
-                        self.discovered.address,
-                        attempt,
-                        retries,
-                        exc,
-                        retry_delay_s,
-                    )
-                    await asyncio.sleep(retry_delay_s)
+                if "not connected" in str(exc).lower():
+                    raise RuntimeError(
+                        f"[{self.discovered.ble_name}] start_notify failed for "
+                        f"{CHARACTERISTIC_INCOMING}: connection lost mid-subscribe. {exc}"
+                    ) from exc
+                last_exc = exc
+            except OSError as exc:
+                last_exc = exc
+            if last_exc and attempt < retries:
+                logger.warning(
+                    "[%s @ %s] start_notify attempt %d/%d failed (%s) — retrying in %.1f s",
+                    self.discovered.ble_name,
+                    self.discovered.address,
+                    attempt,
+                    retries,
+                    last_exc,
+                    retry_delay_s,
+                )
+                await asyncio.sleep(retry_delay_s)
         raise RuntimeError(
             f"[{self.discovered.ble_name}] Could not subscribe to INCOMING_CONTROL "
             f"after {retries} attempts: {last_exc}"
