@@ -210,6 +210,12 @@ class TestBMDCameraControllerInitialization:
 
         assert isinstance(controller._connect_lock, _asyncio.Lock)
 
+    def test_initializes_last_rx_time_none(self) -> None:
+        """``_last_rx_time`` must start as None — no notifications received yet."""
+        controller = BMDCameraController(make_discovered(), make_profile())
+
+        assert controller._last_rx_time is None
+
 
 class TestBMDCameraControllerConnect:
     """BLE connection-flow tests."""
@@ -648,6 +654,67 @@ class TestBMDCameraControllerReconnectLoop:
         await controller._reconnect_loop()
 
         assert CHARACTERISTIC_INCOMING in stale.stopped_notifications
+
+    @pytest.mark.asyncio
+    async def test_reconnect_loop_aborts_pre_delay_on_rx_activity(
+        self, monkeypatch
+    ) -> None:
+        """If recent RX activity exists before the delay, loop exits without sleeping."""
+        import time
+
+        controller = BMDCameraController(make_discovered(), make_profile())
+        client = FakeBleakClient(ADDRESS)
+        client.is_connected = False
+        controller._client = client
+        controller._last_rx_time = time.monotonic()  # RX was just received
+        sleep_called = False
+        connect_called = False
+
+        async def fake_sleep(_):
+            nonlocal sleep_called
+            sleep_called = True
+
+        async def fake_connect():
+            nonlocal connect_called
+            connect_called = True
+
+        monkeypatch.setattr("bmd_ble.camera_controller.asyncio.sleep", fake_sleep)
+        monkeypatch.setattr(controller, "connect", fake_connect)
+
+        await controller._reconnect_loop()
+
+        assert sleep_called is False
+        assert connect_called is False
+        assert controller._connected.is_set() is True
+
+    @pytest.mark.asyncio
+    async def test_reconnect_loop_aborts_post_delay_on_rx_activity(
+        self, monkeypatch
+    ) -> None:
+        """RX arriving during the sleep delay causes the loop to abort after waking."""
+        import time
+
+        controller = BMDCameraController(make_discovered(), make_profile())
+        client = FakeBleakClient(ADDRESS)
+        client.is_connected = False
+        controller._client = client
+        connect_called = False
+
+        async def fake_sleep(_):
+            # Simulate notifications arriving while we were sleeping.
+            controller._last_rx_time = time.monotonic()
+
+        async def fake_connect():
+            nonlocal connect_called
+            connect_called = True
+
+        monkeypatch.setattr("bmd_ble.camera_controller.asyncio.sleep", fake_sleep)
+        monkeypatch.setattr(controller, "connect", fake_connect)
+
+        await controller._reconnect_loop()
+
+        assert connect_called is False
+        assert controller._connected.is_set() is True
 
 
 class TestBMDCameraControllerServices:
@@ -1203,6 +1270,55 @@ async def test_notification_guard_drops_data_when_generation_is_stale():
     wrapper(None, bytearray(b"\x01\x02"))
 
     assert len(received) == 0
+
+
+@pytest.mark.asyncio
+async def test_guarded_handler_updates_last_rx_time_before_gen_check():
+    """Stale notifications must still update ``_last_rx_time`` (WinRT liveness signal)."""
+    controller = BMDCameraController(make_discovered(), make_profile())
+    controller._client = FakeConnectedBleakClient(ADDRESS)
+    callback_invoked = False
+
+    def my_callback(_char, _data):
+        nonlocal callback_invoked
+        callback_invoked = True
+
+    await controller.subscribe_incoming(callback=my_callback)
+    wrapper = controller._client.notified[CHARACTERISTIC_INCOMING]
+
+    # Advance gen so this notification is "stale" and will be dropped.
+    controller._conn_gen += 1
+    wrapper(None, bytearray(b"\xAA\xBB"))
+
+    assert callback_invoked is False             # dropped by gen guard
+    assert controller._last_rx_time is not None  # but timestamp was set
+
+
+def test_is_receiving_data_returns_false_when_no_rx():
+    """``_is_receiving_data`` must return False when no notification has arrived yet."""
+    controller = BMDCameraController(make_discovered(), make_profile())
+
+    assert controller._is_receiving_data() is False
+
+
+def test_is_receiving_data_returns_true_when_rx_is_recent():
+    """``_is_receiving_data`` must return True when a notification arrived moments ago."""
+    import time
+
+    controller = BMDCameraController(make_discovered(), make_profile())
+    controller._last_rx_time = time.monotonic()
+
+    assert controller._is_receiving_data() is True
+
+
+def test_is_receiving_data_returns_false_when_rx_is_old():
+    """``_is_receiving_data`` must return False when the last notification is too old."""
+    import time
+
+    controller = BMDCameraController(make_discovered(), make_profile())
+    controller._last_rx_time = time.monotonic() - 10.0
+
+    assert controller._is_receiving_data() is False
 
 
 def test_log_incoming_formats_bytes_as_uppercase_hex(caplog):

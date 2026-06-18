@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import logging
 import struct
+import time
 from collections.abc import Callable
 from typing import Any
 
@@ -41,6 +42,7 @@ class BMDCameraController:
         self._incoming_callback: Callable[[Any, bytearray], None] | None = None
         self._conn_gen: int = 0
         self._connect_lock: asyncio.Lock = asyncio.Lock()
+        self._last_rx_time: float | None = None
 
         # GAP / Device info
         self.gap_device_name: str | None = None
@@ -152,6 +154,12 @@ class BMDCameraController:
                     logger.info("Camera already connected — aborting reconnect loop.")
                     self._connected.set()
                     return
+                if self._is_receiving_data():
+                    logger.info(
+                        "RX activity detected — assuming connection alive, aborting reconnect."
+                    )
+                    self._connected.set()
+                    return
 
                 delay = RECONNECT_DELAY_S * attempt
                 logger.warning(f"Reconnect {attempt}/{RECONNECT_MAX_ATTEMPTS} in {delay:.0f}s …")
@@ -160,6 +168,12 @@ class BMDCameraController:
                 # Post-delay check: OS/WinRT may have auto-restored the session.
                 if stale and stale.is_connected:
                     logger.info("Camera auto-reconnected — skipping explicit reconnect.")
+                    self._connected.set()
+                    return
+                if self._is_receiving_data():
+                    logger.info(
+                        "RX activity detected during reconnect delay — aborting reconnect."
+                    )
                     self._connected.set()
                     return
 
@@ -222,6 +236,9 @@ class BMDCameraController:
         my_gen = self._conn_gen
 
         def guarded_handler(char: Any, data: bytearray) -> None:
+            # Update timestamp unconditionally — even a stale notification
+            # proves the BLE transport is live (WinRT is_connected is unreliable).
+            self._last_rx_time = time.monotonic()
             if self._conn_gen != my_gen:
                 logger.debug(
                     "[%s @ %s] Dropping stale notification (gen %d, current %d)",
@@ -270,6 +287,12 @@ class BMDCameraController:
             f"[{self.discovered.ble_name}] Could not subscribe to INCOMING_CONTROL "
             f"after {retries} attempts: {last_exc}"
         ) from last_exc
+
+    def _is_receiving_data(self, threshold_s: float = 3.0) -> bool:
+        """Return True if a notification arrived within the last ``threshold_s`` seconds."""
+        if self._last_rx_time is None:
+            return False
+        return (time.monotonic() - self._last_rx_time) < threshold_s
 
     def _log_incoming(self, _characteristic: Any, data: bytearray) -> None:
         """Default INCOMING_CONTROL handler — logs raw bytes as uppercase hex."""
