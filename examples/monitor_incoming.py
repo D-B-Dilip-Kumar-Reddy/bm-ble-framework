@@ -6,6 +6,8 @@ change a setting, capture a photo). Each incoming notification is logged
 as uppercase hex pairs so the output can be compared directly with
 Wireshark or nRF Sniffer captures.
 
+Press Ctrl+C to stop monitoring and cleanly disconnect from the camera.
+
 Usage:
     python examples/monitor_incoming.py
 
@@ -23,7 +25,6 @@ MODEL_KEY = "POCKET_6K_G2"
 FIRMWARE = "v7.9"
 # MODEL_KEY = "POCKET_6K_PRO"
 # FIRMWARE = "v8.6"
-MONITOR_DURATION_S = 60
 
 
 async def main() -> None:
@@ -34,22 +35,18 @@ async def main() -> None:
     logging.info("Found: %s", discovered)
 
     cam = BMDCameraController(discovered=discovered, profile=cam_profile)
-    await cam.connect()
-    await asyncio.sleep(5)
-    if cam._client.is_connected:
-        print(f"Connected to {cam.discovered.ble_name}")
+    try:
+        await cam.connect()
+        logging.info("Connected to %s", cam.discovered.ble_name)
         await cam.subscribe_incoming()
         logging.info(
-            "Listening for INCOMING_CONTROL notifications for %d s — trigger camera actions now …",
-            MONITOR_DURATION_S,
+            "Listening for INCOMING_CONTROL notifications — press Ctrl+C to stop …"
         )
-
-        await asyncio.sleep(MONITOR_DURATION_S)
-
-    else:
-        print(f"Could not connect to {cam.discovered.ble_name}")
-
-    await cam.disconnect()
+        await asyncio.Event().wait()
+    except asyncio.CancelledError:
+        logging.info("Monitoring stopped.")
+    finally:
+        await cam.disconnect()
 
 
 if __name__ == "__main__":
