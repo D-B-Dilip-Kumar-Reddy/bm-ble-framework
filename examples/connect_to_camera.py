@@ -5,8 +5,10 @@ from bmd_ble import CameraProfile
 from bmd_ble.camera_controller import BMDCameraController
 from bmd_ble.scanner import scan_for_camera
 
-MODEL_KEY = "POCKET_6K_PRO"
-FIRMWARE = "v8.6"
+MODEL_KEY = "POCKET_6K_G2"
+FIRMWARE = "v7.9"
+# MODEL_KEY = "POCKET_6K_PRO"
+# FIRMWARE = "v8.6"
 
 
 async def main():
@@ -15,10 +17,13 @@ async def main():
     print(discovered_camera)
     cam = BMDCameraController(discovered=discovered_camera, profile=cam_profile)
     await cam.connect()
-    print(f"Connected to {cam.discovered.ble_name}")
     await asyncio.sleep(5)
-    await cam.disconnect()
-    print(f"Disconnected from {cam.discovered.ble_name}")
+    if cam._client.is_connected:
+        print(f"Connected to {cam.discovered.ble_name}")
+        await cam.disconnect()
+        print(f"Disconnected from {cam.discovered.ble_name}")
+    else:
+        print(f"Could not connect to {cam.discovered.ble_name}")
 
 
 if __name__ == "__main__":

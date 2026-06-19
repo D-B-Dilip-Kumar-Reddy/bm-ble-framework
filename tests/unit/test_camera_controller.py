@@ -66,12 +66,29 @@ def make_discovered(
     return DiscoveredCamera(address=address, ble_name=ble_name, rssi=rssi)
 
 
+class FakeConnectedBleakClient:
+    """Fake client that is already connected and records start_notify calls."""
+
+    is_connected = True
+
+    def __init__(self, address: str) -> None:
+        self.address = address
+        self.notified: dict[str, object] = {}
+
+    async def connect(self) -> None:
+        pass
+
+    async def start_notify(self, uuid: str, callback: object) -> None:
+        self.notified[uuid] = callback
+
+
 class FakeBleakClient:
     """Async fake for the subset of ``BleakClient`` used by the controller."""
 
-    def __init__(self, address: str) -> None:
+    def __init__(self, address: str, disconnected_callback=None) -> None:
         """Create a fake BLE client for ``address`` with configurable behavior."""
         self.address = address
+        self.disconnected_callback = disconnected_callback
         self.is_connected = False
         self.connect_called = False
         self.disconnect_called = False
@@ -154,6 +171,50 @@ class TestBMDCameraControllerInitialization:
 
         assert controller.manufacturer_info is None
         assert controller.model_info is None
+
+    def test_initializes_connected_event_cleared(self) -> None:
+        """``_connected`` event must start in the cleared (unset) state."""
+        controller = BMDCameraController(make_discovered(), make_profile())
+
+        assert controller._connected.is_set() is False
+
+    def test_initializes_intentional_disconnect_false(self) -> None:
+        """``_intentional_disconnect`` must start as False."""
+        controller = BMDCameraController(make_discovered(), make_profile())
+
+        assert controller._intentional_disconnect is False
+
+    def test_initializes_reconnecting_false(self) -> None:
+        """``_reconnecting`` must start as False."""
+        controller = BMDCameraController(make_discovered(), make_profile())
+
+        assert controller._reconnecting is False
+
+    def test_initializes_incoming_callback_none(self) -> None:
+        """``_incoming_callback`` must start as None (no subscription yet)."""
+        controller = BMDCameraController(make_discovered(), make_profile())
+
+        assert controller._incoming_callback is None
+
+    def test_initializes_conn_gen_zero(self) -> None:
+        """Connection generation counter must start at zero (no connection yet)."""
+        controller = BMDCameraController(make_discovered(), make_profile())
+
+        assert controller._conn_gen == 0
+
+    def test_initializes_connect_lock(self) -> None:
+        """``_connect_lock`` must be an asyncio.Lock instance."""
+        import asyncio as _asyncio
+
+        controller = BMDCameraController(make_discovered(), make_profile())
+
+        assert isinstance(controller._connect_lock, _asyncio.Lock)
+
+    def test_initializes_last_rx_time_none(self) -> None:
+        """``_last_rx_time`` must start as None — no notifications received yet."""
+        controller = BMDCameraController(make_discovered(), make_profile())
+
+        assert controller._last_rx_time is None
 
 
 class TestBMDCameraControllerConnect:
@@ -251,6 +312,79 @@ class TestBMDCameraControllerConnect:
         with pytest.raises(RuntimeError, match=rf"\[{BLE_NAME}\] Connect failed"):
             await controller.connect()
 
+    @pytest.mark.asyncio
+    async def test_connect_passes_disconnect_callback_to_bleak_client(self, monkeypatch) -> None:
+        """``connect()`` must pass a ``disconnected_callback`` to ``BleakClient``."""
+        controller = BMDCameraController(make_discovered(), make_profile())
+        monkeypatch.setattr("bmd_ble.camera_controller.BleakClient", FakeBleakClient)
+
+        await controller.connect()
+
+        assert controller._client.disconnected_callback is not None
+
+    @pytest.mark.asyncio
+    async def test_connect_sets_connected_event_on_success(self, monkeypatch) -> None:
+        """After a successful ``connect()``, the ``_connected`` event must be set."""
+        controller = BMDCameraController(make_discovered(), make_profile())
+        monkeypatch.setattr("bmd_ble.camera_controller.BleakClient", FakeBleakClient)
+
+        await controller.connect()
+
+        assert controller._connected.is_set() is True
+
+    @pytest.mark.asyncio
+    async def test_connect_resets_intentional_disconnect_flag(self, monkeypatch) -> None:
+        """``connect()`` must reset ``_intentional_disconnect`` so future drops trigger reconnect."""  # noqa: E501
+        controller = BMDCameraController(make_discovered(), make_profile())
+        controller._intentional_disconnect = True
+        monkeypatch.setattr("bmd_ble.camera_controller.BleakClient", FakeBleakClient)
+
+        await controller.connect()
+
+        assert controller._intentional_disconnect is False
+
+    @pytest.mark.asyncio
+    async def test_connect_increments_conn_gen(self, monkeypatch) -> None:
+        """``_conn_gen`` must increase by 1 on every successful ``connect()``."""
+        controller = BMDCameraController(make_discovered(), make_profile())
+        monkeypatch.setattr("bmd_ble.camera_controller.BleakClient", FakeBleakClient)
+
+        assert controller._conn_gen == 0
+        await controller.connect()
+        assert controller._conn_gen == 1
+
+    @pytest.mark.asyncio
+    async def test_connect_nulls_client_on_connection_failure(self, monkeypatch) -> None:
+        """If ``BleakClient.connect()`` raises, ``_client`` must be reset to None."""
+        from bleak import BleakError
+
+        class FailingBleakClient(FakeBleakClient):
+            async def connect(self) -> None:
+                raise BleakError("device not found")
+
+        controller = BMDCameraController(make_discovered(), make_profile())
+        monkeypatch.setattr("bmd_ble.camera_controller.BleakClient", FailingBleakClient)
+
+        with pytest.raises(RuntimeError):
+            await controller.connect()
+
+        assert controller._client is None
+
+    @pytest.mark.asyncio
+    async def test_connect_is_idempotent_if_already_connected(self, monkeypatch) -> None:
+        """A second ``connect()`` call must be a no-op when the camera is already connected."""
+        controller = BMDCameraController(make_discovered(), make_profile())
+        monkeypatch.setattr("bmd_ble.camera_controller.BleakClient", FakeBleakClient)
+
+        await controller.connect()
+        assert controller._conn_gen == 1
+
+        controller._client.connect_called = False
+        await controller.connect()
+
+        assert controller._client.connect_called is False
+        assert controller._conn_gen == 1
+
 
 class TestBMDCameraControllerDisconnect:
     """Disconnect and notification-cleanup tests."""
@@ -311,6 +445,268 @@ class TestBMDCameraControllerDisconnect:
 
         assert client.stopped_notifications == []
         assert client.disconnect_called is False
+
+    @pytest.mark.asyncio
+    async def test_disconnect_sets_intentional_disconnect_flag(self) -> None:
+        """``disconnect()`` must set ``_intentional_disconnect`` to prevent reconnect loop."""
+        controller = BMDCameraController(make_discovered(), make_profile())
+        client = FakeBleakClient(ADDRESS)
+        client.is_connected = True
+        controller._client = client
+
+        await controller.disconnect()
+
+        assert controller._intentional_disconnect is True
+
+    @pytest.mark.asyncio
+    async def test_disconnect_clears_connected_event(self) -> None:
+        """``disconnect()`` must clear the ``_connected`` event."""
+        controller = BMDCameraController(make_discovered(), make_profile())
+        client = FakeBleakClient(ADDRESS)
+        client.is_connected = True
+        controller._client = client
+        controller._connected.set()
+
+        await controller.disconnect()
+
+        assert controller._connected.is_set() is False
+
+
+class TestBMDCameraControllerReconnectLoop:
+    """_reconnect_loop behaviour tests."""
+
+    @pytest.mark.asyncio
+    async def test_reconnect_loop_exits_early_when_client_auto_reconnects(
+        self, monkeypatch
+    ) -> None:
+        """If the camera auto-reconnects at OS level, the loop must not call connect()."""
+        controller = BMDCameraController(make_discovered(), make_profile())
+        client = FakeBleakClient(ADDRESS)
+        client.is_connected = True
+        controller._client = client
+        connect_called = False
+
+        async def fake_connect():
+            nonlocal connect_called
+            connect_called = True
+
+        async def fake_sleep(_):
+            pass
+
+        monkeypatch.setattr(controller, "connect", fake_connect)
+        monkeypatch.setattr("bmd_ble.camera_controller.asyncio.sleep", fake_sleep)
+
+        await controller._reconnect_loop()
+
+        assert connect_called is False
+        assert controller._connected.is_set() is True
+
+    @pytest.mark.asyncio
+    async def test_reconnect_loop_clears_reconnecting_flag_on_auto_reconnect(
+        self, monkeypatch
+    ) -> None:
+        """``_reconnecting`` must be False when the loop exits via auto-reconnect."""
+        controller = BMDCameraController(make_discovered(), make_profile())
+        client = FakeBleakClient(ADDRESS)
+        client.is_connected = True
+        controller._client = client
+
+        async def fake_sleep(_):
+            pass
+
+        monkeypatch.setattr("bmd_ble.camera_controller.asyncio.sleep", fake_sleep)
+
+        await controller._reconnect_loop()
+
+        assert controller._reconnecting is False
+
+    @pytest.mark.asyncio
+    async def test_reconnect_loop_clears_reconnecting_flag_on_all_failures(
+        self, monkeypatch, caplog
+    ) -> None:
+        """``_reconnecting`` must be False even when all reconnect attempts fail."""
+        import logging
+
+        controller = BMDCameraController(make_discovered(), make_profile())
+        client = FakeBleakClient(ADDRESS)
+        client.is_connected = False
+        controller._client = client
+
+        async def failing_connect():
+            raise RuntimeError("connect failed")
+
+        async def fake_sleep(_):
+            pass
+
+        monkeypatch.setattr(controller, "connect", failing_connect)
+        monkeypatch.setattr("bmd_ble.camera_controller.asyncio.sleep", fake_sleep)
+
+        with caplog.at_level(logging.CRITICAL, logger="bmd_ble.camera_controller"):
+            await controller._reconnect_loop()
+
+        assert controller._reconnecting is False
+        assert "Camera offline" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_reconnect_loop_resubscribes_if_previously_subscribed(self, monkeypatch) -> None:
+        """After an explicit reconnect, the loop must restore the notification subscription."""
+        controller = BMDCameraController(make_discovered(), make_profile())
+        client = FakeBleakClient(ADDRESS)
+        client.is_connected = False
+        controller._client = client
+
+        def my_callback(_char, _data):
+            pass
+
+        controller._incoming_callback = my_callback
+        subscribe_calls: list = []
+
+        async def fake_connect():
+            controller._client.is_connected = True
+
+        async def fake_subscribe_incoming(callback=None, **kwargs):
+            subscribe_calls.append(callback)
+
+        async def fake_sleep(_):
+            pass
+
+        monkeypatch.setattr(controller, "connect", fake_connect)
+        monkeypatch.setattr(controller, "subscribe_incoming", fake_subscribe_incoming)
+        monkeypatch.setattr("bmd_ble.camera_controller.asyncio.sleep", fake_sleep)
+
+        await controller._reconnect_loop()
+
+        assert subscribe_calls == [my_callback]
+
+    @pytest.mark.asyncio
+    async def test_on_disconnect_ignores_duplicate_when_reconnecting(self, monkeypatch) -> None:
+        """``on_disconnect`` must not schedule a second loop if one is already running."""
+        controller = BMDCameraController(make_discovered(), make_profile())
+        monkeypatch.setattr("bmd_ble.camera_controller.BleakClient", FakeBleakClient)
+        await controller.connect()
+
+        task_count = 0
+
+        def counting_create_task(coro):
+            nonlocal task_count
+            task_count += 1
+            coro.close()
+
+        import asyncio as _asyncio
+
+        fake_loop = type("L", (), {"create_task": staticmethod(counting_create_task)})()
+        monkeypatch.setattr(_asyncio, "get_event_loop", lambda: fake_loop)
+
+        controller._reconnecting = True
+        controller._client.disconnected_callback(controller._client)
+
+        assert task_count == 0
+
+    @pytest.mark.asyncio
+    async def test_reconnect_loop_pre_delay_exits_if_stale_client_already_connected(
+        self, monkeypatch
+    ) -> None:
+        """Pre-delay check: if stale client is already connected, loop exits before sleeping."""
+        controller = BMDCameraController(make_discovered(), make_profile())
+        client = FakeBleakClient(ADDRESS)
+        client.is_connected = True
+        controller._client = client
+        sleep_called = False
+
+        async def fake_sleep(_):
+            nonlocal sleep_called
+            sleep_called = True
+
+        monkeypatch.setattr("bmd_ble.camera_controller.asyncio.sleep", fake_sleep)
+
+        await controller._reconnect_loop()
+
+        assert sleep_called is False
+        assert controller._connected.is_set() is True
+
+    @pytest.mark.asyncio
+    async def test_reconnect_loop_calls_stop_notify_on_stale_client_before_explicit_connect(
+        self, monkeypatch
+    ) -> None:
+        """stale.stop_notify must be called for tracked characteristics before explicit connect."""
+        controller = BMDCameraController(make_discovered(), make_profile())
+        stale = FakeBleakClient(ADDRESS)
+        stale.is_connected = False
+        controller._client = stale
+
+        async def fake_sleep(_):
+            pass
+
+        async def fake_connect():
+            controller._connected.set()
+
+        async def fake_subscribe(**kwargs):
+            pass
+
+        monkeypatch.setattr("bmd_ble.camera_controller.asyncio.sleep", fake_sleep)
+        monkeypatch.setattr(controller, "connect", fake_connect)
+        monkeypatch.setattr(controller, "subscribe_incoming", fake_subscribe)
+
+        await controller._reconnect_loop()
+
+        assert CHARACTERISTIC_INCOMING in stale.stopped_notifications
+
+    @pytest.mark.asyncio
+    async def test_reconnect_loop_aborts_pre_delay_on_rx_activity(self, monkeypatch) -> None:
+        """If recent RX activity exists before the delay, loop exits without sleeping."""
+        import time
+
+        controller = BMDCameraController(make_discovered(), make_profile())
+        client = FakeBleakClient(ADDRESS)
+        client.is_connected = False
+        controller._client = client
+        controller._last_rx_time = time.monotonic()  # RX was just received
+        sleep_called = False
+        connect_called = False
+
+        async def fake_sleep(_):
+            nonlocal sleep_called
+            sleep_called = True
+
+        async def fake_connect():
+            nonlocal connect_called
+            connect_called = True
+
+        monkeypatch.setattr("bmd_ble.camera_controller.asyncio.sleep", fake_sleep)
+        monkeypatch.setattr(controller, "connect", fake_connect)
+
+        await controller._reconnect_loop()
+
+        assert sleep_called is False
+        assert connect_called is False
+        assert controller._connected.is_set() is True
+
+    @pytest.mark.asyncio
+    async def test_reconnect_loop_aborts_post_delay_on_rx_activity(self, monkeypatch) -> None:
+        """RX arriving during the sleep delay causes the loop to abort after waking."""
+        import time
+
+        controller = BMDCameraController(make_discovered(), make_profile())
+        client = FakeBleakClient(ADDRESS)
+        client.is_connected = False
+        controller._client = client
+        connect_called = False
+
+        async def fake_sleep(_):
+            # Simulate notifications arriving while we were sleeping.
+            controller._last_rx_time = time.monotonic()
+
+        async def fake_connect():
+            nonlocal connect_called
+            connect_called = True
+
+        monkeypatch.setattr("bmd_ble.camera_controller.asyncio.sleep", fake_sleep)
+        monkeypatch.setattr(controller, "connect", fake_connect)
+
+        await controller._reconnect_loop()
+
+        assert connect_called is False
+        assert controller._connected.is_set() is True
 
 
 class TestBMDCameraControllerServices:
@@ -735,3 +1131,325 @@ class TestBMDCameraControllerDeviceInformationMetadata:
         assert controller.manufacturer_info is None
         assert controller.model_info is None
         assert client.read_calls == [CHARACTERISTIC_MANUFACTURER_INFO]
+
+
+# ── subscribe_incoming ────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_subscribe_incoming_raises_when_client_is_none():
+    controller = BMDCameraController(make_discovered(), make_profile())
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await controller.subscribe_incoming()
+
+    assert "not connected" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_subscribe_incoming_raises_when_client_not_connected():
+    controller = BMDCameraController(make_discovered(), make_profile())
+
+    class FakeDisconnectedClient:
+        is_connected = False
+
+    controller._client = FakeDisconnectedClient()
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await controller.subscribe_incoming()
+
+    assert "disconnected" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_subscribe_incoming_registers_default_callback():
+    controller = BMDCameraController(make_discovered(), make_profile())
+    controller._client = FakeConnectedBleakClient(ADDRESS)
+
+    await controller.subscribe_incoming()
+
+    # The registered handler is the generation-guarded wrapper, not the raw callback.
+    registered = controller._client.notified[CHARACTERISTIC_INCOMING]
+    assert CHARACTERISTIC_INCOMING in controller._client.notified
+    assert callable(registered)
+    assert registered is not controller._log_incoming
+
+
+@pytest.mark.asyncio
+async def test_subscribe_incoming_registers_custom_callback():
+    controller = BMDCameraController(make_discovered(), make_profile())
+    controller._client = FakeConnectedBleakClient(ADDRESS)
+
+    def custom_callback(_char, _data):
+        pass
+
+    await controller.subscribe_incoming(callback=custom_callback)
+
+    # The registered handler is the generation-guarded wrapper, not the raw callback.
+    registered = controller._client.notified[CHARACTERISTIC_INCOMING]
+    assert callable(registered)
+    assert registered is not custom_callback
+
+
+@pytest.mark.asyncio
+async def test_subscribe_incoming_stores_handler_for_reconnect():
+    """``_incoming_callback`` must be set to the resolved handler after subscribe succeeds."""
+    controller = BMDCameraController(make_discovered(), make_profile())
+    controller._client = FakeConnectedBleakClient(ADDRESS)
+
+    # Default path — no callback arg → resolved to _log_incoming
+    await controller.subscribe_incoming()
+    assert controller._incoming_callback == controller._log_incoming
+
+    # Custom callback path
+    controller._client = FakeConnectedBleakClient(ADDRESS)
+
+    def my_handler(_char, _data):
+        pass
+
+    await controller.subscribe_incoming(callback=my_handler)
+    assert controller._incoming_callback is my_handler
+
+
+@pytest.mark.asyncio
+async def test_subscribe_incoming_stores_raw_handler_not_guarded_wrapper():
+    """``_incoming_callback`` stores the raw callback, not the generation wrapper."""
+    controller = BMDCameraController(make_discovered(), make_profile())
+    controller._client = FakeConnectedBleakClient(ADDRESS)
+
+    def raw(_char, _data):
+        pass
+
+    await controller.subscribe_incoming(callback=raw)
+
+    assert controller._incoming_callback is raw
+    assert controller._client.notified[CHARACTERISTIC_INCOMING] is not raw
+
+
+@pytest.mark.asyncio
+async def test_notification_guard_passes_data_when_generation_matches():
+    """Guarded handler must invoke the user callback when generation matches."""
+    controller = BMDCameraController(make_discovered(), make_profile())
+    controller._client = FakeConnectedBleakClient(ADDRESS)
+    received: list = []
+
+    def my_callback(_char, data):
+        received.append(data)
+
+    await controller.subscribe_incoming(callback=my_callback)
+    wrapper = controller._client.notified[CHARACTERISTIC_INCOMING]
+
+    wrapper(None, bytearray(b"\x01\x02"))
+
+    assert len(received) == 1
+    assert received[0] == bytearray(b"\x01\x02")
+
+
+@pytest.mark.asyncio
+async def test_notification_guard_drops_data_when_generation_is_stale():
+    """Guarded handler must silently drop data when the connection generation has advanced."""
+    controller = BMDCameraController(make_discovered(), make_profile())
+    controller._client = FakeConnectedBleakClient(ADDRESS)
+    received: list = []
+
+    def my_callback(_char, data):
+        received.append(data)
+
+    await controller.subscribe_incoming(callback=my_callback)
+    wrapper = controller._client.notified[CHARACTERISTIC_INCOMING]
+
+    controller._conn_gen += 1  # Advance generation (simulates a new connect() call)
+    wrapper(None, bytearray(b"\x01\x02"))
+
+    assert len(received) == 0
+
+
+@pytest.mark.asyncio
+async def test_guarded_handler_updates_last_rx_time_before_gen_check():
+    """Stale notifications must still update ``_last_rx_time`` (WinRT liveness signal)."""
+    controller = BMDCameraController(make_discovered(), make_profile())
+    controller._client = FakeConnectedBleakClient(ADDRESS)
+    callback_invoked = False
+
+    def my_callback(_char, _data):
+        nonlocal callback_invoked
+        callback_invoked = True
+
+    await controller.subscribe_incoming(callback=my_callback)
+    wrapper = controller._client.notified[CHARACTERISTIC_INCOMING]
+
+    # Advance gen so this notification is "stale" and will be dropped.
+    controller._conn_gen += 1
+    wrapper(None, bytearray(b"\xaa\xbb"))
+
+    assert callback_invoked is False  # dropped by gen guard
+    assert controller._last_rx_time is not None  # but timestamp was set
+
+
+def test_is_receiving_data_returns_false_when_no_rx():
+    """``_is_receiving_data`` must return False when no notification has arrived yet."""
+    controller = BMDCameraController(make_discovered(), make_profile())
+
+    assert controller._is_receiving_data() is False
+
+
+def test_is_receiving_data_returns_true_when_rx_is_recent():
+    """``_is_receiving_data`` must return True when a notification arrived moments ago."""
+    import time
+
+    controller = BMDCameraController(make_discovered(), make_profile())
+    controller._last_rx_time = time.monotonic()
+
+    assert controller._is_receiving_data() is True
+
+
+def test_is_receiving_data_returns_false_when_rx_is_old():
+    """``_is_receiving_data`` must return False when the last notification is too old."""
+    import time
+
+    controller = BMDCameraController(make_discovered(), make_profile())
+    controller._last_rx_time = time.monotonic() - 10.0
+
+    assert controller._is_receiving_data() is False
+
+
+def test_log_incoming_formats_bytes_as_uppercase_hex(caplog):
+    import logging
+
+    controller = BMDCameraController(make_discovered(), make_profile())
+    with caplog.at_level(logging.DEBUG, logger="bmd_ble.camera_controller"):
+        controller._log_incoming(None, bytearray([0x00, 0x06, 0x0A, 0xFF]))
+
+    assert "00 06 0A FF" in caplog.text
+
+
+def test_log_incoming_includes_camera_identity_prefix(caplog):
+    import logging
+
+    controller = BMDCameraController(make_discovered(), make_profile())
+    with caplog.at_level(logging.DEBUG, logger="bmd_ble.camera_controller"):
+        controller._log_incoming(None, bytearray([0xAB]))
+
+    assert BLE_NAME in caplog.text
+    assert ADDRESS in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_subscribe_incoming_retries_on_transient_bleak_error(monkeypatch):
+    """Older firmware (e.g. 6K G2 v7.9) raises BleakError on first CCCD write;
+    subscribe_incoming must retry and succeed on the next attempt."""
+    controller = BMDCameraController(make_discovered(), make_profile())
+    call_count = 0
+
+    class FlakyClient:
+        is_connected = True
+
+        def __init__(self, address):
+            self.address = address
+            self.notified: dict = {}
+
+        async def start_notify(self, uuid, callback):
+            nonlocal call_count
+            call_count += 1
+            if call_count < 2:
+                raise BleakError("Could not start notify on 000E: Unreachable")
+            self.notified[uuid] = callback
+
+    async def fake_sleep(_):
+        pass
+
+    controller._client = FlakyClient(ADDRESS)
+    monkeypatch.setattr("bmd_ble.camera_controller.asyncio.sleep", fake_sleep)
+
+    await controller.subscribe_incoming()
+
+    assert call_count == 2
+    assert CHARACTERISTIC_INCOMING in controller._client.notified
+
+
+@pytest.mark.asyncio
+async def test_subscribe_incoming_raises_after_all_retries_exhausted(monkeypatch):
+    controller = BMDCameraController(make_discovered(), make_profile())
+
+    class AlwaysFailClient:
+        is_connected = True
+
+        def __init__(self, address):
+            self.address = address
+
+        async def start_notify(self, uuid, callback):
+            raise BleakError("Could not start notify on 000E: Unreachable")
+
+    async def fake_sleep(_):
+        pass
+
+    controller._client = AlwaysFailClient(ADDRESS)
+    monkeypatch.setattr("bmd_ble.camera_controller.asyncio.sleep", fake_sleep)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await controller.subscribe_incoming(retries=2)
+
+    assert "Could not subscribe to INCOMING_CONTROL" in str(exc_info.value)
+    assert "after 2 attempts" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_subscribe_incoming_fast_fails_on_not_connected_error(monkeypatch):
+    """A BleakError containing 'not connected' must raise immediately with no retries."""
+    controller = BMDCameraController(make_discovered(), make_profile())
+    call_count = 0
+
+    class NotConnectedClient:
+        is_connected = True
+
+        def __init__(self, address):
+            self.address = address
+
+        async def start_notify(self, uuid, callback):
+            nonlocal call_count
+            call_count += 1
+            raise BleakError("Not connected")
+
+    async def fake_sleep(_):
+        pass
+
+    controller._client = NotConnectedClient(ADDRESS)
+    monkeypatch.setattr("bmd_ble.camera_controller.asyncio.sleep", fake_sleep)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await controller.subscribe_incoming(retries=3)
+
+    assert call_count == 1
+    assert "connection lost mid-subscribe" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_subscribe_incoming_retries_on_os_error(monkeypatch):
+    """``OSError`` from ``start_notify`` should be retried like a transient BleakError."""
+    controller = BMDCameraController(make_discovered(), make_profile())
+    call_count = 0
+
+    class OSErrorClient:
+        is_connected = True
+
+        def __init__(self, address):
+            self.address = address
+            self.notified: dict = {}
+
+        async def start_notify(self, uuid, callback):
+            nonlocal call_count
+            call_count += 1
+            if call_count < 2:
+                raise OSError("WinRT transport error")
+            self.notified[uuid] = callback
+
+    async def fake_sleep(_):
+        pass
+
+    controller._client = OSErrorClient(ADDRESS)
+    monkeypatch.setattr("bmd_ble.camera_controller.asyncio.sleep", fake_sleep)
+
+    await controller.subscribe_incoming()
+
+    assert call_count == 2
+    assert CHARACTERISTIC_INCOMING in controller._client.notified
