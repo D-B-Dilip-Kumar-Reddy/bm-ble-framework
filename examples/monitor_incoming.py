@@ -7,15 +7,18 @@ as uppercase hex pairs so the output can be compared directly with
 Wireshark or nRF Sniffer captures.
 
 Press Ctrl+C to stop monitoring and cleanly disconnect from the camera.
+Set MONITOR_DURATION_S to a positive integer to auto-stop after that many seconds.
 
 Usage:
     python examples/monitor_incoming.py
 
-Edit MODEL_KEY / FIRMWARE below to target a different camera.
+Edit MODEL_KEY / FIRMWARE / MONITOR_DURATION_S below to target a different camera
+or change the capture duration.
 """
 
 import asyncio
 import logging
+import time
 
 from bmd_ble import CameraProfile
 from bmd_ble.camera_controller import BMDCameraController
@@ -25,6 +28,10 @@ MODEL_KEY = "POCKET_6K_G2"
 FIRMWARE = "v7.9"
 # MODEL_KEY = "POCKET_6K_PRO"
 # FIRMWARE = "v8.6"
+
+# Set to a positive integer to auto-stop after that many seconds.
+# None = run until Ctrl+C.
+MONITOR_DURATION_S: int | None = None
 
 
 async def main() -> None:
@@ -39,10 +46,19 @@ async def main() -> None:
         await cam.connect()
         logging.info("Connected to %s", cam.discovered.ble_name)
         await cam.subscribe_incoming()
-        logging.info("Listening for INCOMING_CONTROL notifications — press Ctrl+C to stop …")
-        await asyncio.Event().wait()
+        if MONITOR_DURATION_S:
+            logging.info(
+                "Monitoring for %d s — press Ctrl+C to stop early …", MONITOR_DURATION_S
+            )
+        else:
+            logging.info("Monitoring — press Ctrl+C to stop …")
+        deadline = (time.monotonic() + MONITOR_DURATION_S) if MONITOR_DURATION_S else None
+        while True:
+            await asyncio.sleep(0.5)
+            if deadline and time.monotonic() >= deadline:
+                break
     except asyncio.CancelledError:
-        logging.info("Monitoring stopped.")
+        logging.info("Monitoring stopped by Ctrl+C.")
     finally:
         await cam.disconnect()
 
