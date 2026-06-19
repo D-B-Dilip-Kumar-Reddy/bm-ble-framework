@@ -112,13 +112,9 @@ class BMDCameraController:
                 await asyncio.wait_for(self._client.connect(), timeout=BLE_CONNECT_TIMEOUT_S)
             except (TimeoutError, BleakError) as exc:
                 self._client = None
-                raise RuntimeError(
-                    f"[{self.discovered.ble_name}] Connect failed: {exc}"
-                ) from exc
+                raise RuntimeError(f"[{self.discovered.ble_name}] Connect failed: {exc}") from exc
             self._connected.set()
-            logger.info(
-                f"Connected to {self.discovered.address} ({self.discovered.ble_name})"
-            )
+            logger.info(f"Connected to {self.discovered.address} ({self.discovered.ble_name})")
 
     async def disconnect(self) -> None:
         self._intentional_disconnect = True
@@ -171,9 +167,7 @@ class BMDCameraController:
                     self._connected.set()
                     return
                 if self._is_receiving_data():
-                    logger.info(
-                        "RX activity detected during reconnect delay — aborting reconnect."
-                    )
+                    logger.info("RX activity detected during reconnect delay — aborting reconnect.")
                     self._connected.set()
                     return
 

@@ -39,9 +39,7 @@ async def main() -> None:
         await cam.connect()
         logging.info("Connected to %s", cam.discovered.ble_name)
         await cam.subscribe_incoming()
-        logging.info(
-            "Listening for INCOMING_CONTROL notifications — press Ctrl+C to stop …"
-        )
+        logging.info("Listening for INCOMING_CONTROL notifications — press Ctrl+C to stop …")
         await asyncio.Event().wait()
     except asyncio.CancelledError:
         logging.info("Monitoring stopped.")

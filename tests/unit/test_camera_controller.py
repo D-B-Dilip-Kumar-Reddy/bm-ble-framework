@@ -548,9 +548,7 @@ class TestBMDCameraControllerReconnectLoop:
         assert "Camera offline" in caplog.text
 
     @pytest.mark.asyncio
-    async def test_reconnect_loop_resubscribes_if_previously_subscribed(
-        self, monkeypatch
-    ) -> None:
+    async def test_reconnect_loop_resubscribes_if_previously_subscribed(self, monkeypatch) -> None:
         """After an explicit reconnect, the loop must restore the notification subscription."""
         controller = BMDCameraController(make_discovered(), make_profile())
         client = FakeBleakClient(ADDRESS)
@@ -581,9 +579,7 @@ class TestBMDCameraControllerReconnectLoop:
         assert subscribe_calls == [my_callback]
 
     @pytest.mark.asyncio
-    async def test_on_disconnect_ignores_duplicate_when_reconnecting(
-        self, monkeypatch
-    ) -> None:
+    async def test_on_disconnect_ignores_duplicate_when_reconnecting(self, monkeypatch) -> None:
         """``on_disconnect`` must not schedule a second loop if one is already running."""
         controller = BMDCameraController(make_discovered(), make_profile())
         monkeypatch.setattr("bmd_ble.camera_controller.BleakClient", FakeBleakClient)
@@ -656,9 +652,7 @@ class TestBMDCameraControllerReconnectLoop:
         assert CHARACTERISTIC_INCOMING in stale.stopped_notifications
 
     @pytest.mark.asyncio
-    async def test_reconnect_loop_aborts_pre_delay_on_rx_activity(
-        self, monkeypatch
-    ) -> None:
+    async def test_reconnect_loop_aborts_pre_delay_on_rx_activity(self, monkeypatch) -> None:
         """If recent RX activity exists before the delay, loop exits without sleeping."""
         import time
 
@@ -688,9 +682,7 @@ class TestBMDCameraControllerReconnectLoop:
         assert controller._connected.is_set() is True
 
     @pytest.mark.asyncio
-    async def test_reconnect_loop_aborts_post_delay_on_rx_activity(
-        self, monkeypatch
-    ) -> None:
+    async def test_reconnect_loop_aborts_post_delay_on_rx_activity(self, monkeypatch) -> None:
         """RX arriving during the sleep delay causes the loop to abort after waking."""
         import time
 
@@ -1288,9 +1280,9 @@ async def test_guarded_handler_updates_last_rx_time_before_gen_check():
 
     # Advance gen so this notification is "stale" and will be dropped.
     controller._conn_gen += 1
-    wrapper(None, bytearray(b"\xAA\xBB"))
+    wrapper(None, bytearray(b"\xaa\xbb"))
 
-    assert callback_invoked is False             # dropped by gen guard
+    assert callback_invoked is False  # dropped by gen guard
     assert controller._last_rx_time is not None  # but timestamp was set
 
 
