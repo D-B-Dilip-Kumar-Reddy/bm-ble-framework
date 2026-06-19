@@ -47,9 +47,7 @@ async def main() -> None:
         logging.info("Connected to %s", cam.discovered.ble_name)
         await cam.subscribe_incoming()
         if MONITOR_DURATION_S:
-            logging.info(
-                "Monitoring for %d s — press Ctrl+C to stop early …", MONITOR_DURATION_S
-            )
+            logging.info("Monitoring for %d s — press Ctrl+C to stop early …", MONITOR_DURATION_S)
         else:
             logging.info("Monitoring — press Ctrl+C to stop …")
         deadline = (time.monotonic() + MONITOR_DURATION_S) if MONITOR_DURATION_S else None
