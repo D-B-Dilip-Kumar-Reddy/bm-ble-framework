@@ -1,10 +1,15 @@
 """
-Monitor raw INCOMING_CONTROL notifications from a Blackmagic camera.
+Monitor raw INCOMING_CONTROL, TIMECODE, and CAMERA_STATUS notifications
+from a Blackmagic camera.
 
 Run this script, then trigger actions on the camera (start recording,
 change a setting, capture a photo). Each incoming notification is logged
 as uppercase hex pairs so the output can be compared directly with
 Wireshark or nRF Sniffer captures.
+
+All three characteristics are subscribed automatically on connect.
+Notifications are also written to a timestamped log file under
+logs/<model_key>_<firmware>/ in the current working directory.
 
 Press Ctrl+C to stop monitoring and cleanly disconnect from the camera.
 Set MONITOR_DURATION_S to a positive integer to auto-stop after that many seconds.
@@ -43,9 +48,7 @@ async def main() -> None:
 
     cam = BMDCameraController(discovered=discovered, profile=cam_profile)
     try:
-        await cam.connect()
-        logging.info("Connected to %s", cam.discovered.ble_name)
-        await cam.subscribe_incoming()
+        await cam.connect()  # subscribes INCOMING_CONTROL, TIMECODE, CAMERA_STATUS automatically
         if MONITOR_DURATION_S:
             logging.info("Monitoring for %d s — press Ctrl+C to stop early …", MONITOR_DURATION_S)
         else:
