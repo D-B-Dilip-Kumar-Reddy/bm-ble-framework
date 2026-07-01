@@ -67,9 +67,7 @@ class BMDCameraController:
             "%(asctime)s.%(msecs)03d  %(levelname)-8s  %(name)s  %(message)s",
             datefmt="%Y-%m-%dT%H:%M:%S",
         )
-        self._file_handler: logging.FileHandler = logging.FileHandler(
-            log_path, encoding="utf-8"
-        )
+        self._file_handler: logging.FileHandler = logging.FileHandler(log_path, encoding="utf-8")
         self._file_handler.setLevel(logging.DEBUG)
         self._file_handler.setFormatter(_fmt)
         self._logger.addHandler(self._file_handler)
@@ -97,9 +95,7 @@ class BMDCameraController:
 
             address = self.discovered.address
             if not address:
-                self._logger.info(
-                    "No address — scanning for '%s' …", self.discovered.ble_name
-                )
+                self._logger.info("No address — scanning for '%s' …", self.discovered.ble_name)
                 found = await scan_for_camera(self.discovered.ble_name)
                 address = found.address
                 # Update our discovered record with the resolved address
@@ -132,18 +128,14 @@ class BMDCameraController:
                 self._logger.warning("Disconnected unexpectedly!")
                 asyncio.get_event_loop().create_task(self._reconnect_loop())
 
-            self._logger.info(
-                "Connecting to '%s' at %s …", self.discovered.ble_name, address
-            )
+            self._logger.info("Connecting to '%s' at %s …", self.discovered.ble_name, address)
 
             self._client = BleakClient(address, disconnected_callback=on_disconnect)
             try:
                 await asyncio.wait_for(self._client.connect(), timeout=BLE_CONNECT_TIMEOUT_S)
             except (TimeoutError, BleakError) as exc:
                 self._client = None
-                raise RuntimeError(
-                    f"[{self.discovered.ble_name}] Connect failed: {exc}"
-                ) from exc
+                raise RuntimeError(f"[{self.discovered.ble_name}] Connect failed: {exc}") from exc
             self._connected.set()
             self._logger.info(
                 "Connected to %s (%s)", self.discovered.address, self.discovered.ble_name
@@ -182,9 +174,7 @@ class BMDCameraController:
                 # Pre-delay check: camera may already be connected (e.g. from a previous
                 # explicit reconnect attempt that succeeded just before this loop started).
                 if stale and stale.is_connected:
-                    self._logger.info(
-                        "Camera already connected — aborting reconnect loop."
-                    )
+                    self._logger.info("Camera already connected — aborting reconnect loop.")
                     self._connected.set()
                     return
                 if self._is_receiving_data():
@@ -202,9 +192,7 @@ class BMDCameraController:
 
                 # Post-delay check: OS/WinRT may have auto-restored the session.
                 if stale and stale.is_connected:
-                    self._logger.info(
-                        "Camera auto-reconnected — skipping explicit reconnect."
-                    )
+                    self._logger.info("Camera auto-reconnected — skipping explicit reconnect.")
                     self._connected.set()
                     return
                 if self._is_receiving_data():
