@@ -341,6 +341,19 @@ The echo must be buffered *before* the write is issued. A router that only start
 
 CI runs on Windows only, Python 3.11 and 3.12, via GitHub Actions. Unit tests must pass on every push. Integration tests must pass before any profile is marked `VERIFIED`.
 
+### Code quality gates — required after every change
+
+After making any code change, Claude must run both of these and fix all failures before committing:
+
+```
+python -m pytest tests/unit/
+python -m ruff check . && python -m ruff format --check .
+```
+
+- If unit tests fail, diagnose and fix the root cause — do not skip or mock away failures.
+- If ruff reports lint errors, fix them in the same commit as the code change.
+- If ruff reports formatting violations, run `python -m ruff format .` and include the formatted files in the commit.
+
 ---
 
 ## What Not To Do
