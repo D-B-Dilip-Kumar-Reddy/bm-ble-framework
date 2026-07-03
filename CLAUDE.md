@@ -132,6 +132,27 @@ tests/
 
 ---
 
+## Supplementary Documentation
+
+### Reading order
+
+**Before making any change to this codebase**, read this file and every file in `docs/`
+to understand the current state of each subsystem. Do not rely on earlier conversation
+context alone — the docs are the authoritative record of what is implemented.
+
+### Feature doc convention
+
+Each significant feature or subsystem has its own doc in `docs/`. When a feature is
+changed, its corresponding doc must be updated in the same commit. When a new feature is
+added, a new `docs/<feature>.md` must be created alongside the code change.
+
+| File | Covers |
+|---|---|
+| `docs/winrt_ble_connection_hardening.md` | BLE reconnect loop, WinRT liveness detection, generation guards, connect-lock |
+| `docs/event_subscription_and_logging.md` | Notification subscription strategy (`subscribe_all`), generation-guarding wrapper, per-session file logging |
+
+---
+
 ## BMD BLE Protocol
 
 Commands are written as binary packets to `OUTGOING_CONTROL`. Echoes and responses arrive on `INCOMING_CONTROL`.
