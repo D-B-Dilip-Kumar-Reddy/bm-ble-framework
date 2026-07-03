@@ -1,25 +1,28 @@
 """
 bmd_ble/constants.py
 ================
-Protocol-level constants for the Blackmagic BLE Camera Control API.
+BLE transport-level constants for the Blackmagic BLE Camera Control API.
 
 WHAT BELONGS HERE
 ─────────────────
-Only values that are fixed by the BMD BLE protocol spec and do NOT vary
-between camera models or firmware versions:
+Only values that are fixed by the Bluetooth / BMD BLE spec, apply to every
+camera model and firmware version, and concern the BLE transport itself
+(not the BMD command packet protocol carried over it):
   • BLE service / characteristic UUIDs (baseline — overridden per-model in JSON)
-  • Packet structure constants (direction bytes, alignment)
-  • Data type and operation identifiers
-  • Category and parameter byte values
-  • Transport / storage mode values
-  • Status bitfield definitions
-  • Frame-rate encoding constants (verified from live sniffer data)
-  • Timing constants
+  • Characteristic human-readable name lookup (for logging/debugging)
+  • BLE timing constants (scan, connect, reconnect)
 
 WHAT DOES NOT BELONG HERE
 ──────────────────────────
-Model-specific values (codec IDs, variant IDs, FPS integers) live exclusively
-in payloads/models/<MODEL>_<FW>.json and are accessed via CameraProfile.
+  • BMD command packet header structure (destination byte, reserved byte,
+    operation codes) — lives in protocol/codec.py
+  • BMD payload data type constants — lives in protocol/types.py
+  • Category and parameter byte values for a specific command family —
+    live in protocol/categories/<category>.py, added only after a sniffer
+    capture confirms them on real hardware
+  • Model-specific values (codec IDs, variant IDs, FPS integers, storage
+    characteristic UUIDs) — live exclusively in
+    payloads/models/<MODEL>_<FW>.json and are accessed via CameraProfile
 """
 
 # ─────────────────────────────────────────────────────────────────────────────
