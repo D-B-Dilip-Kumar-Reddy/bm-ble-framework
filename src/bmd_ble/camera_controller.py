@@ -4,6 +4,8 @@ import logging
 import struct
 import time
 from collections.abc import Callable
+from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from bleak import BleakClient, BleakError, BleakGATTServiceCollection
@@ -40,6 +42,8 @@ class BMDCameraController:
         self._intentional_disconnect: bool = False
         self._reconnecting: bool = False
         self._incoming_callback: Callable[[Any, bytearray], None] | None = None
+        self._timecode_callback: Callable[[Any, bytearray], None] | None = None
+        self._camera_status_callback: Callable[[Any, bytearray], None] | None = None
         self._conn_gen: int = 0
         self._connect_lock: asyncio.Lock = asyncio.Lock()
         self._last_rx_time: float | None = None
@@ -50,11 +54,30 @@ class BMDCameraController:
         self.manufacturer_info: str | None = None
         self.model_info: str | None = None
 
+        # Per-instance child logger + file handler
+        self._logger = logging.getLogger(f"{__name__}.{profile.model_key}")
+        self._logger.setLevel(logging.DEBUG)
+
+        timestamp = datetime.now().strftime("%Y%m%dT%H%M%S")
+        log_dir = Path("logs") / f"{profile.model_key}_{profile.firmware}"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_path = log_dir / f"{profile.model_key}_{profile.firmware}_{timestamp}.log"
+
+        _fmt = logging.Formatter(
+            "%(asctime)s.%(msecs)03d  %(levelname)-8s  %(name)s  %(message)s",
+            datefmt="%Y-%m-%dT%H:%M:%S",
+        )
+        self._file_handler: logging.FileHandler = logging.FileHandler(log_path, encoding="utf-8")
+        self._file_handler.setLevel(logging.DEBUG)
+        self._file_handler.setFormatter(_fmt)
+        self._logger.addHandler(self._file_handler)
+
     # ── Connection ──────────────────────────────────────────────────────────────────────
 
     async def connect(self) -> None:
         """
-        Connect to the camera.
+        Connect to the camera and auto-subscribe to INCOMING_CONTROL, TIMECODE,
+        and CAMERA_STATUS notifications.
 
         If ``discovered.address`` is empty (e.g. when constructed from a
         BLE name only), :func:`~scanner.scan_for_camera` is called first to
@@ -64,7 +87,7 @@ class BMDCameraController:
             self._intentional_disconnect = False
 
             if self._client and self._client.is_connected:
-                logger.debug(
+                self._logger.debug(
                     "[%s] connect() called while already connected — no-op.",
                     self.discovered.ble_name,
                 )
@@ -72,7 +95,7 @@ class BMDCameraController:
 
             address = self.discovered.address
             if not address:
-                logger.info(f"No address — scanning for '{self.discovered.ble_name}' …")
+                self._logger.info("No address — scanning for '%s' …", self.discovered.ble_name)
                 found = await scan_for_camera(self.discovered.ble_name)
                 address = found.address
                 # Update our discovered record with the resolved address
@@ -87,7 +110,7 @@ class BMDCameraController:
 
             def on_disconnect(client: BleakClient) -> None:
                 if self._conn_gen != my_gen:
-                    logger.debug(
+                    self._logger.debug(
                         "Stale on_disconnect (gen %d, current %d) — ignored.",
                         my_gen,
                         self._conn_gen,
@@ -95,17 +118,17 @@ class BMDCameraController:
                     return
                 self._connected.clear()
                 if self._intentional_disconnect:
-                    logger.info("Disconnected (intentional).")
+                    self._logger.info("Disconnected (intentional).")
                     return
                 if self._reconnecting:
-                    logger.debug(
+                    self._logger.debug(
                         "Reconnect already in progress — ignoring duplicate disconnect event."
                     )
                     return
-                logger.warning("Disconnected unexpectedly!")
+                self._logger.warning("Disconnected unexpectedly!")
                 asyncio.get_event_loop().create_task(self._reconnect_loop())
 
-            logger.info(f"Connecting to '{self.discovered.ble_name}' at {address} …")
+            self._logger.info("Connecting to '%s' at %s …", self.discovered.ble_name, address)
 
             self._client = BleakClient(address, disconnected_callback=on_disconnect)
             try:
@@ -114,7 +137,11 @@ class BMDCameraController:
                 self._client = None
                 raise RuntimeError(f"[{self.discovered.ble_name}] Connect failed: {exc}") from exc
             self._connected.set()
-            logger.info(f"Connected to {self.discovered.address} ({self.discovered.ble_name})")
+            self._logger.info(
+                "Connected to %s (%s)", self.discovered.address, self.discovered.ble_name
+            )
+
+            await self.subscribe_all()
 
     async def disconnect(self) -> None:
         self._intentional_disconnect = True
@@ -134,7 +161,7 @@ class BMDCameraController:
 
             await self._client.disconnect()
             self._connected.clear()
-            logger.info(f"Disconnected from {self.discovered.address}")
+            self._logger.info("Disconnected from %s", self.discovered.address)
 
     # ── Reconnect ───────────────────────────────────────────────────────────────────────
 
@@ -147,27 +174,31 @@ class BMDCameraController:
                 # Pre-delay check: camera may already be connected (e.g. from a previous
                 # explicit reconnect attempt that succeeded just before this loop started).
                 if stale and stale.is_connected:
-                    logger.info("Camera already connected — aborting reconnect loop.")
+                    self._logger.info("Camera already connected — aborting reconnect loop.")
                     self._connected.set()
                     return
                 if self._is_receiving_data():
-                    logger.info(
+                    self._logger.info(
                         "RX activity detected — assuming connection alive, aborting reconnect."
                     )
                     self._connected.set()
                     return
 
                 delay = RECONNECT_DELAY_S * attempt
-                logger.warning(f"Reconnect {attempt}/{RECONNECT_MAX_ATTEMPTS} in {delay:.0f}s …")
+                self._logger.warning(
+                    "Reconnect %d/%d in %.0f s …", attempt, RECONNECT_MAX_ATTEMPTS, delay
+                )
                 await asyncio.sleep(delay)
 
                 # Post-delay check: OS/WinRT may have auto-restored the session.
                 if stale and stale.is_connected:
-                    logger.info("Camera auto-reconnected — skipping explicit reconnect.")
+                    self._logger.info("Camera auto-reconnected — skipping explicit reconnect.")
                     self._connected.set()
                     return
                 if self._is_receiving_data():
-                    logger.info("RX activity detected during reconnect delay — aborting reconnect.")
+                    self._logger.info(
+                        "RX activity detected during reconnect delay — aborting reconnect."
+                    )
                     self._connected.set()
                     return
 
@@ -185,15 +216,13 @@ class BMDCameraController:
 
                 try:
                     await self.connect()
-                    logger.info("Reconnected ✓")
-                    if self._incoming_callback is not None:
-                        await self.subscribe_incoming(callback=self._incoming_callback)
+                    self._logger.info("Reconnected ✓")
                     return
                 except RuntimeError as exc:
-                    logger.error(f"Reconnect attempt {attempt} failed: {exc}")
+                    self._logger.error("Reconnect attempt %d failed: %s", attempt, exc)
 
-            logger.critical(
-                f"All {RECONNECT_MAX_ATTEMPTS} reconnect attempts failed. Camera offline."
+            self._logger.critical(
+                "All %d reconnect attempts failed. Camera offline.", RECONNECT_MAX_ATTEMPTS
             )
         finally:
             self._reconnecting = False
@@ -234,8 +263,8 @@ class BMDCameraController:
             # proves the BLE transport is live (WinRT is_connected is unreliable).
             self._last_rx_time = time.monotonic()
             if self._conn_gen != my_gen:
-                logger.debug(
-                    "[%s @ %s] Dropping stale notification (gen %d, current %d)",
+                self._logger.debug(
+                    "[%s @ %s] Dropping stale INCOMING_CONTROL notification (gen %d, current %d)",
                     self.discovered.ble_name,
                     self.discovered.address,
                     my_gen,
@@ -248,7 +277,7 @@ class BMDCameraController:
         for attempt in range(1, retries + 1):
             try:
                 await self._client.start_notify(CHARACTERISTIC_INCOMING, guarded_handler)
-                logger.info(
+                self._logger.info(
                     "[%s @ %s] Subscribed to INCOMING_CONTROL",
                     self.discovered.ble_name,
                     self.discovered.address,
@@ -267,7 +296,7 @@ class BMDCameraController:
             except OSError as exc:
                 last_exc = exc
             if last_exc and attempt < retries:
-                logger.warning(
+                self._logger.warning(
                     "[%s @ %s] start_notify attempt %d/%d failed (%s) — retrying in %.1f s",
                     self.discovered.ble_name,
                     self.discovered.address,
@@ -282,6 +311,161 @@ class BMDCameraController:
             f"after {retries} attempts: {last_exc}"
         ) from last_exc
 
+    async def subscribe_timecode(
+        self,
+        callback: Callable[[Any, bytearray], None] | None = None,
+        retries: int = 3,
+        retry_delay_s: float = 10.0,
+    ) -> None:
+        """
+        Subscribe to TIMECODE notifications.
+
+        Must be called after connect(). If no callback is supplied the default
+        handler logs every notification as uppercase hex pairs at DEBUG level.
+        """
+        if self._client is None:
+            raise RuntimeError(f"[{self.discovered.ble_name}] Cannot subscribe: not connected")
+        if not self._client.is_connected:
+            raise RuntimeError(
+                f"[{self.discovered.ble_name}] Cannot subscribe: BLE client is disconnected"
+            )
+        handler = callback if callback is not None else self._log_timecode
+        my_gen = self._conn_gen
+
+        def guarded_handler(char: Any, data: bytearray) -> None:
+            self._last_rx_time = time.monotonic()
+            if self._conn_gen != my_gen:
+                self._logger.debug(
+                    "[%s @ %s] Dropping stale TIMECODE notification (gen %d, current %d)",
+                    self.discovered.ble_name,
+                    self.discovered.address,
+                    my_gen,
+                    self._conn_gen,
+                )
+                return
+            handler(char, data)
+
+        last_exc: BleakError | None = None
+        for attempt in range(1, retries + 1):
+            try:
+                await self._client.start_notify(CHARACTERISTIC_TIMECODE, guarded_handler)
+                self._logger.info(
+                    "[%s @ %s] Subscribed to TIMECODE",
+                    self.discovered.ble_name,
+                    self.discovered.address,
+                )
+                self._timecode_callback = handler
+                last_exc = None
+                return
+            except BleakError as exc:
+                last_exc = exc
+                if "not connected" in str(exc).lower():
+                    raise RuntimeError(
+                        f"[{self.discovered.ble_name}] start_notify failed for "
+                        f"{CHARACTERISTIC_TIMECODE}: connection lost mid-subscribe. {exc}"
+                    ) from exc
+                last_exc = exc
+            except OSError as exc:
+                last_exc = exc
+            if last_exc and attempt < retries:
+                self._logger.warning(
+                    "[%s @ %s] start_notify attempt %d/%d failed (%s) — retrying in %.1f s",
+                    self.discovered.ble_name,
+                    self.discovered.address,
+                    attempt,
+                    retries,
+                    last_exc,
+                    retry_delay_s,
+                )
+                await asyncio.sleep(retry_delay_s)
+        raise RuntimeError(
+            f"[{self.discovered.ble_name}] Could not subscribe to TIMECODE "
+            f"after {retries} attempts: {last_exc}"
+        ) from last_exc
+
+    async def subscribe_camera_status(
+        self,
+        callback: Callable[[Any, bytearray], None] | None = None,
+        retries: int = 3,
+        retry_delay_s: float = 10.0,
+    ) -> None:
+        """
+        Subscribe to CAMERA_STATUS notifications.
+
+        Must be called after connect(). If no callback is supplied the default
+        handler logs every notification as uppercase hex pairs at DEBUG level.
+        """
+        if self._client is None:
+            raise RuntimeError(f"[{self.discovered.ble_name}] Cannot subscribe: not connected")
+        if not self._client.is_connected:
+            raise RuntimeError(
+                f"[{self.discovered.ble_name}] Cannot subscribe: BLE client is disconnected"
+            )
+        handler = callback if callback is not None else self._log_camera_status
+        my_gen = self._conn_gen
+
+        def guarded_handler(char: Any, data: bytearray) -> None:
+            self._last_rx_time = time.monotonic()
+            if self._conn_gen != my_gen:
+                self._logger.debug(
+                    "[%s @ %s] Dropping stale CAMERA_STATUS notification (gen %d, current %d)",
+                    self.discovered.ble_name,
+                    self.discovered.address,
+                    my_gen,
+                    self._conn_gen,
+                )
+                return
+            handler(char, data)
+
+        last_exc: BleakError | None = None
+        for attempt in range(1, retries + 1):
+            try:
+                await self._client.start_notify(CHARACTERISTIC_CAM_STATUS, guarded_handler)
+                self._logger.info(
+                    "[%s @ %s] Subscribed to CAMERA_STATUS",
+                    self.discovered.ble_name,
+                    self.discovered.address,
+                )
+                self._camera_status_callback = handler
+                last_exc = None
+                return
+            except BleakError as exc:
+                last_exc = exc
+                if "not connected" in str(exc).lower():
+                    raise RuntimeError(
+                        f"[{self.discovered.ble_name}] start_notify failed for "
+                        f"{CHARACTERISTIC_CAM_STATUS}: connection lost mid-subscribe. {exc}"
+                    ) from exc
+                last_exc = exc
+            except OSError as exc:
+                last_exc = exc
+            if last_exc and attempt < retries:
+                self._logger.warning(
+                    "[%s @ %s] start_notify attempt %d/%d failed (%s) — retrying in %.1f s",
+                    self.discovered.ble_name,
+                    self.discovered.address,
+                    attempt,
+                    retries,
+                    last_exc,
+                    retry_delay_s,
+                )
+                await asyncio.sleep(retry_delay_s)
+        raise RuntimeError(
+            f"[{self.discovered.ble_name}] Could not subscribe to CAMERA_STATUS "
+            f"after {retries} attempts: {last_exc}"
+        ) from last_exc
+
+    async def subscribe_all(self) -> None:
+        """
+        Subscribe to INCOMING_CONTROL, TIMECODE, and CAMERA_STATUS notifications.
+
+        Uses stored callbacks when available (e.g. after reconnect), falling back
+        to the default hex-logging handlers on first call.
+        """
+        await self.subscribe_incoming(callback=self._incoming_callback)
+        await self.subscribe_timecode(callback=self._timecode_callback)
+        await self.subscribe_camera_status(callback=self._camera_status_callback)
+
     def _is_receiving_data(self, threshold_s: float = 3.0) -> bool:
         """Return True if a notification arrived within the last ``threshold_s`` seconds."""
         if self._last_rx_time is None:
@@ -290,8 +474,26 @@ class BMDCameraController:
 
     def _log_incoming(self, _characteristic: Any, data: bytearray) -> None:
         """Default INCOMING_CONTROL handler — logs raw bytes as uppercase hex."""
-        logger.debug(
+        self._logger.debug(
             "[%s @ %s] RX: %s",
+            self.discovered.ble_name,
+            self.discovered.address,
+            " ".join(f"{b:02X}" for b in data),
+        )
+
+    def _log_timecode(self, _characteristic: Any, data: bytearray) -> None:
+        """Default TIMECODE handler — logs raw bytes as uppercase hex."""
+        self._logger.debug(
+            "[%s @ %s] TIMECODE: %s",
+            self.discovered.ble_name,
+            self.discovered.address,
+            " ".join(f"{b:02X}" for b in data),
+        )
+
+    def _log_camera_status(self, _characteristic: Any, data: bytearray) -> None:
+        """Default CAMERA_STATUS handler — logs raw bytes as uppercase hex."""
+        self._logger.debug(
+            "[%s @ %s] CAM_STATUS: %s",
             self.discovered.ble_name,
             self.discovered.address,
             " ".join(f"{b:02X}" for b in data),
@@ -355,17 +557,17 @@ class BMDCameraController:
         Read a BLE metadata characteristic safely.
         """
         if not self._client.is_connected:
-            logger.warning(
+            self._logger.warning(
                 "Cannot read %s because BLE client is disconnected",
                 characteristic_uuid,
             )
             return None
         try:
             value = await self._client.read_gatt_char(characteristic_uuid)
-            logger.info("Read %s: %r", characteristic_uuid, value)
+            self._logger.info("Read %s: %r", characteristic_uuid, value)
             return bytes(value)
         except (BleakError, OSError) as exc:
-            logger.warning("Failed to read %s: %s", characteristic_uuid, exc)
+            self._logger.warning("Failed to read %s: %s", characteristic_uuid, exc)
             return None
 
     async def read_gap_identity_metadata(self) -> None:
@@ -375,7 +577,7 @@ class BMDCameraController:
         for GAP Device Name / Appearance.
         """
         if not self._profile.gap_metadata_readable:
-            logger.info("Reading GAP metadata is not reliable for this device")
+            self._logger.info("Reading GAP metadata is not reliable for this device")
             return
         if self._client is None:
             raise RuntimeError("Camera is not connected")
@@ -403,7 +605,7 @@ class BMDCameraController:
         the read, the corresponding controller attribute remains ``None``.
         """
         if not self._profile.device_info_metadata_readable:
-            logger.info("Reading Device Info metadata is not reliable for this device")
+            self._logger.info("Reading Device Info metadata is not reliable for this device")
             return
         if self._client is None:
             raise RuntimeError("Camera is not connected")

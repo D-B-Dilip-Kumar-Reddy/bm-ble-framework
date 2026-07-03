@@ -132,6 +132,27 @@ tests/
 
 ---
 
+## Supplementary Documentation
+
+### Reading order
+
+**Before making any change to this codebase**, read this file and every file in `docs/`
+to understand the current state of each subsystem. Do not rely on earlier conversation
+context alone — the docs are the authoritative record of what is implemented.
+
+### Feature doc convention
+
+Each significant feature or subsystem has its own doc in `docs/`. When a feature is
+changed, its corresponding doc must be updated in the same commit. When a new feature is
+added, a new `docs/<feature>.md` must be created alongside the code change.
+
+| File | Covers |
+|---|---|
+| `docs/winrt_ble_connection_hardening.md` | BLE reconnect loop, WinRT liveness detection, generation guards, connect-lock |
+| `docs/event_subscription_and_logging.md` | Notification subscription strategy (`subscribe_all`), generation-guarding wrapper, per-session file logging |
+
+---
+
 ## BMD BLE Protocol
 
 Commands are written as binary packets to `OUTGOING_CONTROL`. Echoes and responses arrive on `INCOMING_CONTROL`.
@@ -319,6 +340,19 @@ The echo must be buffered *before* the write is issued. A router that only start
 | Hardware | Manual | Yes | No |
 
 CI runs on Windows only, Python 3.11 and 3.12, via GitHub Actions. Unit tests must pass on every push. Integration tests must pass before any profile is marked `VERIFIED`.
+
+### Code quality gates — required after every change
+
+After making any code change, Claude must run both of these and fix all failures before committing:
+
+```
+python -m pytest tests/unit/
+python -m ruff check . && python -m ruff format --check .
+```
+
+- If unit tests fail, diagnose and fix the root cause — do not skip or mock away failures.
+- If ruff reports lint errors, fix them in the same commit as the code change.
+- If ruff reports formatting violations, run `python -m ruff format .` and include the formatted files in the commit.
 
 ---
 

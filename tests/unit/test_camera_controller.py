@@ -98,6 +98,7 @@ class FakeBleakClient:
         self.read_values: dict[str, bytes | bytearray] = {}
         self.read_errors: dict[str, Exception] = {}
         self.read_calls: list[str] = []
+        self.notified: dict[str, object] = {}
 
     async def connect(self) -> None:
         """Simulate a successful BLE connection."""
@@ -108,6 +109,10 @@ class FakeBleakClient:
         """Simulate closing the BLE connection."""
         self.disconnect_called = True
         self.is_connected = False
+
+    async def start_notify(self, uuid: str, callback: object) -> None:
+        """Record notification subscription."""
+        self.notified[uuid] = callback
 
     async def stop_notify(self, characteristic_uuid: str) -> None:
         """Record notification cleanup or raise a configured cleanup error."""
@@ -549,11 +554,16 @@ class TestBMDCameraControllerReconnectLoop:
 
     @pytest.mark.asyncio
     async def test_reconnect_loop_resubscribes_if_previously_subscribed(self, monkeypatch) -> None:
-        """After an explicit reconnect, the loop must restore the notification subscription."""
+        """After an explicit reconnect, stored callbacks are used for resubscription.
+
+        Subscriptions are restored inside connect() → subscribe_all(), so the real
+        connect() must run. BleakClient is patched to a fake; subscribe_incoming is
+        patched to capture which callback is passed.
+        """
         controller = BMDCameraController(make_discovered(), make_profile())
-        client = FakeBleakClient(ADDRESS)
-        client.is_connected = False
-        controller._client = client
+        stale = FakeBleakClient(ADDRESS)
+        stale.is_connected = False
+        controller._client = stale
 
         def my_callback(_char, _data):
             pass
@@ -561,16 +571,13 @@ class TestBMDCameraControllerReconnectLoop:
         controller._incoming_callback = my_callback
         subscribe_calls: list = []
 
-        async def fake_connect():
-            controller._client.is_connected = True
-
         async def fake_subscribe_incoming(callback=None, **kwargs):
             subscribe_calls.append(callback)
 
         async def fake_sleep(_):
             pass
 
-        monkeypatch.setattr(controller, "connect", fake_connect)
+        monkeypatch.setattr("bmd_ble.camera_controller.BleakClient", FakeBleakClient)
         monkeypatch.setattr(controller, "subscribe_incoming", fake_subscribe_incoming)
         monkeypatch.setattr("bmd_ble.camera_controller.asyncio.sleep", fake_sleep)
 
@@ -639,13 +646,14 @@ class TestBMDCameraControllerReconnectLoop:
 
         async def fake_connect():
             controller._connected.set()
+            stale.is_connected = True
 
-        async def fake_subscribe(**kwargs):
+        async def fake_subscribe_all():
             pass
 
         monkeypatch.setattr("bmd_ble.camera_controller.asyncio.sleep", fake_sleep)
         monkeypatch.setattr(controller, "connect", fake_connect)
-        monkeypatch.setattr(controller, "subscribe_incoming", fake_subscribe)
+        monkeypatch.setattr(controller, "subscribe_all", fake_subscribe_all)
 
         await controller._reconnect_loop()
 
