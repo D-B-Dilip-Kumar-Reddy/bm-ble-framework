@@ -150,6 +150,8 @@ added, a new `docs/<feature>.md` must be created alongside the code change.
 |---|---|
 | `docs/winrt_ble_connection_hardening.md` | BLE reconnect loop, WinRT liveness detection, generation guards, connect-lock |
 | `docs/event_subscription_and_logging.md` | Notification subscription strategy (`subscribe_all`), generation-guarding wrapper, per-session file logging |
+| `docs/recording.md` | Record start/stop category scaffold, verification and storage-precondition strategy, remaining sniffer work |
+| `docs/sniffer_capture_engine.md` | Reusable BLE-notification capture engine (`tools/sniffers/capture.py`) driving labeled operator-triggered capture windows |
 
 ---
 

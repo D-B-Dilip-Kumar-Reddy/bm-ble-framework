@@ -79,9 +79,15 @@ storage-related notification, not by polling.
 This module is intentionally incomplete until real hardware data exists.
 Per CLAUDE.md, "Workflow: Adding a New Command":
 
-1. Run `tools/sniffers/` (not yet implemented) while starting and stopping a
-   recording on `POCKET_6K_G2 v7.9` to capture the real category, parameter,
-   and payload bytes for both start and stop.
+1. Run `python tools/sniffers/sniffer_recording.py` while starting and
+   stopping a recording on `POCKET_6K_G2 v7.9`. It connects, then walks
+   through two capture windows (`record_start`, `record_stop`) — trigger the
+   corresponding action on the physical camera during each window and press
+   Enter to close it. It prints deduped `(characteristic, category,
+   parameter)` triples per window and saves the full notification capture to
+   `tools/sniffers/captures/POCKET_6K_G2_v7.9/`. Use the `INCOMING_CONTROL`
+   triple's category/parameter for the values below — see
+   `docs/sniffer_capture_engine.md` for how the sniffer works.
 2. Add the confirmed values to `payloads/models/POCKET_6K_G2_v7.9.json`
    (e.g. under a `recording` key — category, parameter, data type) — never
    hardcode them in `recording.py` or copy them from another model's profile.
