@@ -23,6 +23,7 @@ import json
 import pytest
 
 from bmd_ble.camera_profile import KNOWN_PROFILES, CameraProfile
+from bmd_ble.protocol.types import DataType
 
 
 def test_known_profiles_contains_pocket_6k_g2_v79():
@@ -103,3 +104,49 @@ def test_camera_profile_handles_empty_meta_dict():
     assert profile.model_name == "POCKET_6K_G2"
     assert profile.status == "UNKNOWN"
     assert profile.ble_name == ""
+
+
+def test_camera_profile_resolves_recording_block():
+    raw = {
+        "recording": {
+            "category": 10,
+            "parameter": 1,
+            "data_type": "BOOL",
+            "reserved": 1,
+            "start_value": 2,
+            "stop_value": 0,
+            "echo_operation": 2,
+        }
+    }
+
+    profile = CameraProfile._from_raw("POCKET_6K_G2", "v7.9", raw)
+
+    assert profile.recording_category == 10
+    assert profile.recording_parameter == 1
+    assert profile.recording_data_type == DataType.BOOL
+    assert profile.recording_reserved == 1
+    assert profile.recording_start_value == 2
+    assert profile.recording_stop_value == 0
+    assert profile.recording_echo_operation == 2
+
+
+def test_camera_profile_defaults_recording_fields_to_none_when_absent():
+    raw = {}
+
+    profile = CameraProfile._from_raw("POCKET_6K_PRO", "v8.6", raw)
+
+    assert profile.recording_category is None
+    assert profile.recording_parameter is None
+    assert profile.recording_data_type is None
+    assert profile.recording_reserved is None
+    assert profile.recording_start_value is None
+    assert profile.recording_stop_value is None
+    assert profile.recording_echo_operation is None
+
+
+def test_pocket_6k_pro_profile_loads_without_recording_block():
+    """POCKET_6K_PRO_v8.6.json has no `recording` key yet — must still load cleanly."""
+    profile = CameraProfile.for_model("POCKET_6K_PRO", "v8.6")
+
+    assert profile.recording_category is None
+    assert profile.recording_data_type is None

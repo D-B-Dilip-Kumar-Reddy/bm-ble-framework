@@ -23,6 +23,7 @@ from bmd_ble.constants import (
     CHARACTERISTIC_INCOMING,
     CHARACTERISTIC_MANUFACTURER_INFO,
     CHARACTERISTIC_MODEL_INFO,
+    CHARACTERISTIC_OUTGOING,
     CHARACTERISTIC_TIMECODE,
     GAP_CHARACTERISTIC_APPEARANCE,
     GAP_CHARACTERISTIC_DEVICE_NAME,
@@ -98,6 +99,8 @@ class FakeBleakClient:
         self.read_values: dict[str, bytes | bytearray] = {}
         self.read_errors: dict[str, Exception] = {}
         self.read_calls: list[str] = []
+        self.write_errors: dict[str, Exception] = {}
+        self.write_calls: list[tuple[str, bytes]] = []
         self.notified: dict[str, object] = {}
 
     async def connect(self) -> None:
@@ -128,6 +131,13 @@ class FakeBleakClient:
         if error is not None:
             raise error
         return self.read_values[characteristic_uuid]
+
+    async def write_gatt_char(self, characteristic_uuid: str, data: bytes) -> None:
+        """Record a write call or raise a configured write error."""
+        error = self.write_errors.get(characteristic_uuid)
+        if error is not None:
+            raise error
+        self.write_calls.append((characteristic_uuid, bytes(data)))
 
 
 class FakeBleakClientWithGetServices(FakeBleakClient):
@@ -968,6 +978,56 @@ class TestBMDCameraControllerMetadataCharacteristicReads:
             await controller._read_metadata_characteristic(GAP_CHARACTERISTIC_DEVICE_NAME)
 
         assert client.read_calls == [GAP_CHARACTERISTIC_DEVICE_NAME]
+
+
+class TestWriteOutgoingControl:
+    """Tests for the raw OUTGOING_CONTROL write transport method."""
+
+    @pytest.mark.asyncio
+    async def test_write_outgoing_control_raises_without_client(self) -> None:
+        """Writing before a client exists raises, rather than attempting a write."""
+        controller = BMDCameraController(make_discovered(), make_profile())
+
+        with pytest.raises(RuntimeError, match="Cannot write"):
+            await controller.write_outgoing_control(b"\x01")
+
+    @pytest.mark.asyncio
+    async def test_write_outgoing_control_raises_when_disconnected(self) -> None:
+        """A disconnected client should not attempt a GATT write."""
+        controller = BMDCameraController(make_discovered(), make_profile())
+        client = FakeBleakClient(ADDRESS)
+        client.is_connected = False
+        controller._client = client
+
+        with pytest.raises(RuntimeError, match="Cannot write"):
+            await controller.write_outgoing_control(b"\x01")
+
+        assert client.write_calls == []
+
+    @pytest.mark.asyncio
+    async def test_write_outgoing_control_writes_to_outgoing_characteristic(self) -> None:
+        """A connected client writes the given bytes to CHARACTERISTIC_OUTGOING."""
+        controller = BMDCameraController(make_discovered(), make_profile())
+        client = FakeBleakClient(ADDRESS)
+        client.is_connected = True
+        controller._client = client
+
+        packet = bytes([0xFF, 0x05, 0x00, 0x01, 0x0A, 0x01, 0x01, 0x00, 0x02])
+        await controller.write_outgoing_control(packet)
+
+        assert client.write_calls == [(CHARACTERISTIC_OUTGOING, packet)]
+
+    @pytest.mark.asyncio
+    async def test_write_outgoing_control_propagates_unhandled_write_error(self) -> None:
+        """Unhandled GATT write exceptions should propagate to the caller."""
+        controller = BMDCameraController(make_discovered(), make_profile())
+        client = FakeBleakClient(ADDRESS)
+        client.is_connected = True
+        client.write_errors[CHARACTERISTIC_OUTGOING] = BleakError("write failed")
+        controller._client = client
+
+        with pytest.raises(BleakError, match="write failed"):
+            await controller.write_outgoing_control(b"\x01")
 
 
 class TestBMDCameraControllerDeviceInformationMetadata:

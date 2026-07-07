@@ -5,14 +5,21 @@ BMD command packet header encode / decode.
 
 Packet structure (see CLAUDE.md):
 
-    Byte 0      Destination device (0x00 = camera)
-    Byte 1      Length of remaining data (bytes 2 onwards)
+    Byte 0      Fixed prefix byte (0xFF — sniffer-verified on POCKET_6K_G2
+                v7.9, both directions; not a per-destination address)
+    Byte 1      Length field — counts only bytes 4 onwards (category,
+                parameter, data type, operation, payload). Sniffer-verified:
+                it does NOT count command_id/reserved, unlike the generic
+                BMD spec's "length of everything after byte 1" assumption.
     Byte 2      Command ID / type
     Byte 3      Reserved
     Byte 4      Category
     Byte 5      Parameter
     Byte 6      Data type
-    Byte 7      Operation  (0x00 = assign, 0x01 = offset)
+    Byte 7      Operation  (0x00 = assign, 0x01 = offset, 0x02 = camera
+                report — sniffer-verified on every camera-originated
+                notification captured so far; official spec meaning
+                unconfirmed)
     Bytes 8+    Payload
 
 This module only knows about the header. It has no knowledge of what a
@@ -27,12 +34,16 @@ from enum import IntEnum
 
 from .types import DataType
 
-DESTINATION_CAMERA = 0x00
+DESTINATION_CAMERA = 0xFF
 RESERVED_BYTE = 0x00
 
-# Bytes 2-7: command_id, reserved, category, parameter, data_type, operation.
-HEADER_REMAINDER_LENGTH = 6
-HEADER_LENGTH = 2 + HEADER_REMAINDER_LENGTH
+HEADER_LENGTH = 8
+
+# Leading bytes NOT counted by the length field (byte 1): the prefix byte
+# itself, the length byte, command_id, and reserved. Sniffer-verified on
+# POCKET_6K_G2 v7.9: actual_total_length == declared_length + LENGTH_FIELD_OFFSET
+# in every captured packet, including known record start/stop commands.
+LENGTH_FIELD_OFFSET = 4
 
 
 class Operation(IntEnum):
@@ -40,6 +51,12 @@ class Operation(IntEnum):
 
     ASSIGN = 0x00
     OFFSET = 0x01
+    # Sniffer-verified on POCKET_6K_G2 v7.9: every camera-originated
+    # INCOMING_CONTROL notification captured so far uses this value (never
+    # seen on a controller-issued ASSIGN command). Distinguishes the camera
+    # reporting a value from the controller assigning one; exact official
+    # spec meaning unconfirmed.
+    CAMERA_REPORT = 0x02
 
 
 @dataclass(frozen=True)
@@ -57,7 +74,7 @@ class CommandHeader:
 
 def encode_packet(header: CommandHeader, payload: bytes = b"") -> bytes:
     """Encode a header and payload into a full BMD command packet."""
-    length = HEADER_REMAINDER_LENGTH + len(payload)
+    length = LENGTH_FIELD_OFFSET + len(payload)
     if length > 0xFF:
         raise ValueError(f"Packet too large: length byte would be {length}, max 255")
 
@@ -81,10 +98,11 @@ def decode_packet(data: bytes) -> tuple[CommandHeader, bytes]:
         raise ValueError(f"Packet too short: got {len(data)} bytes, need at least {HEADER_LENGTH}")
 
     length = data[1]
-    if len(data) != 2 + length:
+    expected_total = LENGTH_FIELD_OFFSET + length
+    if len(data) != expected_total:
         raise ValueError(
             f"Length byte mismatch: header declares {length} remaining bytes "
-            f"(total {2 + length}), but packet is {len(data)} bytes"
+            f"(total {expected_total}), but packet is {len(data)} bytes"
         )
 
     try:

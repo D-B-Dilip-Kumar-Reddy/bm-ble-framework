@@ -23,11 +23,15 @@ from .constants import (
     GAP_CHARACTERISTIC_DEVICE_NAME,
     GENERIC_ACCESS_PROFILE_SERVICE_UUID,
 )
+from .exceptions import BMDVerificationError
+from .session import CameraSession
 
 __all__ = [
     "BLE_SCAN_TIMEOUT_S",
     "BMD_SERVICE_UUID",
+    "BMDVerificationError",
     "CameraProfile",
+    "CameraSession",
     "CHARACTERISTIC_BMD_DEVICE_NAME",
     "CHARACTERISTIC_CAM_STATUS",
     "CHARACTERISTIC_INCOMING",
