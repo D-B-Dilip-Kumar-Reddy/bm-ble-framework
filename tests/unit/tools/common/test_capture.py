@@ -1,8 +1,8 @@
-"""Unit tests for tools/sniffers/capture.py — pure decode/dedup logic only.
+"""Unit tests for tools/common/capture.py — pure decode/dedup logic only.
 
 No BLE, no input(), no hardware, no filesystem — matches tests/unit/'s
 "no hardware, full mocking" rule. tools/ is not a package (no __init__.py,
-scripts run standalone), so tools/sniffers is added to sys.path directly,
+scripts run standalone), so tools/common is added to sys.path directly,
 mirroring the sys.path trick tools/query/ble_services_chars.py already uses.
 """
 
@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "tools" / "sniffers"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "tools" / "common"))
 
 from capture import DecodedNotification, decode_notification, dedupe_triples  # noqa: E402
 

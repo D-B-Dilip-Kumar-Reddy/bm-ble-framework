@@ -1,22 +1,28 @@
 """
-tools/sniffers/capture.py
-==========================
-Reusable BLE-notification capture engine shared by every
-tools/sniffers/sniffer_<feature>.py script.
+tools/common/capture.py
+========================
+Reusable BLE-notification capture engine shared by tools/sniffers/ (passive,
+listen-only) and tools/control/ (active, sends a command then listens).
 
-Drives an interactive, operator-triggered capture: for each labeled action
-(e.g. "record_start", "record_stop"), the operator is prompted to trigger
-the action on the physical camera between two Enter presses, and every
-INCOMING_CONTROL / CAMERA_STATUS notification received in that window is
-decoded and reported. This lets a sniffer feature script discover which
-(characteristic, category, parameter) triples change in response to a real
-camera action, without inventing protocol values (CLAUDE.md design
+Two capture modes:
+  - `run_capture_windows` — interactive, operator-triggered: for each labeled
+    action, the operator is prompted to trigger it on the physical camera
+    between two Enter presses.
+  - `run_send_and_capture` — this repo's tooling sends the command itself
+    (via `BMDCameraController.write_outgoing_control`) and listens for a
+    fixed duration afterwards, for a deterministic, repeatable capture.
+
+Either way, every INCOMING_CONTROL / CAMERA_STATUS notification received
+during a window is decoded and reported, letting a feature script discover
+which (characteristic, category, parameter) triples are associated with a
+real camera action, without inventing protocol values (CLAUDE.md design
 principle 6, "sniffer-first").
 
 This module has no knowledge of any specific feature (recording, settings,
-media, ...) — feature scripts supply only their own list of action labels
-and reuse `run_capture_windows` / `print_window_summary` / `save_capture`.
-See docs/sniffer_capture_engine.md for the full design writeup.
+media, ...) — feature scripts supply only their own action labels (and, for
+`run_send_and_capture`, the raw command bytes) and reuse
+`print_window_summary` / `save_capture`. See docs/sniffer_capture_engine.md
+and docs/active_camera_control.md for the full design writeup.
 """
 
 from __future__ import annotations
@@ -33,7 +39,7 @@ from bmd_ble.camera_controller import BMDCameraController
 from bmd_ble.constants import CHARACTERISTIC_NAMES
 from bmd_ble.protocol.codec import decode_packet
 
-CAPTURES_DIR = Path(__file__).resolve().parent / "captures"
+CAPTURES_DIR = Path(__file__).resolve().parents[1] / "captures"
 
 
 def configure_console_logging(level: int = logging.INFO) -> None:
@@ -179,19 +185,29 @@ def print_window_summary(window: CaptureWindow) -> None:
         print(f"  [{n.timestamp}] {n.characteristic_name} | {n.raw_hex}{suffix}")
 
 
-async def run_capture_windows(cam: BMDCameraController, labels: list[str]) -> CaptureSession:
-    """Run one interactive capture window per label and return the session.
+async def _subscribe_capture_callback(cam: BMDCameraController, session: CaptureSession) -> None:
+    """Subscribe the shared capture callback to INCOMING_CONTROL and CAMERA_STATUS.
 
-    Subscribes to INCOMING_CONTROL and CAMERA_STATUS only — TIMECODE ticks
-    roughly once a second regardless of any triggered action and would just
-    be noise for "what changed because of this action". These are the same
-    two characteristics CLAUDE.md's verification strategy checks (echo
-    primary, CAMERA_STATUS secondary).
+    TIMECODE is deliberately not subscribed — it ticks roughly once a second
+    regardless of any triggered action and would just be noise for "what
+    changed because of this action". These are the same two characteristics
+    CLAUDE.md's verification strategy checks (echo primary, CAMERA_STATUS
+    secondary).
     """
-    session = CaptureSession()
     callback = make_capture_callback(session)
     await cam.subscribe_incoming(callback=callback)
     await cam.subscribe_camera_status(callback=callback)
+
+
+async def run_capture_windows(cam: BMDCameraController, labels: list[str]) -> CaptureSession:
+    """Run one interactive capture window per label and return the session.
+
+    The operator triggers each action out-of-band (physical camera controls
+    or another app); this function only listens. For a mode that sends the
+    command itself, see `run_send_and_capture`.
+    """
+    session = CaptureSession()
+    await _subscribe_capture_callback(cam, session)
 
     loop = asyncio.get_running_loop()
 
@@ -205,6 +221,40 @@ async def run_capture_windows(cam: BMDCameraController, labels: list[str]) -> Ca
         await wait_for_enter(f"\n[{label}] Get ready, then press Enter to start capturing... ")
         session.active = window
         await wait_for_enter(f"[{label}] Trigger the action now. Press Enter when done... ")
+        session.active = None
+
+        print_window_summary(window)
+
+    return session
+
+
+async def run_send_and_capture(
+    cam: BMDCameraController,
+    actions: list[tuple[str, bytes]],
+    *,
+    listen_seconds: float = 3.0,
+) -> CaptureSession:
+    """Send each labeled command and capture whatever arrives afterwards.
+
+    Unlike `run_capture_windows`, this repo's own tooling triggers the
+    action — via `cam.write_outgoing_control(command_bytes)` — rather than
+    waiting on an operator. Each window stays "hot" for `listen_seconds`
+    after the write, then closes and prints its summary (explicitly showing
+    "0 notifications" if nothing arrived, not silently succeeding).
+
+    This actively sends commands to a real camera — see
+    docs/active_camera_control.md.
+    """
+    session = CaptureSession()
+    await _subscribe_capture_callback(cam, session)
+
+    for label, command in actions:
+        window = CaptureWindow(label=label)
+        session.windows.append(window)
+
+        session.active = window
+        await cam.write_outgoing_control(command)
+        await asyncio.sleep(listen_seconds)
         session.active = None
 
         print_window_summary(window)

@@ -62,7 +62,7 @@ A `CameraState` object reflects the last-known camera state. It is updated **onl
 Never mix concerns across these boundaries.
 
 ### 6. Sniffer-first for all protocol values
-Every codec ID, quality variant, FPS encoding, category/parameter pair must originate from a real sniffer capture on that specific camera and firmware. Never copy protocol values from one profile to another without re-verifying on that model. `tools/sniffers/` drives the payload population workflow.
+Every codec ID, quality variant, FPS encoding, category/parameter pair must originate from a real sniffer capture on that specific camera and firmware. Never copy protocol values from one profile to another without re-verifying on that model. `tools/sniffers/` (passive) and `tools/control/` (active send-then-capture) drive the payload population workflow.
 
 ### 7. Explicit capability model
 Each profile JSON declares what the camera supports (e.g. `supports_raw`, `supports_playback`, `supports_photo`). Code checks capabilities before attempting an operation. Attempting an unsupported operation raises `BMDUnsupportedError` immediately — no silent failures.
@@ -110,8 +110,18 @@ src/bmd_ble/
       metadata.py           # Video / photo metadata reads
 
 tools/
-  sniffers/                 # BLE packet capture and analysis for reverse engineering
+  common/                   # Shared BLE capture/decode engine (tools/common/capture.py),
+                             # used by both sniffers/ and control/ — not an entrypoint itself
+  sniffers/                 # Passive BLE-notification capture for reverse engineering (listen-only)
+  control/                  # Active camera control — sends commands, captures the response
+                             # (changes real camera state; use deliberately)
   query/                    # Characteristic inspection (existing)
+  captures/                 # Runtime output of sniffers/ and control/ scripts (gitignored)
+
+Tools are grouped by folder according to what kind of thing they do — read-only
+query, passive listen, or active send — not by feature. Shared library code used
+by more than one tool type lives in `tools/common/`, never duplicated per folder
+or reached via an awkward cross-folder import. See `docs/active_camera_control.md`.
 
 payloads/
   models/                   # One JSON file per (MODEL_KEY, firmware) pair
@@ -151,7 +161,8 @@ added, a new `docs/<feature>.md` must be created alongside the code change.
 | `docs/winrt_ble_connection_hardening.md` | BLE reconnect loop, WinRT liveness detection, generation guards, connect-lock |
 | `docs/event_subscription_and_logging.md` | Notification subscription strategy (`subscribe_all`), generation-guarding wrapper, per-session file logging |
 | `docs/recording.md` | Record start/stop category scaffold, verification and storage-precondition strategy, remaining sniffer work |
-| `docs/sniffer_capture_engine.md` | Reusable BLE-notification capture engine (`tools/sniffers/capture.py`) driving labeled operator-triggered capture windows |
+| `docs/sniffer_capture_engine.md` | Reusable BLE-notification capture engine (`tools/common/capture.py`) driving labeled operator-triggered capture windows |
+| `docs/active_camera_control.md` | Active camera control — `write_outgoing_control`, `run_send_and_capture`, `tools/control/` tool-type segregation |
 
 ---
 
@@ -322,7 +333,7 @@ The echo must be buffered *before* the write is issued. A router that only start
 
 ## Workflow: Adding Support for a New Camera
 
-1. Run `tools/sniffers/` scripts while performing the target action on the camera
+1. Run `tools/sniffers/` scripts while performing the target action on the camera (or, once a candidate command is known, `tools/control/` scripts to send it directly and capture the response)
 2. Analyse captured packets — extract category, parameter, data type, payload bytes
 3. Create or update `payloads/models/<MODEL_KEY>_<FIRMWARE>.json` with verified values
 4. Run `tools/query/ble_services_chars.py` to confirm UUIDs match expectations

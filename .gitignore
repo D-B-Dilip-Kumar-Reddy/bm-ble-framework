@@ -3,8 +3,8 @@ __pycache__/
 *.py[codz]
 *$py.class
 
-# Sniffer capture output (raw per-session BLE capture dumps — not for commit)
-tools/sniffers/captures/
+# Sniffer/control capture output (raw per-session BLE capture dumps — not for commit)
+tools/captures/
 
 # C extensions
 *.so

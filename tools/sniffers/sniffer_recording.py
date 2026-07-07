@@ -1,7 +1,7 @@
 """
 tools/sniffers/sniffer_recording.py
 ====================================
-Sniffer for the recording category (record start / record stop).
+Passive sniffer for the recording category (record start / record stop).
 
 Connects to the camera, then runs two interactive capture windows:
   1. record_start — trigger recording to start on the physical camera
@@ -9,9 +9,14 @@ Connects to the camera, then runs two interactive capture windows:
 
 For each window, prints every (characteristic, category, parameter) triple
 observed on INCOMING_CONTROL / CAMERA_STATUS, and saves the full decoded
-capture to tools/sniffers/captures/ for later use populating
+capture to tools/captures/ for later use populating
 payloads/models/<MODEL_KEY>_<FIRMWARE>.json — see docs/recording.md,
 "Remaining work".
+
+This tool only listens — it never writes to OUTGOING_CONTROL. The operator
+must trigger the action out-of-band (physical camera controls or another
+app). For a tool that actively sends a known command and captures the
+response, see tools/control/send_record_command.py.
 
 Usage:
     python tools/sniffers/sniffer_recording.py
@@ -22,17 +27,21 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import sys
+from pathlib import Path
 
-from capture import (
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "common"))
+
+from capture import (  # noqa: E402
     configure_console_logging,
     print_window_summary,
     run_capture_windows,
     save_capture,
 )
 
-from bmd_ble.camera_controller import BMDCameraController
-from bmd_ble.camera_profile import CameraProfile
-from bmd_ble.scanner import scan_for_camera
+from bmd_ble.camera_controller import BMDCameraController  # noqa: E402
+from bmd_ble.camera_profile import CameraProfile  # noqa: E402
+from bmd_ble.scanner import scan_for_camera  # noqa: E402
 
 DEFAULT_MODEL_KEY = "POCKET_6K_G2"
 DEFAULT_FIRMWARE = "v7.9"

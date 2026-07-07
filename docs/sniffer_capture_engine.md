@@ -2,20 +2,24 @@
 
 ## Overview
 
-`tools/sniffers/capture.py` is a reusable BLE-notification capture engine
-shared by every `tools/sniffers/sniffer_<feature>.py` script. It exists to
-serve CLAUDE.md's "sniffer-first" design principle: every category,
-parameter, and data type value used in this codebase must come from a real
-capture on real hardware, never be invented. This module is how that capture
-happens — it has no knowledge of any specific feature (recording, settings,
-media, ...); feature scripts supply only their own list of action labels.
+`tools/common/capture.py` is a reusable BLE-notification capture engine
+shared by `tools/sniffers/sniffer_<feature>.py` scripts (passive, listen-only)
+and `tools/control/*.py` scripts (active — sends a command, then listens;
+see `docs/active_camera_control.md`). It exists to serve CLAUDE.md's
+"sniffer-first" design principle: every category, parameter, and data type
+value used in this codebase must come from a real capture on real hardware,
+never be invented. This module is how that capture happens — it has no
+knowledge of any specific feature (recording, settings, media, ...); feature
+scripts supply only their own list of action labels (and, for the active
+mode, the raw command bytes).
 
-`tools/sniffers/sniffer_recording.py` is the first, and currently only,
-consumer — it captures `record_start` and `record_stop`.
+`tools/sniffers/sniffer_recording.py` is the first passive consumer — it
+captures `record_start` and `record_stop`. `tools/control/send_record_command.py`
+is the first active consumer.
 
 ---
 
-## Module contents (`tools/sniffers/capture.py`)
+## Module contents (`tools/common/capture.py`)
 
 | Name | Purpose |
 |---|---|
@@ -25,10 +29,15 @@ consumer — it captures `record_start` and `record_stop`.
 | `decode_notification(characteristic, data)` | Pure function decoding one raw notification. Never raises. |
 | `dedupe_triples(notifications)` | `(characteristic_name, category, parameter)` triples, first-seen order, no duplicates. |
 | `make_capture_callback(session)` | Builds the Bleak-style `callback(characteristic, data)` that records into whichever window is currently active. |
-| `run_capture_windows(cam, labels)` | Drives the interactive capture: one window per label. |
+| `run_capture_windows(cam, labels)` | Drives the interactive (passive) capture: one window per label, operator-triggered. |
+| `run_send_and_capture(cam, actions, listen_seconds=3.0)` | Drives the active capture: sends each `(label, command_bytes)` via `cam.write_outgoing_control`, then listens for `listen_seconds`. See `docs/active_camera_control.md`. |
 | `print_window_summary(window)` | Console report: deduped triples, then the full raw notification list. |
 | `save_capture(model_key, firmware, session)` | Writes the full-fidelity capture to JSON. |
 | `configure_console_logging(level=logging.INFO)` | Console logging setup that keeps `BMDCameraController`'s default per-notification DEBUG logging out of the console (see below). |
+
+Both capture modes share the same subscribe step (`_subscribe_capture_callback`),
+decode/dedupe/report/save machinery — only how a window's "hot" period starts
+and ends differs (operator-triggered vs. self-triggered-then-timed).
 
 ---
 
@@ -133,7 +142,7 @@ raw notification in the window with its timestamp and hex bytes.
 `save_capture` writes to:
 
 ```
-tools/sniffers/captures/<model_key>_<firmware>/<model_key>_<firmware>_<timestamp>.json
+tools/captures/<model_key>_<firmware>/<model_key>_<firmware>_<timestamp>.json
 ```
 
 mirroring the existing `logs/<model_key>_<firmware>/<model_key>_<firmware>_<timestamp>.log`
@@ -165,9 +174,9 @@ copied or modified.
 ## Testing
 
 Only `decode_notification` and `dedupe_triples` are unit tested
-(`tests/unit/tools/sniffers/test_capture.py`) — they are pure functions with
+(`tests/unit/tools/common/test_capture.py`) — they are pure functions with
 no BLE, no `input()`, and no filesystem access. `run_capture_windows`,
-`print_window_summary`, and `save_capture` are exercised manually against
-real hardware, matching the existing `tools/query/*.py` scripts, none of
-which have unit tests either — CLAUDE.md's "Hardware" test tier is manual by
-design.
+`run_send_and_capture`, `print_window_summary`, and `save_capture` are
+exercised manually against real hardware, matching the existing
+`tools/query/*.py` scripts, none of which have unit tests either — CLAUDE.md's
+"Hardware" test tier is manual by design.

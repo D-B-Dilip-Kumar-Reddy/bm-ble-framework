@@ -17,6 +17,7 @@ from .constants import (
     CHARACTERISTIC_INCOMING,
     CHARACTERISTIC_MANUFACTURER_INFO,
     CHARACTERISTIC_MODEL_INFO,
+    CHARACTERISTIC_OUTGOING,
     CHARACTERISTIC_TIMECODE,
     GAP_CHARACTERISTIC_APPEARANCE,
     GAP_CHARACTERISTIC_DEVICE_NAME,
@@ -498,6 +499,38 @@ class BMDCameraController:
             self.discovered.address,
             " ".join(f"{b:02X}" for b in data),
         )
+
+    # ── Outgoing writes ─────────────────────────────────────────────────────────────────
+
+    async def write_outgoing_control(self, data: bytes) -> None:
+        """
+        Write raw command bytes to OUTGOING_CONTROL.
+
+        Pure BLE transport — no BMD protocol knowledge, no verification that
+        the write took effect. Callers must confirm the result separately
+        (e.g. an INCOMING_CONTROL echo or a CAMERA_STATUS change) — see
+        CLAUDE.md's verification strategy.
+        """
+        if self._client is None or not self._client.is_connected:
+            raise RuntimeError(
+                f"[{self.discovered.ble_name}] Cannot write: BLE client is disconnected"
+            )
+        self._logger.debug(
+            "[%s @ %s] TX: %s",
+            self.discovered.ble_name,
+            self.discovered.address,
+            " ".join(f"{b:02X}" for b in data),
+        )
+        try:
+            await self._client.write_gatt_char(CHARACTERISTIC_OUTGOING, data)
+        except (BleakError, OSError) as exc:
+            self._logger.error(
+                "[%s @ %s] Write to OUTGOING_CONTROL failed: %s",
+                self.discovered.ble_name,
+                self.discovered.address,
+                exc,
+            )
+            raise
 
     # ── Services ────────────────────────────────────────────────────────────────────────
 

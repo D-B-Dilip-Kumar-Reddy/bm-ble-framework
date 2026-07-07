@@ -109,11 +109,12 @@ The echo also uses a different `Operation` value than the command:
 now stored as `recording.echo_operation` in the profile JSON and
 `CameraProfile.recording_echo_operation`.
 
-This was found via **passive listening only** — no command was sent by this
-repo's tooling; the operator triggered start/stop out-of-band. A
-deterministic send-then-observe round trip (this repo writing the known
-command and observing the response) has not been performed — see "Remaining
-work".
+This was found via **passive listening only** across two independent
+captures — no command was sent by this repo's tooling; the operator
+triggered start/stop out-of-band. `tools/control/send_record_command.py`
+(see `docs/active_camera_control.md`) now closes this gap: it actively sends
+the command and captures the response deterministically, rather than
+relying on a manually-timed passive window.
 
 ---
 
@@ -147,11 +148,13 @@ Per CLAUDE.md, "Workflow: Adding a New Command":
    `recording_stop_value`, `recording_echo_operation`).
 4. ~~Determine what a real `INCOMING_CONTROL` echo for this category looks
    like.~~ Done via passive listening — see "The echo has been observed."
-5. **Deferred**: build a send-then-observe sniffer mode (write the known
-   command to `OUTGOING_CONTROL` via a new `camera_controller.py` write
-   method, then capture the response deterministically) to fully confirm the
-   echo above wasn't coincidental, and to decode the still-unexplained 5
-   trailing payload bytes. Not yet scheduled.
+5. ~~Build a send-then-observe mode (write the known command, then capture
+   the response deterministically).~~ Done —
+   `tools/control/send_record_command.py` (see
+   `docs/active_camera_control.md`) sends `record_start`/`record_stop` via
+   `BMDCameraController.write_outgoing_control` and captures whatever
+   arrives. Run it on real hardware to confirm the echo wasn't coincidental
+   and to investigate the still-unexplained 5 trailing payload bytes.
 6. Wire `encode_record_start` / `encode_record_stop` /
    `is_recording_state_echo` / `decode_recording_state` into `session.py`
    with the dual-check verification strategy described above.
