@@ -28,6 +28,7 @@ consumer — it captures `record_start` and `record_stop`.
 | `run_capture_windows(cam, labels)` | Drives the interactive capture: one window per label. |
 | `print_window_summary(window)` | Console report: deduped triples, then the full raw notification list. |
 | `save_capture(model_key, firmware, session)` | Writes the full-fidelity capture to JSON. |
+| `configure_console_logging(level=logging.INFO)` | Console logging setup that keeps `BMDCameraController`'s default per-notification DEBUG logging out of the console (see below). |
 
 ---
 
@@ -70,6 +71,31 @@ with irrelevant timecode notifications and defeat the point of finding what
 exactly the two characteristics CLAUDE.md's verification strategy checks
 (echo primary, status secondary), so limiting capture to these two keeps the
 sniffer's output directly usable for that later verification wiring.
+
+---
+
+## Keeping the console quiet during prompts: `configure_console_logging`
+
+Even with TIMECODE excluded from the capture buffer, `BMDCameraController`
+still installs a default `_log_timecode` handler on connect (via
+`subscribe_all()`) that logs every TIMECODE notification — about once a
+second — at `DEBUG`. Each controller instance pins its own child logger
+(`bmd_ble.camera_controller.<model_key>`) to `DEBUG` in `__init__`, so a
+script-level `logging.basicConfig(level=logging.INFO, ...)` does **not**
+stop these from reaching the console: `basicConfig`'s `level=` only gates
+calls made directly on the root logger, not records already accepted by a
+child logger with its own explicit level as they propagate to ancestor
+handlers — only each *handler's* own level filters those. Left unfixed, this
+floods the console once a second and buries the `input()` prompts entirely.
+
+`configure_console_logging()` fixes this at the right layer: it attaches a
+`StreamHandler` with its own `level` (default `INFO`) as the sole console
+handler, so DEBUG-level propagated records are filtered out regardless of
+which logger produced them. `camera_controller.py`'s own per-instance
+`FileHandler` is untouched and keeps writing full DEBUG detail to
+`logs/<model_key>_<firmware>/...` — only the console gets quieter. Every
+`sniffer_<feature>.py` entrypoint should call this in its `__main__` block
+instead of calling `logging.basicConfig` directly.
 
 ---
 

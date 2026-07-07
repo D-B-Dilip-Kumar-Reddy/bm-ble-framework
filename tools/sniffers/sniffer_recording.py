@@ -22,9 +22,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import logging
 
-from capture import print_window_summary, run_capture_windows, save_capture
+from capture import (
+    configure_console_logging,
+    print_window_summary,
+    run_capture_windows,
+    save_capture,
+)
 
 from bmd_ble.camera_controller import BMDCameraController
 from bmd_ble.camera_profile import CameraProfile
@@ -78,8 +82,5 @@ def parse_args() -> argparse.Namespace:
 
 
 if __name__ == "__main__":
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(levelname)s - %(message)s",
-    )
+    configure_console_logging()
     raise SystemExit(asyncio.run(run(parse_args())))

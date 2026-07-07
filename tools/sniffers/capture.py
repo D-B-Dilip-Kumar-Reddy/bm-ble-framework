@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -33,6 +34,26 @@ from bmd_ble.constants import CHARACTERISTIC_NAMES
 from bmd_ble.protocol.codec import decode_packet
 
 CAPTURES_DIR = Path(__file__).resolve().parent / "captures"
+
+
+def configure_console_logging(level: int = logging.INFO) -> None:
+    """Configure console logging so per-notification DEBUG hex dumps from
+    BMDCameraController's default handlers (RX/TIMECODE/CAM_STATUS — always
+    logged at DEBUG regardless of this level, since each controller instance
+    pins its own logger to DEBUG) never reach the console and bury this
+    tool's interactive Enter-to-continue prompts.
+
+    Full detail still lands in the per-session file log camera_controller.py
+    writes independently of this handler. Only the console handler's own
+    level is narrowed here, since `basicConfig(level=...)` alone only gates
+    calls made directly on the root logger — it does not filter records
+    already accepted by a child logger with its own explicit level as they
+    propagate up to ancestor handlers.
+    """
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(level)
+    console_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
+    logging.basicConfig(level=level, handlers=[console_handler])
 
 
 @dataclass(frozen=True)
