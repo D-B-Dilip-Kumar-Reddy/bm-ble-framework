@@ -162,8 +162,12 @@ Commands are written as binary packets to `OUTGOING_CONTROL`. Echoes and respons
 ### Packet structure
 
 ```
-Byte 0      Destination device (0x00 = camera)
-Byte 1      Length of remaining data (bytes 2 onwards)
+Byte 0      Fixed prefix byte (0xFF — sniffer-verified on POCKET_6K_G2 v7.9,
+            both directions; not a per-destination address over BLE)
+Byte 1      Length field — counts only bytes 4 onwards (category, parameter,
+            data type, operation, payload). Sniffer-verified: does NOT count
+            command_id/reserved, unlike the generic BMD spec assumption of
+            "everything after byte 1".
 Byte 2      Command ID / type
 Byte 3      Reserved
 Byte 4      Category
@@ -173,12 +177,18 @@ Byte 7      Operation  (0x00 = assign, 0x01 = offset)
 Bytes 8+    Payload
 ```
 
+This structure was corrected after a real sniffer capture on `POCKET_6K_G2 v7.9`
+caught a systematic decode failure — the byte 0 value and the length field's
+counting base above were originally assumed from the generic BMD spec and had
+never been verified against real BLE hardware. See `protocol/codec.py` and
+`docs/packet_structure_and_constants.md`.
+
 ### Command categories
 Populate this table as categories are confirmed from sniffer sessions. Each category maps to a file in `protocol/categories/`.
 
 | Category | Description | File |
 |---|---|---|
-| (add as discovered) | | |
+| `0x0A` | Recording (record start/stop) | `protocol/categories/recording.py` |
 
 ### Data types (`protocol/types.py`)
 

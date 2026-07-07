@@ -23,7 +23,7 @@ def _characteristic(uuid: str):
 
 class TestDecodeNotification:
     def test_well_formed_incoming_control_packet_decodes_category_and_parameter(self):
-        data = bytearray([0x00, 0x07, 0x00, 0x00, 0x0A, 0x01, 0x01, 0x00, 0x01])
+        data = bytearray([0xFF, 0x05, 0x00, 0x00, 0x0A, 0x01, 0x01, 0x00, 0x01])
 
         result = decode_notification(_characteristic(CHARACTERISTIC_INCOMING), data)
 
@@ -34,7 +34,7 @@ class TestDecodeNotification:
         assert result.payload_hex == "01"
         assert result.decode_error is None
         assert result.characteristic_name == "INCOMING_CONTROL (Indicate)"
-        assert result.raw_hex == "00 07 00 00 0A 01 01 00 01"
+        assert result.raw_hex == "FF 05 00 00 0A 01 01 00 01"
 
     def test_camera_status_one_byte_payload_decodes_with_error_set_not_raised(self):
         data = bytearray([0x3F])

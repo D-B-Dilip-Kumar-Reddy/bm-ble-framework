@@ -12,8 +12,8 @@ Neither module has any BLE knowledge — they operate purely on `bytes`.
 ## Packet Structure
 
 ```
-Byte 0      Destination device (0x00 = camera)
-Byte 1      Length of remaining data (bytes 2 onwards)
+Byte 0      Fixed prefix byte (0xFF)
+Byte 1      Length field — counts only bytes 4 onwards
 Byte 2      Command ID / type
 Byte 3      Reserved
 Byte 4      Category
@@ -23,9 +23,22 @@ Byte 7      Operation  (0x00 = assign, 0x01 = offset)
 Bytes 8+    Payload
 ```
 
-`HEADER_LENGTH` (`protocol/codec.py`) is 8 — bytes 0 through 7. The length
-byte (byte 1) covers bytes 2 onwards only: 6 fixed header bytes
-(`HEADER_REMAINDER_LENGTH`) plus the payload length.
+`HEADER_LENGTH` (`protocol/codec.py`) is 8 — bytes 0 through 7, unchanged.
+The length byte (byte 1) covers bytes 4 onwards only: category, parameter,
+data type, operation (`LENGTH_FIELD_OFFSET = 4` bytes not counted: prefix,
+length byte itself, command_id, reserved), plus the payload length.
+
+**Corrected after a real sniffer capture.** This module originally assumed
+byte 0 was a `0x00` "destination device" byte and that the length field
+counted everything from byte 2 onwards (6 fixed bytes + payload) — lifted
+from the generic BMD spec and never verified against real BLE hardware. A
+capture on `POCKET_6K_G2 v7.9` (via `tools/sniffers/sniffer_recording.py`)
+showed a 100% decode failure rate: every single captured packet's actual
+size was exactly `declared_length + 4`, not `declared_length + 2`, and byte 0
+was always `0xFF` in both directions. Cross-checked directly against a known,
+reverse-engineered record start command (`FF 05 00 01 0A 01 01 00 02`), the
+corrected formula reproduces it byte-for-byte. See `docs/recording.md` and
+CLAUDE.md's "Packet structure" section.
 
 ### `CommandHeader`
 
@@ -98,7 +111,7 @@ in this repo yet, so it is intentionally left as a TODO rather than assumed.
 | BLE service/characteristic UUIDs | `BMD_SERVICE_UUID` | `constants.py` |
 | Characteristic display names | `CHARACTERISTIC_NAMES` | `constants.py` |
 | BLE timing (scan/connect/reconnect) | `BLE_SCAN_TIMEOUT_S` | `constants.py` |
-| Packet header structure (destination byte, reserved byte, operation codes) | `DESTINATION_CAMERA`, `Operation` | `protocol/codec.py` |
+| Packet header structure (prefix byte, reserved byte, operation codes, length-field offset) | `DESTINATION_CAMERA`, `LENGTH_FIELD_OFFSET`, `Operation` | `protocol/codec.py` |
 | Payload data types | `DataType` | `protocol/types.py` |
 | Category ID + parameter IDs for one command family | `CATEGORY_ID` in a category file | `protocol/categories/<category>.py` — added only after a sniffer capture confirms them on real hardware |
 | Codec IDs, quality/resolution/FPS encodings, capability flags, storage UUIDs | `codec_ids`, `fps_encodings`, `supports_raw` | `payloads/models/<MODEL>_<FW>.json`, via `CameraProfile` |

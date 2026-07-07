@@ -36,6 +36,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .constants import CHARACTERISTIC_INCOMING
+from .protocol.types import DataType
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +72,15 @@ class CameraProfile:
     gap_metadata_readable: bool
     device_info_metadata_readable: bool
 
+    # Recording category (record start/stop) — sniffer/reverse-engineered
+    # per model; None when not yet populated for this profile.
+    recording_category: int | None = None
+    recording_parameter: int | None = None
+    recording_data_type: DataType | None = None
+    recording_reserved: int | None = None
+    recording_start_value: int | None = None
+    recording_stop_value: int | None = None
+
     # Raw JSON for reference
     _raw: dict = field(default_factory=dict, repr=False, compare=False)
 
@@ -101,6 +111,8 @@ class CameraProfile:
         ble = raw.get("ble", {})
         gap_meta_data = raw.get("gap_meta_data", {})
         device_info_meta_data = raw.get("device_info_meta_data", {})
+        recording = raw.get("recording", {})
+        recording_data_type_name = recording.get("data_type")
         profile = cls(
             model_key=model_key,
             model_name=meta.get("model", model_key),
@@ -110,6 +122,14 @@ class CameraProfile:
             incoming_uuid=ble.get("characteristic_incoming", CHARACTERISTIC_INCOMING),
             gap_metadata_readable=gap_meta_data.get("readable", False),
             device_info_metadata_readable=device_info_meta_data.get("readable", False),
+            recording_category=recording.get("category"),
+            recording_parameter=recording.get("parameter"),
+            recording_data_type=DataType[recording_data_type_name]
+            if recording_data_type_name
+            else None,
+            recording_reserved=recording.get("reserved"),
+            recording_start_value=recording.get("start_value"),
+            recording_stop_value=recording.get("stop_value"),
             _raw=raw,
         )
         return profile
