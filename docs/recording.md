@@ -9,20 +9,21 @@ reserved byte, and payload value are all supplied by the caller from a
 `CameraProfile`, never hardcoded in this module (CLAUDE.md design principle 1:
 no hardcoded protocol values).
 
-**Status: category/parameter/payload values populated and cross-validated
-against both a real command and a real echo; deterministic round-trip not
-yet performed.** `POCKET_6K_G2 v7.9`'s recording category, parameter, data
-type, reserved byte, and start/stop payload values are reverse-engineered and
-byte-level cross-validated against a known real command
+**Status: record start/stop verification confirmed on real hardware.**
+`POCKET_6K_G2 v7.9`'s recording category, parameter, data type, reserved
+byte, and start/stop payload values are reverse-engineered and byte-level
+cross-validated against a known real command
 (`FF 05 00 01 0A 01 01 00 02` for start, `...00 00` for stop) — see
-`payloads/models/POCKET_6K_G2_v7.9.json`. A passive sniffer capture
-additionally found a real `INCOMING_CONTROL` notification matching the same
-category/parameter, with a payload whose leading byte mirrors the command's
-convention exactly (see "The echo has been observed" below). No
-deterministic, tool-driven send-then-observe round trip has been performed
-yet (the operator triggered the action out-of-band, not via this repo's
-tooling), so the profile's `_meta.status` stays `UNVERIFIED`. See "Remaining
-work" below.
+`payloads/models/POCKET_6K_G2_v7.9.json`. `examples/record_start_stop.py`
+has since run `CameraSession`'s echo-based verification across 3 repeated
+start/stop cycles on real hardware, all 3/3 confirmed — this is no longer
+just a byte-level cross-check, it's a live, repeatable confirmation that the
+command and its echo work as understood.
+
+The profile's `_meta.status` intentionally stays `UNVERIFIED`: that flag
+describes the *whole* profile, and only the recording category has been
+implemented and tested so far — settings, media, and metadata are still
+unbuilt. See "Remaining work" below.
 
 ---
 
@@ -164,4 +165,9 @@ Per CLAUDE.md, "Workflow: Adding a New Command":
    `examples/record_start_stop.py`. Verification is echo-only (not the
    documented echo+`CAMERA_STATUS` dual-check) since `CAMERA_STATUS`'s known
    bits don't cover recording state — see that doc for why.
-7. Test on real hardware, then mark the profile `VERIFIED`.
+7. ~~Test on real hardware.~~ Done — `examples/record_start_stop.py`
+   confirmed 3/3 start/stop cycles via echo verification on a real
+   `POCKET_6K_G2 v7.9`. The profile's `_meta.status` stays `UNVERIFIED`
+   overall (only recording is implemented; settings/media/metadata aren't
+   yet) — recording's own verification is recorded in the `recording` block's
+   `_comment` in `payloads/models/POCKET_6K_G2_v7.9.json`.

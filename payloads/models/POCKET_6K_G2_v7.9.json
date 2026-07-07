@@ -17,7 +17,7 @@
     "readable": false
   },
   "recording": {
-    "_comment": "Reverse-engineered and byte-level cross-validated against both a real captured command and a real captured INCOMING_CONTROL echo (see docs/recording.md). echo_operation is the operation byte the camera itself uses when reporting this category/parameter (distinct from operation=0/ASSIGN used by the controller's command). No deterministic, tool-driven send-then-observe round trip has confirmed these yet.",
+    "_comment": "Reverse-engineered and byte-level cross-validated against both a real captured command and a real captured INCOMING_CONTROL echo (see docs/recording.md). echo_operation is the operation byte the camera itself uses when reporting this category/parameter (distinct from operation=0/ASSIGN used by the controller's command). Confirmed via CameraSession's echo-based verification (examples/record_start_stop.py) across 3/3 consistent start/stop cycles on real hardware.",
     "category": 10,
     "parameter": 1,
     "data_type": "BOOL",
