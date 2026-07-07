@@ -112,9 +112,12 @@ now stored as `recording.echo_operation` in the profile JSON and
 This was found via **passive listening only** across two independent
 captures — no command was sent by this repo's tooling; the operator
 triggered start/stop out-of-band. `tools/control/send_record_command.py`
-(see `docs/active_camera_control.md`) now closes this gap: it actively sends
-the command and captures the response deterministically, rather than
-relying on a manually-timed passive window.
+(see `docs/active_camera_control.md`) has since closed this gap: a real run
+sent `record_start`/`record_stop` directly and captured the **same** echo
+signature as the very first notification after each write (payload leading
+byte 2/0, `CAMERA_STATUS` also observed for the first time, value `0x03`) —
+this is no longer just a coincidental passive observation, it's a
+deterministic, on-demand confirmation.
 
 ---
 
@@ -148,14 +151,17 @@ Per CLAUDE.md, "Workflow: Adding a New Command":
    `recording_stop_value`, `recording_echo_operation`).
 4. ~~Determine what a real `INCOMING_CONTROL` echo for this category looks
    like.~~ Done via passive listening — see "The echo has been observed."
-5. ~~Build a send-then-observe mode (write the known command, then capture
-   the response deterministically).~~ Done —
-   `tools/control/send_record_command.py` (see
-   `docs/active_camera_control.md`) sends `record_start`/`record_stop` via
-   `BMDCameraController.write_outgoing_control` and captures whatever
-   arrives. Run it on real hardware to confirm the echo wasn't coincidental
-   and to investigate the still-unexplained 5 trailing payload bytes.
-6. Wire `encode_record_start` / `encode_record_stop` /
-   `is_recording_state_echo` / `decode_recording_state` into `session.py`
-   with the dual-check verification strategy described above.
+5. ~~Build a send-then-observe mode, and confirm the echo on real
+   hardware.~~ Done — `tools/control/send_record_command.py` (see
+   `docs/active_camera_control.md`) sent `record_start`/`record_stop`
+   directly on real hardware and captured the same echo signature already
+   found passively, deterministically. The 5 trailing payload bytes remain
+   unexplained — a future investigation, not blocking verification (only the
+   leading byte is used).
+6. ~~Wire `encode_record_start` / `encode_record_stop` /
+   `is_recording_state_echo` / `decode_recording_state` into `session.py`.~~
+   Done — see `docs/session_and_verification.md` and
+   `examples/record_start_stop.py`. Verification is echo-only (not the
+   documented echo+`CAMERA_STATUS` dual-check) since `CAMERA_STATUS`'s known
+   bits don't cover recording state — see that doc for why.
 7. Test on real hardware, then mark the profile `VERIFIED`.

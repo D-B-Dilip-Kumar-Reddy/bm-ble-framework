@@ -35,34 +35,15 @@ from bmd_ble.protocol.categories.recording import (  # noqa: E402
     encode_record_stop,
 )
 from bmd_ble.scanner import scan_for_camera  # noqa: E402
+from bmd_ble.session import require_recording_fields  # noqa: E402
 
 DEFAULT_MODEL_KEY = "POCKET_6K_G2"
 DEFAULT_FIRMWARE = "v7.9"
 
 
-def _require_recording_fields(profile: CameraProfile) -> None:
-    missing = [
-        name
-        for name in (
-            "recording_category",
-            "recording_parameter",
-            "recording_data_type",
-            "recording_start_value",
-            "recording_stop_value",
-        )
-        if getattr(profile, name) is None
-    ]
-    if missing:
-        raise ValueError(
-            f"Profile {profile.model_key}_{profile.firmware} is missing recording fields: "
-            f"{', '.join(missing)} — populate payloads/models/{profile.model_key}_"
-            f"{profile.firmware}.json's 'recording' block first."
-        )
-
-
 async def run(args: argparse.Namespace) -> int:
     profile = CameraProfile.for_model(model_key=args.model_key, firmware=args.firmware)
-    _require_recording_fields(profile)
+    require_recording_fields(profile)
 
     start_bytes = encode_record_start(
         category=profile.recording_category,
