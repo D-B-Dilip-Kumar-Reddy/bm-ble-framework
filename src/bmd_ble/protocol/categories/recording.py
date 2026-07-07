@@ -16,12 +16,15 @@ principles 1 and 6).
 STATUS
 ------
 Category/parameter/data_type/payload values for ``POCKET_6K_G2 v7.9`` are
-reverse-engineered and byte-level cross-validated against a real captured
-command (see ``payloads/models/POCKET_6K_G2_v7.9.json`` and
-``docs/recording.md``) — real hardware does not use a plain boolean 0/1
-payload; record start is ``2``, stop is ``0``. No live hardware round-trip
-(echo) has confirmed these yet, so the profile stays ``UNVERIFIED``. See
-docs/recording.md for the open question and remaining verification work.
+reverse-engineered and byte-level cross-validated against both a real
+captured command and a real captured ``INCOMING_CONTROL`` echo (see
+``payloads/models/POCKET_6K_G2_v7.9.json`` and ``docs/recording.md``) — real
+hardware does not use a plain boolean 0/1 payload; record start is ``2``,
+stop is ``0``. The echo uses a third ``Operation`` value (``CAMERA_REPORT``,
+``0x02``) and a longer payload than the assign-style command. No
+deterministic, tool-driven send-then-observe round trip has been performed
+yet (the echo was found in a passive listen-only capture), so the profile
+stays ``UNVERIFIED``. See docs/recording.md for details and remaining work.
 """
 
 from __future__ import annotations
@@ -103,15 +106,21 @@ def decode_recording_state(payload: bytes, data_type: DataType) -> bool:
     Real hardware payload values aren't plain 0/1 (POCKET_6K_G2 v7.9 uses
     2/0), but nonzero-vs-zero truthiness still correctly distinguishes
     recording from stopped, so no value beyond True/False is needed here.
+
+    A real ``CAMERA_REPORT``-operation echo carries more bytes than the
+    nominal data type width (sniffer-verified: 6 bytes for ``BOOL``, not 1 —
+    the recording flag is the leading byte, the trailing bytes are not yet
+    understood). Only the leading ``width`` bytes are read; any extra
+    trailing bytes are ignored, not treated as an error.
     """
     fmt = DATA_TYPE_STRUCT_FORMATS.get(data_type)
     if fmt is None:
         raise ValueError(f"Unsupported data type for recording state payload: {data_type!r}")
 
     width = DATA_TYPE_BYTE_WIDTHS[data_type]
-    if len(payload) != width:
+    if len(payload) < width:
         raise ValueError(
-            f"Expected {width}-byte payload for recording state, got {len(payload)} bytes"
+            f"Expected at least {width}-byte payload for recording state, got {len(payload)} bytes"
         )
-    (value,) = struct.unpack(f"<{fmt}", payload)
+    (value,) = struct.unpack(f"<{fmt}", payload[:width])
     return bool(value)

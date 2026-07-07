@@ -124,10 +124,19 @@ class TestDecodeRecordingState:
     def test_decodes_zero_value_as_stopped(self):
         assert decode_recording_state(b"\x00", DataType.BOOL) is False
 
-    def test_raises_on_wrong_payload_width(self):
-        with pytest.raises(ValueError, match="Expected 1-byte payload"):
-            decode_recording_state(b"\x00\x00", DataType.BOOL)
+    def test_raises_on_payload_shorter_than_width(self):
+        with pytest.raises(ValueError, match="Expected at least 1-byte payload"):
+            decode_recording_state(b"", DataType.BOOL)
 
     def test_raises_for_unsupported_data_type(self):
         with pytest.raises(ValueError, match="Unsupported data type"):
             decode_recording_state(b"", DataType.STRING)
+
+    def test_decodes_real_pocket_6k_g2_record_start_echo(self):
+        """Real CAMERA_REPORT echo payload: 6 bytes, recording flag leads, rest unexplained."""
+        payload = bytes([0x02, 0x00, 0x40, 0x00, 0x01, 0x03])
+        assert decode_recording_state(payload, DataType.BOOL) is True
+
+    def test_decodes_real_pocket_6k_g2_record_stop_echo(self):
+        payload = bytes([0x00, 0x00, 0x40, 0x00, 0x01, 0x03])
+        assert decode_recording_state(payload, DataType.BOOL) is False

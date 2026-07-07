@@ -9,15 +9,20 @@ reserved byte, and payload value are all supplied by the caller from a
 `CameraProfile`, never hardcoded in this module (CLAUDE.md design principle 1:
 no hardcoded protocol values).
 
-**Status: category/parameter/payload values populated, hardware round-trip
-not yet confirmed.** `POCKET_6K_G2 v7.9`'s recording category, parameter,
-data type, reserved byte, and start/stop payload values are reverse-engineered
-and byte-level cross-validated against a known real command
+**Status: category/parameter/payload values populated and cross-validated
+against both a real command and a real echo; deterministic round-trip not
+yet performed.** `POCKET_6K_G2 v7.9`'s recording category, parameter, data
+type, reserved byte, and start/stop payload values are reverse-engineered and
+byte-level cross-validated against a known real command
 (`FF 05 00 01 0A 01 01 00 02` for start, `...00 00` for stop) — see
-`payloads/models/POCKET_6K_G2_v7.9.json`. No live hardware round-trip (an
-actual `INCOMING_CONTROL` echo observed after sending the command) has
-confirmed them yet, so the profile's `_meta.status` stays `UNVERIFIED`. See
-"Open question" and "Remaining work" below.
+`payloads/models/POCKET_6K_G2_v7.9.json`. A passive sniffer capture
+additionally found a real `INCOMING_CONTROL` notification matching the same
+category/parameter, with a payload whose leading byte mirrors the command's
+convention exactly (see "The echo has been observed" below). No
+deterministic, tool-driven send-then-observe round trip has been performed
+yet (the operator triggered the action out-of-band, not via this repo's
+tooling), so the profile's `_meta.status` stays `UNVERIFIED`. See "Remaining
+work" below.
 
 ---
 
@@ -44,9 +49,10 @@ command uses `reserved=0x01`, not the codec's generic `0x00` default —
 `profile.recording_reserved` should be passed through once `session.py`
 wires this up.
 
-`decode_recording_state` is unaffected by this: nonzero-vs-zero truthiness
-still correctly distinguishes recording (`2`, truthy) from stopped (`0`,
-falsy), so no change was needed there.
+`decode_recording_state` still distinguishes recording (truthy) from stopped
+(falsy) via nonzero-vs-zero, but its payload-width check is "at least
+`width` bytes," not exact — a real echo's payload is longer than the nominal
+`BOOL` width (see below), so only the leading byte is read.
 
 Only `DataType` values present in `DATA_TYPE_STRUCT_FORMATS`
 (`protocol/types.py`) are supported; the functions raise `ValueError` for
@@ -75,19 +81,39 @@ Record start/stop is a write command, so it must be verified, not assumed:
 `CAMERA_STATUS` notification), never inferred from "the command was sent
 successfully."
 
-### Open question: the echo has not yet been observed
+### The echo has been observed
 
-A real capture session (`tools/sniffers/sniffer_recording.py`, run while the
-operator triggered record start/stop separately) did not show any
-`INCOMING_CONTROL` notification with category `0x0A` in either capture
-window — the categories that did appear (`0x01`, `0x03`, `0x07`, `0x09`,
-`0x0C`) look like general status telemetry unrelated to recording. This may
-mean: the command wasn't actually triggered via BLE during that capture
-window; the camera doesn't echo this specific category the way step 3 above
-assumes; or recording state is only observable via `CAMERA_STATUS` or some
-other signal. This is unresolved — do not assume step 3's echo-based
-verification works until a future sniffer run confirms what the real echo
-(if any) looks like.
+A later capture session (`tools/sniffers/sniffer_recording.py`, after fixing
+a codec bug that had been rejecting every real notification — see
+`docs/packet_structure_and_constants.md`) found exactly one
+`INCOMING_CONTROL` notification with category `0x0A` / parameter `0x01` in
+the `record_start` window, and two (a likely retransmit) in `record_stop` —
+unlike other categories in the same capture (`0x09`, `0x0C`), which fire
+continuously (~1/sec, clearly ambient telemetry unrelated to recording), this
+one fires only once per window, consistent with a discrete state-change
+notification.
+
+The two payloads:
+- record_start: `02 00 40 00 01 03`
+- record_stop:  `00 00 40 00 01 03`
+
+Only the **leading byte** differs (`0x02` vs `0x00`) — exactly matching the
+command's own payload convention (`start_value=2`, `stop_value=0`). The
+trailing 5 bytes (`00 40 00 01 03`) are identical in both captures; their
+meaning is **not understood yet** (not modeled in the profile JSON — only
+`echo_operation` is, since that's understood well enough to be useful).
+
+The echo also uses a different `Operation` value than the command:
+`operation=0x02`, sniffer-verified and added to `protocol/codec.py` as
+`Operation.CAMERA_REPORT` (the command itself uses `ASSIGN=0x00`). This is
+now stored as `recording.echo_operation` in the profile JSON and
+`CameraProfile.recording_echo_operation`.
+
+This was found via **passive listening only** — no command was sent by this
+repo's tooling; the operator triggered start/stop out-of-band. A
+deterministic send-then-observe round trip (this repo writing the known
+command and observing the response) has not been performed — see "Remaining
+work".
 
 ---
 
@@ -111,22 +137,22 @@ storage-related notification, not by polling.
 Per CLAUDE.md, "Workflow: Adding a New Command":
 
 1. ~~Run `tools/sniffers/sniffer_recording.py` to capture real category,
-   parameter, and payload bytes.~~ Done — but see "Open question" above: the
-   values below came from reverse-engineering + byte-level cross-validation,
-   not from a captured `INCOMING_CONTROL` echo, since no echo was observed.
+   parameter, and payload bytes.~~ Done.
 2. ~~Add the confirmed values to `payloads/models/POCKET_6K_G2_v7.9.json`.~~
    Done (`recording.category=10`, `parameter=1`, `data_type="BOOL"`,
-   `reserved=1`, `start_value=2`, `stop_value=0`).
+   `reserved=1`, `start_value=2`, `stop_value=0`, `echo_operation=2`).
 3. ~~Extend `CameraProfile` with accessors for the new `recording` JSON
    fields.~~ Done (`recording_category`, `recording_parameter`,
    `recording_data_type`, `recording_reserved`, `recording_start_value`,
-   `recording_stop_value`).
-4. Run another sniffer session that actually writes the command to
-   `OUTGOING_CONTROL` (the current sniffer only listens — it does not send)
-   while capturing `INCOMING_CONTROL`, to determine what a real echo for this
-   category looks like, or confirm there isn't one.
-5. Wire `encode_record_start` / `encode_record_stop` /
+   `recording_stop_value`, `recording_echo_operation`).
+4. ~~Determine what a real `INCOMING_CONTROL` echo for this category looks
+   like.~~ Done via passive listening — see "The echo has been observed."
+5. **Deferred**: build a send-then-observe sniffer mode (write the known
+   command to `OUTGOING_CONTROL` via a new `camera_controller.py` write
+   method, then capture the response deterministically) to fully confirm the
+   echo above wasn't coincidental, and to decode the still-unexplained 5
+   trailing payload bytes. Not yet scheduled.
+6. Wire `encode_record_start` / `encode_record_stop` /
    `is_recording_state_echo` / `decode_recording_state` into `session.py`
-   with the dual-check verification strategy described above, once step 4
-   resolves the open question.
-6. Test on real hardware, then mark the profile `VERIFIED`.
+   with the dual-check verification strategy described above.
+7. Test on real hardware, then mark the profile `VERIFIED`.

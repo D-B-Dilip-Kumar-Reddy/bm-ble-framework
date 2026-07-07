@@ -71,10 +71,17 @@ non-zero value, which would otherwise be silently discarded.
 class Operation(IntEnum):
     ASSIGN = 0x00
     OFFSET = 0x01
+    CAMERA_REPORT = 0x02
 ```
 
 Fixed by the protocol spec (packet header byte 7). Lives in `codec.py`
 because it is a header structural field, not a payload data type.
+
+`CAMERA_REPORT` was added after a real sniffer capture on `POCKET_6K_G2 v7.9`
+showed every camera-originated `INCOMING_CONTROL` notification using this
+value — never seen on a controller-issued `ASSIGN` command. Its exact
+official spec meaning is unconfirmed; the name reflects what's been directly
+observed (see `docs/recording.md`, "The echo has been observed").
 
 ---
 

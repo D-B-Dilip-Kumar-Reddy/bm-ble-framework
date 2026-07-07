@@ -80,6 +80,7 @@ class CameraProfile:
     recording_reserved: int | None = None
     recording_start_value: int | None = None
     recording_stop_value: int | None = None
+    recording_echo_operation: int | None = None
 
     # Raw JSON for reference
     _raw: dict = field(default_factory=dict, repr=False, compare=False)
@@ -130,6 +131,7 @@ class CameraProfile:
             recording_reserved=recording.get("reserved"),
             recording_start_value=recording.get("start_value"),
             recording_stop_value=recording.get("stop_value"),
+            recording_echo_operation=recording.get("echo_operation"),
             _raw=raw,
         )
         return profile

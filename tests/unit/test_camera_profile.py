@@ -115,6 +115,7 @@ def test_camera_profile_resolves_recording_block():
             "reserved": 1,
             "start_value": 2,
             "stop_value": 0,
+            "echo_operation": 2,
         }
     }
 
@@ -126,6 +127,7 @@ def test_camera_profile_resolves_recording_block():
     assert profile.recording_reserved == 1
     assert profile.recording_start_value == 2
     assert profile.recording_stop_value == 0
+    assert profile.recording_echo_operation == 2
 
 
 def test_camera_profile_defaults_recording_fields_to_none_when_absent():
@@ -139,6 +141,7 @@ def test_camera_profile_defaults_recording_fields_to_none_when_absent():
     assert profile.recording_reserved is None
     assert profile.recording_start_value is None
     assert profile.recording_stop_value is None
+    assert profile.recording_echo_operation is None
 
 
 def test_pocket_6k_pro_profile_loads_without_recording_block():

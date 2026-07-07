@@ -173,7 +173,9 @@ Byte 3      Reserved
 Byte 4      Category
 Byte 5      Parameter
 Byte 6      Data type  (see protocol/types.py)
-Byte 7      Operation  (0x00 = assign, 0x01 = offset)
+Byte 7      Operation  (0x00 = assign, 0x01 = offset, 0x02 = camera report —
+            sniffer-verified on every camera-originated notification
+            captured so far; official spec meaning unconfirmed)
 Bytes 8+    Payload
 ```
 

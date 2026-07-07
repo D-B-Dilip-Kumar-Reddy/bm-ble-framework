@@ -17,12 +17,13 @@
     "readable": false
   },
   "recording": {
-    "_comment": "Reverse-engineered and byte-level cross-validated against a real captured command (see docs/recording.md); no live hardware round-trip echo has confirmed these yet.",
+    "_comment": "Reverse-engineered and byte-level cross-validated against both a real captured command and a real captured INCOMING_CONTROL echo (see docs/recording.md). echo_operation is the operation byte the camera itself uses when reporting this category/parameter (distinct from operation=0/ASSIGN used by the controller's command). No deterministic, tool-driven send-then-observe round trip has confirmed these yet.",
     "category": 10,
     "parameter": 1,
     "data_type": "BOOL",
     "reserved": 1,
     "start_value": 2,
-    "stop_value": 0
+    "stop_value": 0,
+    "echo_operation": 2
   }
 }

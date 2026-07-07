@@ -136,6 +136,23 @@ class TestDecodePacket:
         assert decoded_header == header
         assert decoded_payload == payload
 
+    def test_decode_packet_accepts_camera_report_operation(self):
+        """Operation 0x02 (CAMERA_REPORT) is sniffer-verified on real notifications."""
+        header = CommandHeader(
+            destination=DESTINATION_CAMERA,
+            command_id=0x00,
+            category=0x0A,
+            parameter=0x01,
+            data_type=DataType.BOOL,
+            operation=Operation.CAMERA_REPORT,
+        )
+        packet = encode_packet(header, payload=b"\x02")
+
+        decoded_header, decoded_payload = decode_packet(packet)
+
+        assert decoded_header.operation == Operation.CAMERA_REPORT
+        assert decoded_payload == b"\x02"
+
     def test_decode_packet_raises_when_too_short(self):
         """A buffer shorter than HEADER_LENGTH raises ValueError."""
         with pytest.raises(ValueError, match="too short"):

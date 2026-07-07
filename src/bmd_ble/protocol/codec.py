@@ -16,7 +16,10 @@ Packet structure (see CLAUDE.md):
     Byte 4      Category
     Byte 5      Parameter
     Byte 6      Data type
-    Byte 7      Operation  (0x00 = assign, 0x01 = offset)
+    Byte 7      Operation  (0x00 = assign, 0x01 = offset, 0x02 = camera
+                report — sniffer-verified on every camera-originated
+                notification captured so far; official spec meaning
+                unconfirmed)
     Bytes 8+    Payload
 
 This module only knows about the header. It has no knowledge of what a
@@ -48,6 +51,12 @@ class Operation(IntEnum):
 
     ASSIGN = 0x00
     OFFSET = 0x01
+    # Sniffer-verified on POCKET_6K_G2 v7.9: every camera-originated
+    # INCOMING_CONTROL notification captured so far uses this value (never
+    # seen on a controller-issued ASSIGN command). Distinguishes the camera
+    # reporting a value from the controller assigning one; exact official
+    # spec meaning unconfirmed.
+    CAMERA_REPORT = 0x02
 
 
 @dataclass(frozen=True)
