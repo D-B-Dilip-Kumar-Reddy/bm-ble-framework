@@ -23,8 +23,8 @@ import logging
 
 from bmd_ble import BMDVerificationError, CameraSession
 
-MODEL_KEY = "POCKET_6K_G2"
-FIRMWARE = "v7.9"
+MODEL_KEY = "URSA_MINI_PRO_12K"
+FIRMWARE = "v8.1"
 # MODEL_KEY = "POCKET_6K_PRO"
 # FIRMWARE = "v8.6"
 

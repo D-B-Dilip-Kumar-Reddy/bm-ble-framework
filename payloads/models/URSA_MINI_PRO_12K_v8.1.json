@@ -1,0 +1,41 @@
+{
+  "_meta": {
+    "model": "URSA Mini Pro 12K",
+    "model_key": "URSA_MINI_PRO_12K",
+    "firmware": "v8.1",
+    "ble_name": "A:AA9FFF0E",
+    "status": "UNVERIFIED"
+  },
+  "ble": {
+    "incoming_property": "indicate",
+    "_comment": "Add characteristic_incoming only to override the default INCOMING_CONTROL UUID in constants.py"
+  },
+  "gap_meta_data": {
+    "readable": true
+  },
+  "device_info_meta_data": {
+    "readable": true
+  },
+  "commands": {
+    "recording": {
+      "category": 10,
+      "parameter": 1,
+      "data_type": "BOOL",
+      "reserved": 1,
+      "values": {
+        "start": 2,
+        "stop": 0
+      },
+      "provenance": {
+        "status": "VERIFIED",
+        "method": "guided-discovery (tools/control/discover_command.py)",
+        "capture_refs": [
+          "C:\\Users\\7401378\\Desktop\\6K_G2\\bm-ble-framework\\tools\\captures\\URSA_MINI_PRO_12K_v8.1\\URSA_MINI_PRO_12K_v8.1_20260708T174114.json"
+        ],
+        "verified_on": "2026-07-08",
+        "notes": "Operator-confirmed outcomes: start, stop."
+      },
+      "echo_operation": 2
+    }
+  }
+}

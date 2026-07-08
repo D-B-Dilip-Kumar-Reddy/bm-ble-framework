@@ -4,8 +4,8 @@ import logging
 from bmd_ble.camera_profile import CameraProfile
 from bmd_ble.scanner import scan_for_camera
 
-MODEL_KEY = "POCKET_6K_G2"
-FIRMWARE = "v7.9"
+MODEL_KEY = "URSA_MINI_PRO_12K"
+FIRMWARE = "v8.1"
 
 
 async def main():
