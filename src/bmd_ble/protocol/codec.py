@@ -32,7 +32,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import IntEnum
 
-from .types import DataType
+from .types import DATA_TYPE_BYTE_WIDTHS, DATA_TYPE_STRUCT_FORMATS, DataType
 
 DESTINATION_CAMERA = 0xFF
 RESERVED_BYTE = 0x00
@@ -90,6 +90,39 @@ def encode_packet(header: CommandHeader, payload: bytes = b"") -> bytes:
             int(header.operation),
         ]
     ) + bytes(payload)
+
+
+def encode_assign(
+    *,
+    category: int,
+    parameter: int,
+    data_type: DataType,
+    value: int,
+    reserved: int = RESERVED_BYTE,
+    command_id: int = 0x00,
+) -> bytes:
+    """Encode an ASSIGN-operation command packet for any category/parameter.
+
+    Semantics-free: this function knows nothing about what the
+    category/parameter pair means. Callers supply every value from a
+    `CameraProfile` command block (or, for `tools/control/discover_command.py`,
+    from an operator-driven candidate sweep) — never hardcoded.
+    """
+    if data_type not in DATA_TYPE_STRUCT_FORMATS:
+        raise ValueError(f"Unsupported data type for assign payload: {data_type!r}")
+
+    header = CommandHeader(
+        destination=DESTINATION_CAMERA,
+        command_id=command_id,
+        category=category,
+        parameter=parameter,
+        data_type=data_type,
+        operation=Operation.ASSIGN,
+        reserved=reserved,
+    )
+    width = DATA_TYPE_BYTE_WIDTHS[data_type]
+    payload = value.to_bytes(width, byteorder="little", signed=value < 0)
+    return encode_packet(header, payload)
 
 
 def decode_packet(data: bytes) -> tuple[CommandHeader, bytes]:

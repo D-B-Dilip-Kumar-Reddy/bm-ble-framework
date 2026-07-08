@@ -13,6 +13,7 @@ from bmd_ble.protocol.codec import (
     CommandHeader,
     Operation,
     decode_packet,
+    encode_assign,
     encode_packet,
 )
 from bmd_ble.protocol.types import DataType
@@ -208,3 +209,32 @@ class TestDecodePacket:
         assert header.operation == Operation.ASSIGN
         assert header.reserved == 0x01
         assert payload == bytes([0x00])
+
+
+class TestEncodeAssign:
+    """Tests for the category-agnostic ``encode_assign``."""
+
+    def test_reproduces_known_g2_record_start_packet(self):
+        """Byte-for-byte match with the sniffer-verified POCKET_6K_G2 v7.9
+        record-start command (see docs/protocol.md §6)."""
+        packet = encode_assign(
+            category=0x0A, parameter=0x01, data_type=DataType.BOOL, value=2, reserved=0x01
+        )
+
+        assert packet == bytes([0xFF, 0x05, 0x00, 0x01, 0x0A, 0x01, 0x01, 0x00, 0x02])
+
+    def test_reserved_defaults_to_codec_reserved_byte(self):
+        packet = encode_assign(category=0x0A, parameter=0x01, data_type=DataType.BOOL, value=0)
+
+        assert packet[3] == RESERVED_BYTE
+
+    def test_multibyte_value_is_little_endian(self):
+        packet = encode_assign(
+            category=0x01, parameter=0x0E, data_type=DataType.INT32, value=0x00000320
+        )
+
+        assert packet[8:] == bytes([0x20, 0x03, 0x00, 0x00])
+
+    def test_unsupported_data_type_raises(self):
+        with pytest.raises(ValueError, match="Unsupported data type"):
+            encode_assign(category=0x0A, parameter=0x01, data_type=DataType.STRING, value=1)

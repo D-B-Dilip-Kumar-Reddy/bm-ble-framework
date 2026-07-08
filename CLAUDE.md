@@ -166,6 +166,7 @@ added, a new `docs/<feature>.md` must be created alongside the code change.
 | `docs/active_camera_control.md` | Active camera control — `write_outgoing_control`, `run_send_and_capture`, `tools/control/` tool-type segregation |
 | `docs/session_and_verification.md` | `CameraSession`, `NotificationRouter` echo buffering (`arm`/`wait_for`), why `CAMERA_STATUS` isn't a secondary cross-check for recording yet |
 | `docs/payload_profiles.md` | Profile JSON structure (`commands` map, `values`, `provenance`), `payloads/schema.json` load-time validation, `CommandSpec` API |
+| `docs/command_discovery.md` | Guided command discovery (`tools/control/discover_command.py`) — candidate sweep, operator confirmation, emitted profile blocks |
 
 ---
 
@@ -352,7 +353,7 @@ The echo must be buffered *before* the write is issued. A router that only start
 ## Workflow: Adding Support for a New Camera
 
 1. Run `tools/sniffers/` scripts while performing the target action on the camera (or, once a candidate command is known, `tools/control/` scripts to send it directly and capture the response)
-2. Analyse captured packets — extract category, parameter, data type, payload bytes
+2. Analyse captured packets — extract category, parameter, data type, payload bytes. For an unknown command, run `tools/control/discover_command.py`: it seeds from the passive capture, sweeps candidate values with operator confirmation, and emits the ready-to-paste `commands` block (see `docs/command_discovery.md`)
 3. Create or update `payloads/models/<MODEL_KEY>_<FIRMWARE>.json` with verified values
 4. Run `tools/query/ble_services_chars.py` to confirm UUIDs match expectations
 5. Add the tuple to `KNOWN_PROFILES` in `camera_profile.py`
