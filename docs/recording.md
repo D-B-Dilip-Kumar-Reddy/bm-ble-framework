@@ -43,12 +43,11 @@ start/stop is a state assignment, not a relative offset. `command_id` is
 **Real hardware does not use a plain boolean 0/1 payload.** `POCKET_6K_G2
 v7.9`'s reverse-engineered command uses `2` for start and `0` for stop, tagged
 with `data_type=BOOL`. `value: int` is therefore an explicit, required
-parameter sourced from the profile (`profile.recording_start_value` /
-`profile.recording_stop_value`), never assumed to be `1`/`0`. Likewise
-`reserved` is explicit (default `RESERVED_BYTE`) since the real captured
-command uses `reserved=0x01`, not the codec's generic `0x00` default —
-`profile.recording_reserved` should be passed through once `session.py`
-wires this up.
+parameter sourced from the profile's `commands.recording.values` map
+(`{"start": 2, "stop": 0}` — see `docs/payload_profiles.md`), never assumed
+to be `1`/`0`. Likewise `reserved` is explicit (default `RESERVED_BYTE`)
+since the real captured command uses `reserved=0x01`, not the codec's generic
+`0x00` default — `session.py` passes `CommandSpec.reserved` through.
 
 `decode_recording_state` still distinguishes recording (truthy) from stopped
 (falsy) via nonzero-vs-zero, but its payload-width check is "at least
@@ -107,8 +106,8 @@ meaning is **not understood yet** (not modeled in the profile JSON — only
 The echo also uses a different `Operation` value than the command:
 `operation=0x02`, sniffer-verified and added to `protocol/codec.py` as
 `Operation.CAMERA_REPORT` (the command itself uses `ASSIGN=0x00`). This is
-now stored as `recording.echo_operation` in the profile JSON and
-`CameraProfile.recording_echo_operation`.
+now stored as `commands.recording.echo_operation` in the profile JSON and
+surfaced as `CommandSpec.echo_operation`.
 
 This was found via **passive listening only** across two independent
 captures — no command was sent by this repo's tooling; the operator
@@ -144,12 +143,12 @@ Per CLAUDE.md, "Workflow: Adding a New Command":
 1. ~~Run `tools/sniffers/sniffer_recording.py` to capture real category,
    parameter, and payload bytes.~~ Done.
 2. ~~Add the confirmed values to `payloads/models/POCKET_6K_G2_v7.9.json`.~~
-   Done (`recording.category=10`, `parameter=1`, `data_type="BOOL"`,
-   `reserved=1`, `start_value=2`, `stop_value=0`, `echo_operation=2`).
+   Done (`commands.recording`: `category=10`, `parameter=1`,
+   `data_type="BOOL"`, `reserved=1`, `values={"start": 2, "stop": 0}`,
+   `echo_operation=2` — see `docs/payload_profiles.md` for the structure).
 3. ~~Extend `CameraProfile` with accessors for the new `recording` JSON
-   fields.~~ Done (`recording_category`, `recording_parameter`,
-   `recording_data_type`, `recording_reserved`, `recording_start_value`,
-   `recording_stop_value`, `recording_echo_operation`).
+   fields.~~ Done — `profile.require_command("recording", ("start", "stop"))`
+   returns a `CommandSpec` carrying the whole block.
 4. ~~Determine what a real `INCOMING_CONTROL` echo for this category looks
    like.~~ Done via passive listening — see "The echo has been observed."
 5. ~~Build a send-then-observe mode, and confirm the echo on real
@@ -169,5 +168,6 @@ Per CLAUDE.md, "Workflow: Adding a New Command":
    confirmed 3/3 start/stop cycles via echo verification on a real
    `POCKET_6K_G2 v7.9`. The profile's `_meta.status` stays `UNVERIFIED`
    overall (only recording is implemented; settings/media/metadata aren't
-   yet) — recording's own verification is recorded in the `recording` block's
-   `_comment` in `payloads/models/POCKET_6K_G2_v7.9.json`.
+   yet) — recording's own verification is recorded as structured
+   `commands.recording.provenance` data (`status: "VERIFIED"`, method,
+   capture refs, date) in `payloads/models/POCKET_6K_G2_v7.9.json`.

@@ -1,0 +1,141 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/D-B-Dilip-Kumar-Reddy/bm-ble-framework/payloads/schema.json",
+  "title": "BMD BLE camera payload profile",
+  "description": "Validates payloads/models/<MODEL_KEY>_<FIRMWARE>.json files at load time (camera_profile.validate_profile). Every protocol value in a profile must originate from a sniffer capture on that exact camera/firmware — see CLAUDE.md design principle 6 and docs/payload_profiles.md.",
+  "type": "object",
+  "required": ["_meta"],
+  "properties": {
+    "_meta": {
+      "type": "object",
+      "required": ["model", "model_key", "firmware", "ble_name", "status"],
+      "properties": {
+        "model": { "type": "string", "minLength": 1 },
+        "model_key": { "type": "string", "pattern": "^[A-Z0-9_]+$" },
+        "firmware": { "type": "string", "pattern": "^v[0-9]+(\\.[0-9]+)*$" },
+        "ble_name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Real BLE advertisement name broadcast by the camera — not a placeholder."
+        },
+        "status": {
+          "enum": ["VERIFIED", "UNVERIFIED"],
+          "description": "Whole-profile status. VERIFIED only after testing every populated section on real hardware. Per-command verification lives in commands.<name>.provenance.status."
+        }
+      },
+      "patternProperties": { "^_": {} },
+      "additionalProperties": false
+    },
+    "ble": {
+      "type": "object",
+      "properties": {
+        "incoming_property": { "enum": ["indicate", "notify"] },
+        "characteristic_incoming": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+          "description": "Only present when overriding the default INCOMING_CONTROL UUID in constants.py."
+        }
+      },
+      "patternProperties": { "^_": {} },
+      "additionalProperties": false
+    },
+    "gap_meta_data": { "$ref": "#/$defs/readableSection" },
+    "device_info_meta_data": { "$ref": "#/$defs/readableSection" },
+    "capabilities": {
+      "type": "object",
+      "description": "Explicit capability model (CLAUDE.md design principle 7), e.g. supports_raw / supports_photo / supports_playback. Populate only once confirmed on the camera.",
+      "patternProperties": { "^_": {} },
+      "additionalProperties": { "type": "boolean" }
+    },
+    "commands": {
+      "type": "object",
+      "description": "One block per sniffer-confirmed command family (recording, photo, playback, ...), keyed by command name.",
+      "patternProperties": { "^_": {} },
+      "additionalProperties": { "$ref": "#/$defs/command" }
+    },
+    "codec_ids": { "$ref": "#/$defs/intLookup" },
+    "quality_ids": { "$ref": "#/$defs/intLookup" },
+    "resolution_ids": { "$ref": "#/$defs/intLookup" },
+    "fps_encodings": {
+      "type": "object",
+      "description": "FPS label -> [fps_int, flags] pair, e.g. \"23.98\": [24, 2048]. Sniffer-sourced per model.",
+      "patternProperties": { "^_": {} },
+      "additionalProperties": {
+        "type": "array",
+        "items": { "type": "integer" },
+        "minItems": 2,
+        "maxItems": 2
+      }
+    },
+    "storage": {
+      "type": "object",
+      "description": "Per-camera storage-monitoring characteristics and decode hints. Deliberately loose until the first storage sniffer capture lands; tighten this definition then."
+    }
+  },
+  "patternProperties": { "^_": {} },
+  "additionalProperties": false,
+  "$defs": {
+    "byte": { "type": "integer", "minimum": 0, "maximum": 255 },
+    "readableSection": {
+      "type": "object",
+      "properties": { "readable": { "type": "boolean" } },
+      "patternProperties": { "^_": {} },
+      "additionalProperties": false
+    },
+    "intLookup": {
+      "type": "object",
+      "patternProperties": { "^_": {} },
+      "additionalProperties": { "type": "integer" }
+    },
+    "command": {
+      "type": "object",
+      "required": ["category", "parameter", "data_type", "values", "provenance"],
+      "properties": {
+        "category": { "$ref": "#/$defs/byte" },
+        "parameter": { "$ref": "#/$defs/byte" },
+        "data_type": {
+          "enum": ["VOID", "BOOL", "INT8", "INT16", "INT32", "INT64", "STRING", "FIXED16"],
+          "description": "Symbolic name matching protocol/types.py DataType."
+        },
+        "reserved": {
+          "$ref": "#/$defs/byte",
+          "description": "Header byte 3 as captured. Defaults to 0x00 when absent, but real cameras deviate (POCKET_6K_G2 v7.9 recording uses 0x01) — always record the captured value."
+        },
+        "operation": {
+          "$ref": "#/$defs/byte",
+          "description": "Command operation byte. Absent means ASSIGN (0x00), the only operation observed on controller-issued commands so far."
+        },
+        "values": {
+          "type": "object",
+          "minProperties": 1,
+          "description": "Named payload values, e.g. {\"start\": 2, \"stop\": 0}. Names are what code and the discovery tool address; integers are the sniffer-captured payload bytes.",
+          "patternProperties": { "^_": {} },
+          "additionalProperties": { "type": "integer" }
+        },
+        "echo_operation": {
+          "$ref": "#/$defs/byte",
+          "description": "Operation byte the camera uses when reporting this category/parameter on INCOMING_CONTROL (0x02 CAMERA_REPORT on every capture so far). Raw integer so an unknown future value still round-trips."
+        },
+        "provenance": { "$ref": "#/$defs/provenance" }
+      },
+      "patternProperties": { "^_": {} },
+      "additionalProperties": false
+    },
+    "provenance": {
+      "type": "object",
+      "required": ["status"],
+      "properties": {
+        "status": {
+          "enum": ["VERIFIED", "UNVERIFIED", "CANDIDATE"],
+          "description": "Per-command verification state: VERIFIED = confirmed on real hardware, CANDIDATE = discovered but awaiting a repeat confirmation, UNVERIFIED = copied/assumed (should not normally exist — sniff instead)."
+        },
+        "method": { "type": "string" },
+        "capture_refs": { "type": "array", "items": { "type": "string" } },
+        "verified_on": { "type": "string" },
+        "notes": { "type": "string" }
+      },
+      "patternProperties": { "^_": {} },
+      "additionalProperties": false
+    }
+  }
+}

@@ -1,1 +1,2 @@
 bleak>=0.21.1           # Cross-platform BLE client
+jsonschema>=4.21        # Validates payloads/models/*.json against payloads/schema.json at load time

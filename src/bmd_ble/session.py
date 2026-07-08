@@ -26,25 +26,6 @@ from .protocol.categories.recording import (
 )
 from .scanner import scan_for_camera
 
-_RECORDING_FIELDS = (
-    "recording_category",
-    "recording_parameter",
-    "recording_data_type",
-    "recording_start_value",
-    "recording_stop_value",
-)
-
-
-def require_recording_fields(profile: CameraProfile) -> None:
-    """Raise ValueError naming any unpopulated recording_* profile field."""
-    missing = [name for name in _RECORDING_FIELDS if getattr(profile, name) is None]
-    if missing:
-        raise ValueError(
-            f"Profile {profile.model_key}_{profile.firmware} is missing recording fields: "
-            f"{', '.join(missing)} — populate payloads/models/{profile.model_key}_"
-            f"{profile.firmware}.json's 'recording' block first."
-        )
-
 
 class CameraSession:
     """Async context manager: connect, verified operations, disconnect."""
@@ -76,18 +57,17 @@ class CameraSession:
         await self._set_recording_state(recording=False)
 
     async def _set_recording_state(self, *, recording: bool) -> None:
-        require_recording_fields(self.profile)
-        profile = self.profile
-        category = profile.recording_category
-        parameter = profile.recording_parameter
-        value = profile.recording_start_value if recording else profile.recording_stop_value
+        spec = self.profile.require_command("recording", ("start", "stop"))
+        category = spec.category
+        parameter = spec.parameter
+        value = spec.values["start" if recording else "stop"]
         encode = encode_record_start if recording else encode_record_stop
         command = encode(
             category=category,
             parameter=parameter,
-            data_type=profile.recording_data_type,
+            data_type=spec.data_type,
             value=value,
-            reserved=profile.recording_reserved,
+            reserved=spec.reserved,
         )
 
         action = "record_start" if recording else "record_stop"
@@ -100,7 +80,7 @@ class CameraSession:
             raise BMDVerificationError(f"{action}: no echo received within {self.echo_timeout_s}s")
 
         _header, payload = result
-        confirmed = decode_recording_state(payload, profile.recording_data_type)
+        confirmed = decode_recording_state(payload, spec.data_type)
         if confirmed != recording:
             raise BMDVerificationError(
                 f"{action}: echo confirmed recording={confirmed}, expected {recording}"

@@ -8,8 +8,8 @@ this tool triggers the action itself via
 BMDCameraController.write_outgoing_control — it WILL start and stop
 recording on the connected camera.
 
-Command bytes are built from CameraProfile's recording_* fields (never
-hardcoded) — see payloads/models/POCKET_6K_G2_v7.9.json and
+Command bytes are built from the profile's `commands.recording` block
+(never hardcoded) — see payloads/models/POCKET_6K_G2_v7.9.json and
 docs/recording.md.
 
 Usage:
@@ -35,7 +35,6 @@ from bmd_ble.protocol.categories.recording import (  # noqa: E402
     encode_record_stop,
 )
 from bmd_ble.scanner import scan_for_camera  # noqa: E402
-from bmd_ble.session import require_recording_fields  # noqa: E402
 
 DEFAULT_MODEL_KEY = "POCKET_6K_G2"
 DEFAULT_FIRMWARE = "v7.9"
@@ -43,21 +42,21 @@ DEFAULT_FIRMWARE = "v7.9"
 
 async def run(args: argparse.Namespace) -> int:
     profile = CameraProfile.for_model(model_key=args.model_key, firmware=args.firmware)
-    require_recording_fields(profile)
+    spec = profile.require_command("recording", ("start", "stop"))
 
     start_bytes = encode_record_start(
-        category=profile.recording_category,
-        parameter=profile.recording_parameter,
-        data_type=profile.recording_data_type,
-        value=profile.recording_start_value,
-        reserved=profile.recording_reserved,
+        category=spec.category,
+        parameter=spec.parameter,
+        data_type=spec.data_type,
+        value=spec.values["start"],
+        reserved=spec.reserved,
     )
     stop_bytes = encode_record_stop(
-        category=profile.recording_category,
-        parameter=profile.recording_parameter,
-        data_type=profile.recording_data_type,
-        value=profile.recording_stop_value,
-        reserved=profile.recording_reserved,
+        category=spec.category,
+        parameter=spec.parameter,
+        data_type=spec.data_type,
+        value=spec.values["stop"],
+        reserved=spec.reserved,
     )
 
     discovered = await scan_for_camera(profile.ble_name, timeout=args.timeout)

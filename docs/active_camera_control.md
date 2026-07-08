@@ -66,8 +66,8 @@ category isn't echoed at all, or the timing needs adjusting).
 
 ## `tools/control/send_record_command.py`
 
-The first consumer. Builds the record start/stop command bytes from
-`CameraProfile`'s `recording_*` fields (never hardcoded — see
+The first consumer. Builds the record start/stop command bytes from the
+profile's `commands.recording` block (never hardcoded — see
 `payloads/models/POCKET_6K_G2_v7.9.json` and `docs/recording.md`), connects,
 sends `record_start`, waits `--hold-seconds` (so something is actually
 recorded), sends `record_stop`, and saves the combined capture.
@@ -79,8 +79,9 @@ captures already found the same echo signature (category `0x0A`/parameter
 that same evidence on demand, on command, rather than waiting for a
 manually-triggered action to land inside a passive capture window.
 
-Requires the profile's `recording` block to be fully populated — raises a
-clear `ValueError` naming which fields are missing otherwise, rather than
+Requires the profile's `commands.recording` block to be fully populated
+(`profile.require_command("recording", ("start", "stop"))`) — raises a clear
+`ValueError` naming the missing block or value names otherwise, rather than
 sending a malformed command.
 
 ---

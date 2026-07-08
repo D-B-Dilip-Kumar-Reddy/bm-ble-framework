@@ -8,7 +8,7 @@
   },
   "ble": {
     "incoming_property": "indicate",
-    "_comment": "Use this to overwrite default service/characteristic UUIDs in constants.py"
+    "_comment": "Add characteristic_incoming only to override the default INCOMING_CONTROL UUID in constants.py"
   },
   "gap_meta_data": {
     "readable": false
@@ -16,14 +16,26 @@
   "device_info_meta_data": {
     "readable": false
   },
-  "recording": {
-    "_comment": "Reverse-engineered and byte-level cross-validated against both a real captured command and a real captured INCOMING_CONTROL echo (see docs/recording.md). echo_operation is the operation byte the camera itself uses when reporting this category/parameter (distinct from operation=0/ASSIGN used by the controller's command). Confirmed via CameraSession's echo-based verification (examples/record_start_stop.py) across 3/3 consistent start/stop cycles on real hardware.",
-    "category": 10,
-    "parameter": 1,
-    "data_type": "BOOL",
-    "reserved": 1,
-    "start_value": 2,
-    "stop_value": 0,
-    "echo_operation": 2
+  "commands": {
+    "recording": {
+      "category": 10,
+      "parameter": 1,
+      "data_type": "BOOL",
+      "reserved": 1,
+      "values": {
+        "start": 2,
+        "stop": 0
+      },
+      "echo_operation": 2,
+      "provenance": {
+        "status": "VERIFIED",
+        "method": "passive sniffer + active send-and-capture + echo-verified CameraSession",
+        "capture_refs": [
+          "tools/captures/POCKET_6K_G2_v7.9/ (local, gitignored)"
+        ],
+        "verified_on": "2026-06-19",
+        "notes": "3/3 start/stop cycles echo-verified on real hardware via examples/record_start_stop.py. echo_operation is the operation byte the camera itself uses when reporting this category/parameter (distinct from ASSIGN used by the controller's command). Echo payload trailing bytes 00 40 00 01 03 not yet understood — hypothesis: SDI Cat 10 Param 1 transport-mode struct, see docs/protocol.md."
+      }
+    }
   }
 }
