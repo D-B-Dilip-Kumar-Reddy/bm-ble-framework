@@ -158,6 +158,7 @@ added, a new `docs/<feature>.md` must be created alongside the code change.
 
 | File | Covers |
 |---|---|
+| `docs/protocol.md` | **Full protocol reference** — SDI camera control categories/parameters, data types, operations, BLE GATT layer, spec-vs-sniffer divergences. Read before any protocol work |
 | `docs/winrt_ble_connection_hardening.md` | BLE reconnect loop, WinRT liveness detection, generation guards, connect-lock |
 | `docs/event_subscription_and_logging.md` | Notification subscription strategy (`subscribe_all`), generation-guarding wrapper, per-session file logging |
 | `docs/recording.md` | Record start/stop category scaffold, verification and storage-precondition strategy, remaining sniffer work |
@@ -170,7 +171,7 @@ added, a new `docs/<feature>.md` must be created alongside the code change.
 
 ## BMD BLE Protocol
 
-Commands are written as binary packets to `OUTGOING_CONTROL`. Echoes and responses arrive on `INCOMING_CONTROL`.
+Commands are written as binary packets to `OUTGOING_CONTROL`. Echoes and responses arrive on `INCOMING_CONTROL`. This section is the quick summary — `docs/protocol.md` is the full reference (all SDI categories/parameters, data-type coding discrepancy, transport-mode echo hypothesis) and must be read before any protocol work.
 
 ### Packet structure
 
