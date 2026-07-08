@@ -16,43 +16,35 @@ principles 1 and 6).
 STATUS
 ------
 Category/parameter/data_type/payload values for ``POCKET_6K_G2 v7.9`` are
-reverse-engineered and byte-level cross-validated against both a real
-captured command and a real captured ``INCOMING_CONTROL`` echo (see
-``payloads/models/POCKET_6K_G2_v7.9.json`` and ``docs/recording.md``) — real
-hardware does not use a plain boolean 0/1 payload; record start is ``2``,
-stop is ``0``. The echo uses a third ``Operation`` value (``CAMERA_REPORT``,
-``0x02``) and a longer payload than the assign-style command. No
-deterministic, tool-driven send-then-observe round trip has been performed
-yet (the echo was found in a passive listen-only capture), so the profile
-stays ``UNVERIFIED``. See docs/recording.md for details and remaining work.
+reverse-engineered and confirmed on real hardware — byte-level
+cross-validated against captured command and ``INCOMING_CONTROL`` echo, then
+verified live across 3/3 start/stop cycles via ``CameraSession``'s echo
+check (see ``payloads/models/POCKET_6K_G2_v7.9.json``'s
+``commands.recording.provenance`` and ``docs/recording.md``). Real hardware
+does not use a plain boolean 0/1 payload; record start is ``2``, stop is
+``0`` (SDI transport-mode semantics — see ``docs/protocol.md`` §6). The
+echo uses a third ``Operation`` value (``CAMERA_REPORT``, ``0x02``) and a
+longer payload than the assign-style command.
 """
 
 from __future__ import annotations
 
 import struct
 
-from ..codec import DESTINATION_CAMERA, RESERVED_BYTE, CommandHeader, Operation, encode_packet
+from ..codec import RESERVED_BYTE, CommandHeader, encode_assign
 from ..types import DATA_TYPE_BYTE_WIDTHS, DATA_TYPE_STRUCT_FORMATS, DataType
 
 
 def _encode_recording_state(
     category: int, parameter: int, data_type: DataType, value: int, reserved: int
 ) -> bytes:
-    if data_type not in DATA_TYPE_STRUCT_FORMATS:
-        raise ValueError(f"Unsupported data type for recording state payload: {data_type!r}")
-
-    header = CommandHeader(
-        destination=DESTINATION_CAMERA,
-        command_id=0x00,
+    return encode_assign(
         category=category,
         parameter=parameter,
         data_type=data_type,
-        operation=Operation.ASSIGN,
+        value=value,
         reserved=reserved,
     )
-    width = DATA_TYPE_BYTE_WIDTHS[data_type]
-    payload = value.to_bytes(width, byteorder="little", signed=value < 0)
-    return encode_packet(header, payload)
 
 
 def encode_record_start(

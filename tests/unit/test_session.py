@@ -1,37 +1,44 @@
 """Unit tests for :mod:`bmd_ble.session`.
 
-Mocks BMDCameraController and NotificationRouter — no real BLE.
+Mocks BMDCameraController and NotificationRouter — no real BLE. The profile
+is a real CameraProfile built via the lenient `_from_raw` (see
+test_camera_profile.py) so `require_command` behaves exactly as in
+production.
 """
 
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from bmd_ble.camera_profile import CameraProfile
 from bmd_ble.exceptions import BMDVerificationError
-from bmd_ble.protocol.types import DataType
-from bmd_ble.session import CameraSession, require_recording_fields
+from bmd_ble.session import CameraSession
 
 MODEL_KEY = "POCKET_6K_G2"
 FIRMWARE = "v7.9"
 
 
-def make_profile(**overrides) -> SimpleNamespace:
-    defaults = dict(
-        model_key=MODEL_KEY,
-        firmware=FIRMWARE,
-        recording_category=0x0A,
-        recording_parameter=0x01,
-        recording_data_type=DataType.BOOL,
-        recording_reserved=0x01,
-        recording_start_value=2,
-        recording_stop_value=0,
-    )
-    defaults.update(overrides)
-    return SimpleNamespace(**defaults)
+def make_profile(recording_block: dict | str = "default") -> CameraProfile:
+    """A real CameraProfile with a controllable `commands.recording` block.
+
+    Pass ``recording_block=None`` for a profile without the block, or a dict
+    to override the default sniffer-verified G2 values.
+    """
+    if recording_block == "default":
+        recording_block = {
+            "category": 0x0A,
+            "parameter": 0x01,
+            "data_type": "BOOL",
+            "reserved": 0x01,
+            "values": {"start": 2, "stop": 0},
+        }
+    raw = {"_meta": {"model": "Pocket 6K G2", "ble_name": "A:TEST"}}
+    if recording_block is not None:
+        raw["commands"] = {"recording": recording_block}
+    return CameraProfile._from_raw(MODEL_KEY, FIRMWARE, raw)
 
 
-def make_session(profile: SimpleNamespace) -> CameraSession:
+def make_session(profile: CameraProfile) -> CameraSession:
     """Build a CameraSession with a fake profile and mocked collaborators,
     bypassing __init__'s real CameraProfile.for_model lookup."""
     session = CameraSession.__new__(CameraSession)
@@ -43,22 +50,12 @@ def make_session(profile: SimpleNamespace) -> CameraSession:
     return session
 
 
-class TestRequireRecordingFields:
-    def test_passes_when_all_fields_present(self):
-        require_recording_fields(make_profile())
-
-    def test_raises_naming_missing_fields(self):
-        profile = make_profile(recording_category=None, recording_start_value=None)
-        with pytest.raises(ValueError, match="recording_category, recording_start_value"):
-            require_recording_fields(profile)
-
-
 class TestSetRecordingState:
     @pytest.mark.asyncio
     async def test_record_start_succeeds_on_matching_echo(self):
         session = make_session(make_profile())
         session._router.wait_for.return_value = (
-            SimpleNamespace(category=0x0A, parameter=0x01),
+            MagicMock(category=0x0A, parameter=0x01),
             bytes([0x02]),
         )
 
@@ -72,7 +69,7 @@ class TestSetRecordingState:
     async def test_record_stop_succeeds_on_matching_echo(self):
         session = make_session(make_profile())
         session._router.wait_for.return_value = (
-            SimpleNamespace(category=0x0A, parameter=0x01),
+            MagicMock(category=0x0A, parameter=0x01),
             bytes([0x00]),
         )
 
@@ -91,7 +88,7 @@ class TestSetRecordingState:
         session = make_session(make_profile())
         # Echo says still stopped (leading byte 0) even though we asked to start.
         session._router.wait_for.return_value = (
-            SimpleNamespace(category=0x0A, parameter=0x01),
+            MagicMock(category=0x0A, parameter=0x01),
             bytes([0x00]),
         )
 
@@ -99,10 +96,25 @@ class TestSetRecordingState:
             await session.record_start()
 
     @pytest.mark.asyncio
-    async def test_raises_before_writing_when_recording_fields_missing(self):
-        session = make_session(make_profile(recording_category=None))
+    async def test_raises_before_writing_when_recording_block_missing(self):
+        session = make_session(make_profile(recording_block=None))
 
-        with pytest.raises(ValueError, match="recording_category"):
+        with pytest.raises(ValueError, match="no 'recording' command block"):
+            await session.record_start()
+
+        session._controller.write_outgoing_control.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_raises_before_writing_when_value_missing(self):
+        block = {
+            "category": 0x0A,
+            "parameter": 0x01,
+            "data_type": "BOOL",
+            "values": {"start": 2},
+        }
+        session = make_session(make_profile(recording_block=block))
+
+        with pytest.raises(ValueError, match="missing.*values: stop"):
             await session.record_start()
 
         session._controller.write_outgoing_control.assert_not_awaited()

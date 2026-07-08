@@ -56,8 +56,9 @@ async with CameraSession("POCKET_6K_G2", "v7.9") as session:
 
 `__aenter__` loads the `CameraProfile`, scans, connects, and subscribes the
 router — in that order, so buffering is active before any command could ever
-be sent. `record_start`/`record_stop` build the command from
-`CameraProfile.recording_*` fields (via
+be sent. `record_start`/`record_stop` build the command from the profile's
+`commands.recording` block (`profile.require_command("recording", ("start",
+"stop"))` → a `CommandSpec`, encoded via
 `protocol.categories.recording.encode_record_start`/`encode_record_stop` —
 never hardcoded), `arm` the router, write the command, then `wait_for` a
 matching echo within `echo_timeout_s` (default `2.0`, per CLAUDE.md's
@@ -66,10 +67,12 @@ still-stopped after a start command, or vice versa) raises
 `BMDVerificationError` — the method only returns normally once the echo has
 positively confirmed the requested state.
 
-`require_recording_fields(profile)` raises a clear `ValueError` naming any
-missing `recording_*` profile field *before* attempting to build or send a
-command — reused by `tools/control/send_record_command.py` too, so both
-places fail the same way on an unpopulated profile.
+`profile.require_command("recording", ("start", "stop"))` raises a clear
+`ValueError` naming the missing command block or value names *before*
+attempting to build or send a command — used by
+`tools/control/send_record_command.py` too, so both places fail the same way
+on an unpopulated profile. See `docs/payload_profiles.md` for the profile
+structure.
 
 ### Why `CAMERA_STATUS` isn't used as a secondary cross-check here
 

@@ -65,6 +65,14 @@ The reserved byte is not validated against `RESERVED_BYTE` on decode — it is
 surfaced as-is on `CommandHeader.reserved` in case real hardware ever sends a
 non-zero value, which would otherwise be silently discarded.
 
+`encode_assign(*, category, parameter, data_type, value, reserved=RESERVED_BYTE,
+command_id=0x00)` builds a complete ASSIGN-operation command packet (header +
+little-endian payload) for any category/parameter — the codec now owns
+generic assign-packet building, still with zero category *semantics*: every
+value is caller-supplied, from a `CameraProfile` command block or from
+`tools/control/discover_command.py`'s candidate sweep.
+`protocol/categories/recording.py`'s encoder delegates to it.
+
 ### `Operation`
 
 ```python

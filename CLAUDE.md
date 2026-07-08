@@ -158,18 +158,21 @@ added, a new `docs/<feature>.md` must be created alongside the code change.
 
 | File | Covers |
 |---|---|
+| `docs/protocol.md` | **Full protocol reference** — SDI camera control categories/parameters, data types, operations, BLE GATT layer, spec-vs-sniffer divergences. Read before any protocol work |
 | `docs/winrt_ble_connection_hardening.md` | BLE reconnect loop, WinRT liveness detection, generation guards, connect-lock |
 | `docs/event_subscription_and_logging.md` | Notification subscription strategy (`subscribe_all`), generation-guarding wrapper, per-session file logging |
 | `docs/recording.md` | Record start/stop category scaffold, verification and storage-precondition strategy, remaining sniffer work |
 | `docs/sniffer_capture_engine.md` | Reusable BLE-notification capture engine (`tools/common/capture.py`) driving labeled operator-triggered capture windows |
 | `docs/active_camera_control.md` | Active camera control — `write_outgoing_control`, `run_send_and_capture`, `tools/control/` tool-type segregation |
 | `docs/session_and_verification.md` | `CameraSession`, `NotificationRouter` echo buffering (`arm`/`wait_for`), why `CAMERA_STATUS` isn't a secondary cross-check for recording yet |
+| `docs/payload_profiles.md` | Profile JSON structure (`commands` map, `values`, `provenance`), `payloads/schema.json` load-time validation, `CommandSpec` API |
+| `docs/command_discovery.md` | Guided command discovery (`tools/control/discover_command.py`) — candidate sweep, operator confirmation, emitted profile blocks |
 
 ---
 
 ## BMD BLE Protocol
 
-Commands are written as binary packets to `OUTGOING_CONTROL`. Echoes and responses arrive on `INCOMING_CONTROL`.
+Commands are written as binary packets to `OUTGOING_CONTROL`. Echoes and responses arrive on `INCOMING_CONTROL`. This section is the quick summary — `docs/protocol.md` is the full reference (all SDI categories/parameters, data-type coding discrepancy, transport-mode echo hypothesis) and must be read before any protocol work.
 
 ### Packet structure
 
@@ -221,7 +224,7 @@ Populate this table as categories are confirmed from sniffer sessions. Each cate
 
 ## Payload JSON Structure
 
-`payloads/models/<MODEL_KEY>_<FIRMWARE>.json`:
+`payloads/models/<MODEL_KEY>_<FIRMWARE>.json` — validated against `payloads/schema.json` at load time (see `docs/payload_profiles.md` for the full design and rationale):
 
 ```json
 {
@@ -236,19 +239,34 @@ Populate this table as categories are confirmed from sniffer sessions. Each cate
     "incoming_property": "indicate",
     "_comment": "Add characteristic_incoming only if overriding the default UUID in constants.py"
   },
-  "capabilities": {
-    "supports_raw": true,
-    "supports_photo": true,
-    "supports_playback": true
-  },
   "gap_meta_data": { "readable": false },
   "device_info_meta_data": { "readable": true },
+  "commands": {
+    "recording": {
+      "category": 10,
+      "parameter": 1,
+      "data_type": "BOOL",
+      "reserved": 1,
+      "values": { "start": 2, "stop": 0 },
+      "echo_operation": 2,
+      "provenance": {
+        "status": "VERIFIED | UNVERIFIED | CANDIDATE",
+        "method": "how the values were obtained",
+        "capture_refs": ["tools/captures/..."],
+        "verified_on": "YYYY-MM-DD",
+        "notes": "..."
+      }
+    }
+  },
+  "capabilities":   { "supports_raw": true, "supports_photo": true, "supports_playback": true },
   "codec_ids":      { "BRAW": 3, "H265": 2 },
   "quality_ids":    { "5:1": 3, "8:1": 2 },
   "resolution_ids": { "6144x3456": 0 },
   "fps_encodings":  { "23.98": [24, 2048], "25": [25, 0] }
 }
 ```
+
+Every sniffer-confirmed command family gets one block under `commands`, all the same shape: protocol coordinates, a named `values` map, the observed `echo_operation`, and structured `provenance` (per-command verification state — `_meta.status` still describes the profile as a whole). `capabilities` and the lookup-table sections are reserved in the schema but only populated once sniffed on that camera. Code reads commands via `profile.require_command(name, value_names)` → `CommandSpec`.
 
 All protocol values come from sniffer captures. `status` is set to `"VERIFIED"` only after testing on real hardware.
 
@@ -335,7 +353,7 @@ The echo must be buffered *before* the write is issued. A router that only start
 ## Workflow: Adding Support for a New Camera
 
 1. Run `tools/sniffers/` scripts while performing the target action on the camera (or, once a candidate command is known, `tools/control/` scripts to send it directly and capture the response)
-2. Analyse captured packets — extract category, parameter, data type, payload bytes
+2. Analyse captured packets — extract category, parameter, data type, payload bytes. For an unknown command, run `tools/control/discover_command.py`: it seeds from the passive capture, sweeps candidate values with operator confirmation, and emits the ready-to-paste `commands` block (see `docs/command_discovery.md`)
 3. Create or update `payloads/models/<MODEL_KEY>_<FIRMWARE>.json` with verified values
 4. Run `tools/query/ble_services_chars.py` to confirm UUIDs match expectations
 5. Add the tuple to `KNOWN_PROFILES` in `camera_profile.py`
