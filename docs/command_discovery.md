@@ -101,32 +101,135 @@ emits a block without `echo_operation` — the schema permits that.
 
 ## Worked example: recording on POCKET_6K_PRO v8.6
 
-The reason this tool exists. Step by step on the real camera:
+The reason this tool exists, walked through step by step on the real camera.
 
-```
-# 1. Passive capture: toggle record on the camera body during the two windows
+### Step 1 — Get a passive capture first (recommended)
+
+Before sweeping candidates, capture what the camera reports while a human
+triggers the action on the camera body. This seeds the sweep with the right
+`(category, parameter, data_type)` instead of guessing blind.
+
+```bash
 python tools/sniffers/sniffer_recording.py --model-key POCKET_6K_PRO --firmware v8.6
+```
 
-# 2. Guided sweep, seeded from that capture.
-#    values 2,0: the G2 (and SDI spec transport-mode) suggest 2=record, 0=preview
-#    reserved 1,0: the G2's real command needed reserved=1 — try that first
-#    restore-value 0: auto-send the suspected stop value after each hit
+This prompts you to press Enter, physically start recording on the camera,
+press Enter again, then repeat for stop. It saves a JSON file under
+`tools/captures/POCKET_6K_PRO_v8.6/<timestamp>.json` — note that path.
+
+(You can skip this and pass `--category`/`--parameter`/`--data-type`
+manually instead if you already know the coordinates from
+`docs/protocol.md`'s `[spec]` tables.)
+
+### Step 2 — Run the discovery sweep
+
+```bash
 python tools/control/discover_command.py \
     --model-key POCKET_6K_PRO --firmware v8.6 \
     --label recording \
-    --from-capture tools/captures/POCKET_6K_PRO_v8.6/<capture>.json \
-    --values 2,0 --reserved 1,0 \
+    --from-capture tools/captures/POCKET_6K_PRO_v8.6/<the-file-from-step-1>.json \
+    --values 2,0 \
+    --reserved 1,0 \
     --outcomes start,stop \
     --restore-value 0
+```
 
-# 3. Paste the emitted "recording" block into
-#    payloads/models/POCKET_6K_PRO_v8.6.json's "commands" map
-python -m pytest tests/unit    # schema-validates the pasted block
+Flag meaning:
 
-# 4. Confirm end-to-end through the verified session path
+| Flag | Meaning |
+|---|---|
+| `--model-key` / `--firmware` | Required, no defaults — forces you to be explicit about which camera. |
+| `--label` | Name for the emitted block (`recording`, `photo`, whatever command family you're discovering). |
+| `--from-capture` | The JSON from step 1 (or omit and use `--category`/`--parameter`/`--data-type` instead). |
+| `--values` | Comma-separated payload values to try, most-likely first. `2,0` mirrors the G2's known start/stop values. |
+| `--reserved` | Comma-separated reserved-byte values to try. Default `0`; the G2 needed `1`, so try `1,0` on another Pocket-line camera. |
+| `--outcomes` | Names you'll be asked to confirm, matched 1:1 to what you expect the values to do. |
+| `--restore-value` | Optional; auto-sends this value after a state-changing hit to put the camera back to idle (e.g. `0` = stop) instead of prompting you to restore it by hand. |
+
+### Step 3 — Confirm the sweep plan
+
+The tool prints every candidate it's about to send (exact TX bytes) and asks:
+
+```
+Type 'yes' to proceed:
+```
+
+This is your last chance to bail before anything touches the camera — type
+`yes` to continue.
+
+### Step 4 — Connect and probe candidates one at a time
+
+It scans for and connects to the camera, then for each candidate:
+
+1. Sends the command.
+2. Listens for `--listen-seconds` (default 3s) and shows you the decoded
+   response.
+3. Asks:
+   ```
+   What did the camera physically do?
+     [1] start  [2] stop  [n] nothing  [r] repeat  [q] quit sweep:
+   ```
+4. **Look at the physical camera** and answer based on what it actually
+   did — not the echo. Type the number matching the outcome, `n` if
+   nothing happened, `r` to resend the same candidate, or `q` to stop early.
+
+After a confirmed state-change, the camera is either auto-restored (via
+`--restore-value`) or you'll be prompted to restore it manually (e.g. stop
+recording on the body) before the next candidate.
+
+### Step 5 — Get the emitted block
+
+Once you've confirmed all outcomes (or quit early), it:
+
+1. Saves the full capture (all candidates + responses) to `tools/captures/`
+   as evidence.
+2. Prints a ready-to-paste JSON block, e.g.:
+
+```json
+{
+  "recording": {
+    "category": 10,
+    "parameter": 1,
+    "data_type": "BOOL",
+    "reserved": 1,
+    "values": { "start": 2, "stop": 0 },
+    "echo_operation": 2,
+    "provenance": {
+      "status": "VERIFIED",
+      "method": "guided-discovery (tools/control/discover_command.py)",
+      "capture_refs": ["tools/captures/POCKET_6K_PRO_v8.6/..."],
+      "verified_on": "2026-07-08",
+      "notes": "Operator-confirmed outcomes: start, stop."
+    }
+  }
+}
+```
+
+### Step 6 — Paste it into the profile and validate
+
+Copy that block into `payloads/models/POCKET_6K_PRO_v8.6.json`'s
+`"commands"` map (replacing the placeholder `_comment`), then run:
+
+```bash
+python -m pytest tests/unit
+```
+
+This validates the pasted block against `payloads/schema.json` immediately
+— if you made a typo or the shape's wrong, it fails here rather than at
+camera-connect time.
+
+### Step 7 — Confirm end-to-end through the real session path
+
+```bash
 python tools/control/send_record_command.py --model-key POCKET_6K_PRO --firmware v8.6
 python examples/record_start_stop.py   # adjust model/firmware constants
 ```
+
+This replays start/stop using the profile block you just added and
+captures the response, closing the loop from "discovered" to "usable by
+`CameraSession`."
+
+### Notes
 
 The G2-derived seeds (`--values 2,0`, `--reserved 1,0`) are *hypotheses to
 test on the PRO*, not values to copy — that is exactly what the sweep is
@@ -136,9 +239,15 @@ principle requires.
 
 Note the emitted block's provenance is `status: "VERIFIED"` with
 `method: "guided-discovery"` — the operator physically watched the camera
-act. Repeat cycles through `examples/record_start_stop.py` (step 4) remain
+act. Repeat cycles through `examples/record_start_stop.py` (step 7) remain
 the bar for calling the *session path* verified, mirroring how the G2 was
 done (3/3 cycles).
+
+A caveat worth expecting on an unfamiliar camera: if the PRO's echo uses
+operation/data-type bytes this codebase doesn't recognize yet, step 4's
+decoded response may show a decode error instead of clean output — that's
+fine, your own eyes on the camera are what matter for confirmation, and the
+raw hex is still captured as evidence either way (see "Safety model" above).
 
 ---
 
