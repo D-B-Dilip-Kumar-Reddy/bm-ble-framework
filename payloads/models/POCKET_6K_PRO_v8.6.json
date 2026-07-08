@@ -17,6 +17,25 @@
     "readable": true
   },
   "commands": {
-    "_comment": "Empty until sniffed on this camera/firmware — never copy values from another model (CLAUDE.md design principle 6). Use tools/control/discover_command.py to populate."
+    "recording": {
+      "category": 10,
+      "parameter": 1,
+      "data_type": "BOOL",
+      "reserved": 1,
+      "values": {
+        "start": 2,
+        "stop": 0
+      },
+      "provenance": {
+        "status": "VERIFIED",
+        "method": "guided-discovery (tools/control/discover_command.py)",
+        "capture_refs": [
+          "C:\\Users\\7401378\\Desktop\\6K_G2\\bm-ble-framework\\tools\\captures\\POCKET_6K_PRO_v8.6\\POCKET_6K_PRO_v8.6_20260708T153127.json"
+        ],
+        "verified_on": "2026-07-08",
+        "notes": "Operator-confirmed outcomes: start, stop."
+      },
+      "echo_operation": 2
+    }
   }
 }
