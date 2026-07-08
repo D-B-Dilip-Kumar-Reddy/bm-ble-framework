@@ -265,11 +265,16 @@ class TestRequireCommand:
             profile.require_command("recording", ("start", "stop"))
 
 
-def test_pocket_6k_pro_profile_loads_without_recording_command():
-    """POCKET_6K_PRO_v8.6.json has an empty `commands` map — must load
-    cleanly, and require_command must point at the discovery workflow."""
+def test_pocket_6k_pro_profile_resolves_recording_command():
+    """POCKET_6K_PRO_v8.6.json's recording block was populated via
+    tools/control/discover_command.py on real hardware — must load and
+    resolve identically to the G2's (same category/parameter/values)."""
     profile = CameraProfile.for_model("POCKET_6K_PRO", "v8.6")
 
-    assert profile.command("recording") is None
-    with pytest.raises(ValueError, match="discover_command"):
-        profile.require_command("recording", ("start", "stop"))
+    spec = profile.require_command("recording", ("start", "stop"))
+    assert spec.category == 10
+    assert spec.parameter == 1
+    assert spec.values == {"start": 2, "stop": 0}
+    assert spec.provenance is not None
+    assert spec.provenance.status == "VERIFIED"
+    assert spec.provenance.method == "guided-discovery (tools/control/discover_command.py)"
