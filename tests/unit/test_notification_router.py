@@ -19,7 +19,7 @@ def _packet(value: int) -> bytearray:
         command_id=0x00,
         category=CATEGORY,
         parameter=PARAMETER,
-        data_type=DataType.BOOL,
+        data_type=DataType.INT8,
         operation=Operation.CAMERA_REPORT,
         reserved=0x01,
     )

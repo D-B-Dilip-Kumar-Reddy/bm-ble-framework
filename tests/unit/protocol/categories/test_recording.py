@@ -30,7 +30,7 @@ class TestEncodeRecordStart:
         packet = encode_record_start(
             category=CATEGORY,
             parameter=PARAMETER,
-            data_type=DataType.BOOL,
+            data_type=DataType.INT8,
             value=START_VALUE,
             reserved=RESERVED,
         )
@@ -48,7 +48,7 @@ class TestEncodeRecordStart:
         packet = encode_record_start(
             category=CATEGORY,
             parameter=PARAMETER,
-            data_type=DataType.BOOL,
+            data_type=DataType.INT8,
             value=START_VALUE,
             reserved=RESERVED,
         )
@@ -61,7 +61,7 @@ class TestEncodeRecordStop:
         packet = encode_record_stop(
             category=CATEGORY,
             parameter=PARAMETER,
-            data_type=DataType.BOOL,
+            data_type=DataType.INT8,
             value=STOP_VALUE,
             reserved=RESERVED,
         )
@@ -79,7 +79,7 @@ class TestEncodeRecordStop:
         packet = encode_record_stop(
             category=CATEGORY,
             parameter=PARAMETER,
-            data_type=DataType.BOOL,
+            data_type=DataType.INT8,
             value=STOP_VALUE,
             reserved=RESERVED,
         )
@@ -101,7 +101,7 @@ class TestEncodeRecordingStateUnsupportedType:
 class TestIsRecordingStateEcho:
     def test_matches_expected_category_and_parameter(self):
         packet = encode_record_start(
-            category=CATEGORY, parameter=PARAMETER, data_type=DataType.BOOL, value=START_VALUE
+            category=CATEGORY, parameter=PARAMETER, data_type=DataType.INT8, value=START_VALUE
         )
         header, _ = decode_packet(packet)
 
@@ -109,7 +109,7 @@ class TestIsRecordingStateEcho:
 
     def test_does_not_match_other_category(self):
         packet = encode_record_start(
-            category=CATEGORY, parameter=PARAMETER, data_type=DataType.BOOL, value=START_VALUE
+            category=CATEGORY, parameter=PARAMETER, data_type=DataType.INT8, value=START_VALUE
         )
         header, _ = decode_packet(packet)
 
@@ -119,14 +119,14 @@ class TestIsRecordingStateEcho:
 class TestDecodeRecordingState:
     def test_decodes_nonzero_value_as_recording(self):
         """Real hardware uses 2, not 1, for the "recording" payload value."""
-        assert decode_recording_state(b"\x02", DataType.BOOL) is True
+        assert decode_recording_state(b"\x02", DataType.INT8) is True
 
     def test_decodes_zero_value_as_stopped(self):
-        assert decode_recording_state(b"\x00", DataType.BOOL) is False
+        assert decode_recording_state(b"\x00", DataType.INT8) is False
 
     def test_raises_on_payload_shorter_than_width(self):
         with pytest.raises(ValueError, match="Expected at least 1-byte payload"):
-            decode_recording_state(b"", DataType.BOOL)
+            decode_recording_state(b"", DataType.INT8)
 
     def test_raises_for_unsupported_data_type(self):
         with pytest.raises(ValueError, match="Unsupported data type"):
@@ -135,8 +135,8 @@ class TestDecodeRecordingState:
     def test_decodes_real_pocket_6k_g2_record_start_echo(self):
         """Real CAMERA_REPORT echo payload: 6 bytes, recording flag leads, rest unexplained."""
         payload = bytes([0x02, 0x00, 0x40, 0x00, 0x01, 0x03])
-        assert decode_recording_state(payload, DataType.BOOL) is True
+        assert decode_recording_state(payload, DataType.INT8) is True
 
     def test_decodes_real_pocket_6k_g2_record_stop_echo(self):
         payload = bytes([0x00, 0x00, 0x40, 0x00, 0x01, 0x03])
-        assert decode_recording_state(payload, DataType.BOOL) is False
+        assert decode_recording_state(payload, DataType.INT8) is False

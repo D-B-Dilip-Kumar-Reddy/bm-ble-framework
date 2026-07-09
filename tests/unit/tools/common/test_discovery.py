@@ -31,7 +31,7 @@ from bmd_ble.protocol.types import DataType  # noqa: E402
 
 def make_candidate(value=2, reserved=1, **overrides) -> CandidateCommand:
     defaults = dict(
-        category=0x0A, parameter=0x01, data_type=DataType.BOOL, value=value, reserved=reserved
+        category=0x0A, parameter=0x01, data_type=DataType.INT8, value=value, reserved=reserved
     )
     defaults.update(overrides)
     return CandidateCommand(**defaults)
@@ -42,7 +42,7 @@ def make_notification(
     characteristic_name=INCOMING_CONTROL_NAME,
     category=0x0A,
     parameter=0x01,
-    data_type="BOOL",
+    data_type="INT8",
     operation="CAMERA_REPORT",
     payload_hex="02 00 40 00 01 03",
     decode_error=None,
@@ -80,7 +80,7 @@ class TestCandidateCommand:
         candidate = make_candidate()
 
         assert candidate.encode() == encode_assign(
-            category=0x0A, parameter=0x01, data_type=DataType.BOOL, value=2, reserved=1
+            category=0x0A, parameter=0x01, data_type=DataType.INT8, value=2, reserved=1
         )
 
     def test_encode_reproduces_known_g2_start_packet(self):
@@ -90,7 +90,7 @@ class TestCandidateCommand:
 
     def test_describe_is_hex_formatted(self):
         assert (
-            make_candidate().describe() == "category=0x0A parameter=0x01 BOOL value=2 reserved=0x01"
+            make_candidate().describe() == "category=0x0A parameter=0x01 INT8 value=2 reserved=0x01"
         )
 
 
@@ -99,7 +99,7 @@ class TestGenerateCandidates:
         candidates = generate_candidates(
             category=0x0A,
             parameter=0x01,
-            data_type=DataType.BOOL,
+            data_type=DataType.INT8,
             values=[2, 0],
             reserveds=[1, 0],
         )
@@ -117,7 +117,7 @@ class TestGenerateCandidates:
 class TestSeedTriplesFromCapture:
     def test_ambient_triples_present_in_every_window_are_dropped(self):
         ambient = make_notification(category=0x09, parameter=0x00, data_type="INT8")
-        interesting = make_notification(category=0x0A, parameter=0x01, data_type="BOOL")
+        interesting = make_notification(category=0x0A, parameter=0x01, data_type="INT8")
         capture = make_capture(
             {
                 "record_start": [ambient, interesting],
@@ -125,17 +125,17 @@ class TestSeedTriplesFromCapture:
             }
         )
 
-        assert seed_triples_from_capture(capture) == [(0x0A, 0x01, "BOOL")]
+        assert seed_triples_from_capture(capture) == [(0x0A, 0x01, "INT8")]
 
     def test_exclude_ambient_false_keeps_everything(self):
         ambient = make_notification(category=0x09, parameter=0x00, data_type="INT8")
-        interesting = make_notification(category=0x0A, parameter=0x01, data_type="BOOL")
+        interesting = make_notification(category=0x0A, parameter=0x01, data_type="INT8")
         capture = make_capture({"a": [ambient, interesting], "b": [ambient]})
 
         triples = seed_triples_from_capture(capture, exclude_ambient=False)
 
         assert (0x09, 0x00, "INT8") in triples
-        assert (0x0A, 0x01, "BOOL") in triples
+        assert (0x0A, 0x01, "INT8") in triples
 
     def test_single_window_capture_keeps_everything(self):
         """The ambient filter needs at least two windows for contrast."""
@@ -153,10 +153,10 @@ class TestSeedTriplesFromCapture:
             decode_error="too short",
         )
         broken = make_notification(decode_error="Unknown operation byte: 0x05")
-        good = make_notification(category=0x0A, parameter=0x01, data_type="BOOL")
+        good = make_notification(category=0x0A, parameter=0x01, data_type="INT8")
         capture = make_capture({"a": [cam_status, broken, good], "b": []})
 
-        assert seed_triples_from_capture(capture) == [(0x0A, 0x01, "BOOL")]
+        assert seed_triples_from_capture(capture) == [(0x0A, 0x01, "INT8")]
 
 
 class TestExtractEcho:

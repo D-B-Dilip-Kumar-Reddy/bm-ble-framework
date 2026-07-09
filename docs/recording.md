@@ -1,5 +1,7 @@
 # Recording (Record Start / Stop)
 
+**Status:** implemented and hardware-verified on `POCKET_6K_G2 v7.9` (echo-verified 3/3 cycles); storage preconditions are still planned.
+
 ## Overview
 
 `protocol/categories/recording.py` implements packet encoding/decoding for the
@@ -42,7 +44,8 @@ start/stop is a state assignment, not a relative offset. `command_id` is
 
 **Real hardware does not use a plain boolean 0/1 payload.** `POCKET_6K_G2
 v7.9`'s reverse-engineered command uses `2` for start and `0` for stop, tagged
-with `data_type=BOOL`. `value: int` is therefore an explicit, required
+with data-type byte `0x01` (`INT8` under the official coding — SDI
+transport-mode semantics, see `docs/protocol.md` §6). `value: int` is therefore an explicit, required
 parameter sourced from the profile's `commands.recording.values` map
 (`{"start": 2, "stop": 0}` — see `docs/payload_profiles.md`), never assumed
 to be `1`/`0`. Likewise `reserved` is explicit (default `RESERVED_BYTE`)
@@ -52,7 +55,7 @@ since the real captured command uses `reserved=0x01`, not the codec's generic
 `decode_recording_state` still distinguishes recording (truthy) from stopped
 (falsy) via nonzero-vs-zero, but its payload-width check is "at least
 `width` bytes," not exact — a real echo's payload is longer than the nominal
-`BOOL` width (see below), so only the leading byte is read.
+`INT8` width (see below), so only the leading byte is read.
 
 Only `DataType` values present in `DATA_TYPE_STRUCT_FORMATS`
 (`protocol/types.py`) are supported; the functions raise `ValueError` for
@@ -65,7 +68,7 @@ unsupported types (e.g. `STRING`, `VOID`) rather than guessing an encoding.
 Record start/stop is a write command, so it must be verified, not assumed:
 
 1. Subscribe to `INCOMING_CONTROL` and start buffering **before** sending the
-   command (`NotificationRouter`, not yet implemented).
+   command (`NotificationRouter.arm()` — see `docs/session_and_verification.md`).
 2. Send the encoded packet from `encode_record_start` / `encode_record_stop`
    to `OUTGOING_CONTROL`.
 3. Await a decoded packet where `is_recording_state_echo(header, category=..., parameter=...)`
@@ -77,9 +80,10 @@ Record start/stop is a write command, so it must be verified, not assumed:
    `is_recording` state within the configured timeout, raise
    `BMDVerificationError` — never report success on an unconfirmed write.
 
-`CameraState.is_recording` must only be updated from this decoded echo (or a
-`CAMERA_STATUS` notification), never inferred from "the command was sent
-successfully."
+`CameraState.is_recording` (planned — no `CameraState` exists yet, see
+CLAUDE.md design principle 4) must only ever be updated from this decoded
+echo (or a `CAMERA_STATUS` notification), never inferred from "the command
+was sent successfully."
 
 ### The echo has been observed
 
@@ -123,8 +127,9 @@ deterministic, on-demand confirmation.
 
 ## Storage preconditions (per CLAUDE.md design principle 10)
 
-Before encoding/sending a record-start command, the caller (`session.py`,
-once implemented) must check `CameraState.storage`:
+*(Planned — storage monitoring is not implemented yet.)* Before
+encoding/sending a record-start command, the caller (`session.py`) must
+check `CameraState.storage`:
 
 - Card ready (slot present, not write-protected, not in an error state)
 - Remaining recording time > 0
@@ -144,7 +149,7 @@ Per CLAUDE.md, "Workflow: Adding a New Command":
    parameter, and payload bytes.~~ Done.
 2. ~~Add the confirmed values to `payloads/models/POCKET_6K_G2_v7.9.json`.~~
    Done (`commands.recording`: `category=10`, `parameter=1`,
-   `data_type="BOOL"`, `reserved=1`, `values={"start": 2, "stop": 0}`,
+   `data_type="INT8"`, `reserved=1`, `values={"start": 2, "stop": 0}`,
    `echo_operation=2` — see `docs/payload_profiles.md` for the structure).
 3. ~~Extend `CameraProfile` with accessors for the new `recording` JSON
    fields.~~ Done — `profile.require_command("recording", ("start", "stop"))`

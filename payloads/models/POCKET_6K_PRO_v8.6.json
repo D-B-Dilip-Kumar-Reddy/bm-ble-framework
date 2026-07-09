@@ -20,7 +20,7 @@
     "recording": {
       "category": 10,
       "parameter": 1,
-      "data_type": "BOOL",
+      "data_type": "INT8",
       "reserved": 1,
       "values": {
         "start": 2,
@@ -33,7 +33,7 @@
           "C:\\Users\\7401378\\Desktop\\6K_G2\\bm-ble-framework\\tools\\captures\\POCKET_6K_PRO_v8.6\\POCKET_6K_PRO_v8.6_20260708T153127.json"
         ],
         "verified_on": "2026-07-08",
-        "notes": "Operator-confirmed outcomes: start, stop."
+        "notes": "Operator-confirmed outcomes: start, stop. 2026-07-09: data_type relabelled BOOL -> INT8 when DataType was remapped to the official spec coding; the captured wire byte (0x01) is unchanged."
       },
       "echo_operation": 2
     }

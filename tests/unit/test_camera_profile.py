@@ -47,7 +47,7 @@ def make_valid_raw(**overrides) -> dict:
             "recording": {
                 "category": 10,
                 "parameter": 1,
-                "data_type": "BOOL",
+                "data_type": "INT8",
                 "reserved": 1,
                 "values": {"start": 2, "stop": 0},
                 "echo_operation": 2,
@@ -214,7 +214,7 @@ class TestCommandResolution:
         assert spec.name == "recording"
         assert spec.category == 10
         assert spec.parameter == 1
-        assert spec.data_type == DataType.BOOL
+        assert spec.data_type == DataType.INT8
         assert spec.reserved == 1
         assert spec.values == {"start": 2, "stop": 0}
         assert spec.echo_operation == 2

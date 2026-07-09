@@ -1,6 +1,9 @@
 """Unit tests for :mod:`bmd_ble.protocol.types`.
 
 Covers the BMD data type enum and its width/struct-format lookup tables.
+The numeric coding is pinned to the official *Blackmagic Camera Control
+Developer Information* table so a regression back to the repo's earlier
+assumed enum (0=void, 1=bool, 2=int8, ..., 7=fixed16) fails loudly.
 """
 
 import struct
@@ -15,35 +18,44 @@ from bmd_ble.protocol.types import (
 class TestDataTypeValues:
     """Tests for the ``DataType`` enum values."""
 
-    def test_data_type_values_match_protocol_spec(self):
-        """Each DataType value matches the fixed BMD protocol data type table."""
+    def test_data_type_values_match_official_spec_coding(self):
+        """Each DataType value matches the official BMD spec data type table."""
         assert DataType.VOID == 0
-        assert DataType.BOOL == 1
-        assert DataType.INT8 == 2
-        assert DataType.INT16 == 3
-        assert DataType.INT32 == 4
-        assert DataType.INT64 == 5
-        assert DataType.STRING == 6
-        assert DataType.FIXED16 == 7
+        assert DataType.INT8 == 1
+        assert DataType.INT16 == 2
+        assert DataType.INT32 == 3
+        assert DataType.INT64 == 4
+        assert DataType.STRING == 5
+        assert DataType.FIXED16 == 128
+
+    def test_bool_is_an_alias_of_void(self):
+        """Spec code 0 is "void/boolean" — BOOL and VOID share the wire code."""
+        assert DataType.BOOL is DataType.VOID
+        assert DataType["BOOL"] is DataType.VOID
+        assert DataType.BOOL == 0
+
+    def test_sniffer_verified_recording_data_type_byte_is_int8(self):
+        """The only sniffer-verified data-type byte (0x01, POCKET_6K_G2 v7.9
+        recording command/echo) decodes to INT8 under the official coding."""
+        assert DataType(0x01) is DataType.INT8
 
 
 class TestDataTypeByteWidths:
     """Tests for the ``DATA_TYPE_BYTE_WIDTHS`` lookup table."""
 
     def test_byte_widths_cover_every_data_type(self):
-        """Every DataType member except STRING has a defined byte width."""
+        """Every canonical DataType member except STRING has a defined byte width."""
         for data_type in DataType:
             if data_type is DataType.STRING:
                 continue
             assert data_type in DATA_TYPE_BYTE_WIDTHS
 
     def test_void_has_zero_width(self):
-        """VOID carries no payload bytes."""
+        """VOID (the trigger reading of code 0) carries no payload bytes."""
         assert DATA_TYPE_BYTE_WIDTHS[DataType.VOID] == 0
 
     def test_fixed_width_types_have_expected_byte_counts(self):
-        """Fixed-width integer/bool/fixed16 types report the correct byte width."""
-        assert DATA_TYPE_BYTE_WIDTHS[DataType.BOOL] == 1
+        """Fixed-width integer/fixed16 types report the correct byte width."""
         assert DATA_TYPE_BYTE_WIDTHS[DataType.INT8] == 1
         assert DATA_TYPE_BYTE_WIDTHS[DataType.INT16] == 2
         assert DATA_TYPE_BYTE_WIDTHS[DataType.INT32] == 4
@@ -55,12 +67,11 @@ class TestDataTypeStructFormats:
     """Tests for the ``DATA_TYPE_STRUCT_FORMATS`` lookup table."""
 
     def test_struct_formats_cover_fixed_width_types_only(self):
-        """VOID and STRING are variable/absent and are excluded from the table."""
+        """Code 0 (VOID/BOOL) and STRING are variable/absent and are excluded."""
         assert DataType.VOID not in DATA_TYPE_STRUCT_FORMATS
         assert DataType.STRING not in DATA_TYPE_STRUCT_FORMATS
 
         for data_type in (
-            DataType.BOOL,
             DataType.INT8,
             DataType.INT16,
             DataType.INT32,

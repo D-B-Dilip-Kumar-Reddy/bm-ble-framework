@@ -1,5 +1,7 @@
 # Blackmagic Camera Control Protocol — full reference
 
+**Status:** reference document — evidence-tagged; only the recording command family is sniffer-verified so far.
+
 The one-stop reference for the protocol this framework speaks: the
 **Blackmagic SDI Camera Control Protocol** (the command vocabulary) and the
 **BLE camera control layer** (how those commands travel over Bluetooth LE).
@@ -125,45 +127,38 @@ captures on `POCKET_6K_G2 v7.9` contradict it in four ways
 
 ## 3. Data types
 
-### 3.1 This repo's enum (`protocol/types.py`)
+### 3.1 The coding (`protocol/types.py` — official spec coding)
 
-| Value | Type | Width (bytes) |
-|---|---|---|
-| 0 | void | 0 |
-| 1 | bool | 1 |
-| 2 | int8 | 1 |
-| 3 | int16 | 2 |
-| 4 | int32 | 4 |
-| 5 | int64 | 8 |
-| 6 | string | variable |
-| 7 | fixed16 | 2 |
+`protocol/types.py` uses the official document's coding [spec]. One table,
+shared by the code, the profile JSONs (`data_type` symbolic names), and this
+doc:
 
-### 3.2 The official spec's coding — and an open discrepancy
+| Code | Type | Width (bytes) | `DataType` member |
+|---|---|---|---|
+| 0 | void / boolean | 0 (void trigger) or 1 per element (boolean; 0 = false) | `VOID` (alias `BOOL`) |
+| 1 | int8 (signed byte) | 1 | `INT8` |
+| 2 | int16 | 2 | `INT16` |
+| 3 | int32 | 4 | `INT32` |
+| 4 | int64 | 8 | `INT64` |
+| 5 | UTF-8 string | variable | `STRING` |
+| 128 | fixed16 (signed 5.11 fixed point) | 2 | `FIXED16` |
 
-The official document codes data types differently [spec]:
+**Provenance:** the only data-type byte sniffer-verified over BLE so far is
+`0x01` on the recording command/echo — `INT8` under this coding, which agrees
+with the spec's transport-mode parameter (§5, 10.1) being int8. Every other
+code is [spec] only: before trusting any multi-byte parameter (white balance
+int16, shutter angle int32, any fixed16), capture one on real hardware and
+check byte 6 against this table.
 
-| Code | Type |
-|---|---|
-| 0 | void / boolean |
-| 1 | signed byte (int8) |
-| 2 | int16 |
-| 3 | int32 |
-| 4 | int64 |
-| 5 | UTF-8 string |
-| 128 | fixed16 (signed 5.11 fixed point) |
+**History:** this repo originally used an *assumed* enum
+(`0=void, 1=bool, 2=int8, …, 7=fixed16`) that disagreed with the official
+coding from code 2 upward, and this section used to document that as an open
+discrepancy. The enum was remapped to the official coding on 2026-07-09. The
+change was wire-compatible — the recording command's captured byte `0x01`
+stayed `0x01`, only its symbolic name changed from `BOOL` to `INT8` (profile
+JSONs record the relabelling in `provenance.notes`).
 
-**Open question:** the only data-type byte sniffer-verified so far is
-`0x01` on the recording command/echo. This repo reads it as `BOOL`; the
-official coding reads it as `int8` — and the spec's transport-mode
-parameter (§5, 10.1) is indeed int8. Both interpretations decode a 1-byte
-payload, so recording behaviour is identical either way, but the enums
-*disagree from code 2 upward*. Before trusting any multi-byte parameter
-(e.g. white balance int16, shutter angle int32, any fixed16), capture one
-and check byte 6 against both tables. If the official coding wins, remap
-`protocol/types.py` (and note `fixed16 = 128`, far outside the current
-enum). [hypothesis: the official coding is what cameras actually emit]
-
-### 3.3 fixed16
+### 3.2 fixed16
 
 [spec] Signed 5.11 fixed point: `encoded = round(real × 2048)`, giving
 range −16.0…+15.9995 in a little-endian int16. Used by most continuous
@@ -378,7 +373,7 @@ FF 05 00 01 0A 01 01 00 02      record start
 FF 05 00 01 0A 01 01 00 00      record stop
 │  │  │  │  │  │  │  │  └─ payload: 2 = start, 0 = stop
 │  │  │  │  │  │  │  └─ operation: ASSIGN
-│  │  │  │  │  │  └─ data type: 0x01
+│  │  │  │  │  │  └─ data type: 0x01 (INT8 — see §3)
 │  │  │  │  │  └─ parameter: 1
 │  │  │  │  └─ category: 10 (Media)
 │  │  │  └─ reserved: 0x01  (not 0x00!)
@@ -389,9 +384,10 @@ FF 05 00 01 0A 01 01 00 00      record stop
 
 Spec alignment: category 10 parameter 1 is Transport mode, whose element
 [0] "mode" is `2 = record`, `0 = preview` [spec] — exactly the payload
-values captured. So the "start_value 2 / stop_value 0 with data_type BOOL"
-oddity in the profile is no oddity at all: the command assigns transport
-**mode**, and "stop recording" really means "return to preview". A
+values captured. So the "start_value 2 / stop_value 0" pair in the profile
+is no oddity at all: the command assigns transport **mode** (an int8, per
+the spec — matching the captured data-type byte `0x01`), and "stop
+recording" really means "return to preview". A
 "play" command would plausibly be the same category/parameter with payload
 `1` [hypothesis — sniff before use].
 

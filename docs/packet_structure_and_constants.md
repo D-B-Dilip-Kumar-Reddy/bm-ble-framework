@@ -1,5 +1,7 @@
 # Packet Structure and Constants
 
+**Status:** implemented — `protocol/codec.py` + `protocol/types.py`; structure sniffer-verified on `POCKET_6K_G2 v7.9`.
+
 ## Overview
 
 `protocol/codec.py` and `protocol/types.py` implement the BMD command packet
@@ -19,7 +21,7 @@ Byte 3      Reserved
 Byte 4      Category
 Byte 5      Parameter
 Byte 6      Data type
-Byte 7      Operation  (0x00 = assign, 0x01 = offset)
+Byte 7      Operation  (0x00 = assign, 0x01 = offset, 0x02 = camera report)
 Bytes 8+    Payload
 ```
 
@@ -95,22 +97,27 @@ observed (see `docs/recording.md`, "The echo has been observed").
 
 ## Data Types (`protocol/types.py`)
 
+The enum follows the official spec's coding (see `docs/protocol.md` §3 for
+the full table, provenance, and the 2026-07-09 remap history):
+
 ```python
 class DataType(IntEnum):
     VOID = 0
-    BOOL = 1
-    INT8 = 2
-    INT16 = 3
-    INT32 = 4
-    INT64 = 5
-    STRING = 6
-    FIXED16 = 7
+    BOOL = 0  # alias — spec code 0 is "void/boolean"
+    INT8 = 1
+    INT16 = 2
+    INT32 = 3
+    INT64 = 4
+    STRING = 5
+    FIXED16 = 128
 ```
 
 `DATA_TYPE_BYTE_WIDTHS` gives the on-the-wire byte width for each type
-(`VOID` is 0, `STRING` is intentionally omitted since it's variable-length).
-`DATA_TYPE_STRUCT_FORMATS` gives the little-endian `struct` format code for
-every fixed-width type, for packing/unpacking payload bytes.
+(`VOID` is 0 for the trigger reading of code 0; `STRING` is intentionally
+omitted since it's variable-length). `DATA_TYPE_STRUCT_FORMATS` gives the
+little-endian `struct` format code for every fixed-width type, for
+packing/unpacking payload bytes; code 0 and `STRING` are excluded — callers
+handle those explicitly.
 
 `FIXED16` is decoded as a raw signed 16-bit integer only — no scale-factor
 conversion to a float is implemented. The BMD spec's fixed-point
