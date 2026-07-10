@@ -1,5 +1,7 @@
 # Session and Verification
 
+**Status:** implemented — `CameraSession` + `NotificationRouter` are live; recording verification is echo-only today.
+
 ## Overview
 
 `session.py`'s `CameraSession` is the only surface user scripts touch

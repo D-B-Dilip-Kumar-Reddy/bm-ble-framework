@@ -1,22 +1,32 @@
-# Branch Summary — `claude/bm-ble-architecture-review-2shv8h`
+# WinRT BLE Connection Hardening
+
+**Status:** implemented — all mechanisms below are live in `camera_controller.py`.
 
 ## Overview
 
-This branch hardens the BLE connection management layer (`BMDCameraController`) against
-the specific quirks of the Windows WinRT BLE stack. The primary trigger was a series of
-hardware tests using `monitor_incoming.py` on a Pocket Cinema Camera 6K G2 (v7.9):
-power-cycling the camera produced false "Camera offline" critical logs, duplicate
-notification streams, and a camera screen that stayed "Connected" after the script exited.
-All seven root causes were traced and fixed. The unit test suite grew from 58 to 84
-passing tests.
+The BLE connection management layer (`BMDCameraController`) is hardened against
+the specific quirks of the Windows WinRT BLE stack: an unreliable
+`BleakClient.is_connected`, OS-level auto-reconnects that bypass the
+application, duplicate disconnect callbacks, and CCCD subscriptions that
+survive a power-cycle. This doc describes the resulting design — the
+connection-generation guard, the connect-lock, the RX-timestamp liveness
+signal, and the reconnect loop — and the eight observed failure modes each
+piece exists to fix.
+
+*History:* this hardening was done on branch
+`claude/bm-ble-architecture-review-2shv8h`, triggered by hardware tests with
+`monitor_incoming.py` on a Pocket Cinema Camera 6K G2 (v7.9): power-cycling
+the camera produced false "Camera offline" critical logs, duplicate
+notification streams, and a camera screen that stayed "Connected" after the
+script exited. All eight root causes below were traced and fixed.
 
 ---
 
-## Changed public behaviour in `camera_controller.py`
+## Connection-management internals in `camera_controller.py`
 
 ### `BMDCameraController.__init__`
 
-Two new internal fields:
+Internal fields that drive the hardening:
 
 | Field | Type | Purpose |
 |---|---|---|
@@ -100,26 +110,27 @@ where `BleakClient.is_connected` is unreliable.
 
 ## Test coverage
 
-| After commit | Tests passing |
-|---|---|
-| Baseline (start of branch) | 58 |
-| Reconnect loop guards (`_reconnecting`, `_incoming_callback`) | 67 |
-| Generation counter, connecting lock, stale cleanup | 77 |
-| RX-activity liveness signal (`_last_rx_time`, `_is_receiving_data`) | 84 |
-
-All 84 tests are unit tests (no hardware required) and run in CI on Windows,
-Python 3.11 and 3.12.
+Every mechanism above is covered by unit tests in
+`tests/unit/test_camera_controller.py` (no hardware required, mocked
+BleakClient), which run in CI on Windows, Python 3.11 and 3.12 — the suite
+has grown well beyond this subsystem since, so no fixed test count is
+recorded here.
 
 ---
 
-## Remaining known limitations
+## Known limitations
 
-- Both camera profiles (`POCKET_6K_G2 v7.9` and `POCKET_6K_PRO v8.6`) remain
-  `"status": "UNVERIFIED"` — hardware sniffer sessions are needed to populate
-  protocol values and set profiles to `VERIFIED`.
-- The command-category table in `CLAUDE.md` is empty pending sniffer captures.
 - `_is_receiving_data()` relies on notifications being present. A camera that is
   connected but sending no notifications (idle, no characteristic changes) will
   still trigger reconnect attempts after the `threshold_s` window. This is a
   conservative safe default — idle cameras get reconnected unnecessarily but data
   is never lost.
+- GAP identity reads (`read_gap_identity_metadata`) are disabled for most
+  profiles (`gap_meta_data.readable: false`) — the 6K G2 disconnects if GAP
+  reads are attempted at the wrong time. Device Information reads are
+  per-profile too (`device_info_meta_data.readable`).
+- Both camera profiles remain `"_meta.status": "UNVERIFIED"` as *whole
+  profiles* — the recording command family is hardware-verified
+  (`commands.recording.provenance.status: "VERIFIED"`), but the profile-level
+  flag stays `UNVERIFIED` until every populated section is tested (see
+  `docs/payload_profiles.md`).

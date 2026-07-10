@@ -1,5 +1,7 @@
 # Payload Profiles — structure, schema, and provenance
 
+**Status:** implemented — schema-validated profiles + `CommandSpec` are live; capability/lookup sections are reserved, not yet populated.
+
 ## Overview
 
 `payloads/models/<MODEL_KEY>_<FIRMWARE>.json` is the single source of truth
@@ -66,7 +68,7 @@ invent values ahead of captures).
     "recording": {
       "category": 10,
       "parameter": 1,
-      "data_type": "BOOL",
+      "data_type": "INT8",
       "reserved": 1,
       "values": { "start": 2, "stop": 0 },
       "echo_operation": 2,
@@ -91,8 +93,10 @@ invent values ahead of captures).
   dataclass changes — photo capture might be `{"trigger": 1}`, playback
   `{"play": 1, "pause": 0, "next": 2}`.
 - **`data_type` is a symbolic string** matching `protocol/types.py`
-  `DataType` names — human-readable in captures and diffs, and validated by
-  the schema's enum.
+  `DataType` names (official spec coding — see `docs/protocol.md` §3) —
+  human-readable in captures and diffs, and validated by the schema's enum.
+  `"BOOL"` is accepted as an alias of wire code 0 (`VOID`, the spec's
+  "void/boolean").
 - **`echo_operation` is a raw integer** (0–255), not a symbolic `Operation`
   name: it is copied verbatim from captures, and a future camera may report
   an operation byte not yet in the enum — an int survives that.
@@ -143,7 +147,7 @@ Loading an `UNVERIFIED` profile logs a prominent warning (design principle
 profile = CameraProfile.for_model("POCKET_6K_G2", "v7.9")   # validated
 spec = profile.require_command("recording", ("start", "stop"))  # CommandSpec
 spec.category            # 10
-spec.data_type           # DataType.BOOL
+spec.data_type           # DataType.INT8
 spec.values["start"]     # 2
 spec.reserved            # 1
 spec.echo_operation      # 2

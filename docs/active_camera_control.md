@@ -1,5 +1,7 @@
 # Active Camera Control
 
+**Status:** implemented — `write_outgoing_control` + `run_send_and_capture` + `tools/control/` are live.
+
 ## Overview
 
 Unlike `tools/query/*.py` (read-only inspection) and `tools/sniffers/*.py`

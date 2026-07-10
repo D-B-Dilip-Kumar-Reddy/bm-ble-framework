@@ -1,5 +1,7 @@
 # Guided Command Discovery
 
+**Status:** implemented — used to populate `POCKET_6K_PRO v8.6`'s recording block on real hardware.
+
 ## Overview
 
 `tools/control/discover_command.py` closes the gap between the existing
@@ -190,7 +192,7 @@ Once you've confirmed all outcomes (or quit early), it:
   "recording": {
     "category": 10,
     "parameter": 1,
-    "data_type": "BOOL",
+    "data_type": "INT8",
     "reserved": 1,
     "values": { "start": 2, "stop": 0 },
     "echo_operation": 2,

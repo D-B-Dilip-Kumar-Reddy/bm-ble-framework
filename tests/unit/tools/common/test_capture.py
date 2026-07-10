@@ -29,7 +29,7 @@ class TestDecodeNotification:
 
         assert result.category == 0x0A
         assert result.parameter == 0x01
-        assert result.data_type == "BOOL"
+        assert result.data_type == "INT8"
         assert result.operation == "ASSIGN"
         assert result.payload_hex == "01"
         assert result.decode_error is None
@@ -62,7 +62,7 @@ class TestDedupeTriples:
             raw_hex="",
             category=0x0A,
             parameter=0x01,
-            data_type="BOOL",
+            data_type="INT8",
             operation="ASSIGN",
             payload_hex="01",
             decode_error=None,
@@ -86,7 +86,7 @@ class TestDedupeTriples:
             raw_hex="",
             category=0x0A,
             parameter=0x01,
-            data_type="BOOL",
+            data_type="INT8",
             operation="ASSIGN",
             payload_hex="01",
             decode_error=None,

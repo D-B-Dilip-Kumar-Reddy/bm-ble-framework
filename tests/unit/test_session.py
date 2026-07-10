@@ -28,7 +28,7 @@ def make_profile(recording_block: dict | str = "default") -> CameraProfile:
         recording_block = {
             "category": 0x0A,
             "parameter": 0x01,
-            "data_type": "BOOL",
+            "data_type": "INT8",
             "reserved": 0x01,
             "values": {"start": 2, "stop": 0},
         }
@@ -109,7 +109,7 @@ class TestSetRecordingState:
         block = {
             "category": 0x0A,
             "parameter": 0x01,
-            "data_type": "BOOL",
+            "data_type": "INT8",
             "values": {"start": 2},
         }
         session = make_session(make_profile(recording_block=block))

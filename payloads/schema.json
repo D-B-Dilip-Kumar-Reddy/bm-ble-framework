@@ -95,7 +95,7 @@
         "parameter": { "$ref": "#/$defs/byte" },
         "data_type": {
           "enum": ["VOID", "BOOL", "INT8", "INT16", "INT32", "INT64", "STRING", "FIXED16"],
-          "description": "Symbolic name matching protocol/types.py DataType."
+          "description": "Symbolic name matching protocol/types.py DataType (official spec coding: VOID/BOOL=0, INT8=1, INT16=2, INT32=3, INT64=4, STRING=5, FIXED16=128). BOOL is an alias of wire code 0 — the spec's 'void/boolean'."
         },
         "reserved": {
           "$ref": "#/$defs/byte",

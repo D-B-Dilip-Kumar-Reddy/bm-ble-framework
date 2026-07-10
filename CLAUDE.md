@@ -36,6 +36,11 @@ The `ble_name` field in every profile JSON is the real BLE advertisement name br
 
 ## Design Principles
 
+These principles describe the **target architecture**. Everything marked
+*(planned)* here or in the Package Structure below is design intent that is not
+yet implemented — the docs in `docs/` record exactly what exists today. Never
+describe a planned subsystem as implemented.
+
 ### 1. No hardcoded protocol values
 Codec IDs, quality variant IDs, FPS encodings, resolution encodings, category/parameter combinations — none of these belong in code. They live in `payloads/models/<MODEL_KEY>_<FIRMWARE>.json`. Code reads from the profile. The only values permitted in `constants.py` are those that are fixed by the Bluetooth spec or the BMD BLE API spec and do not vary between models.
 
@@ -51,8 +56,10 @@ Use a dual-check strategy:
 
 Both checks carry configurable timeouts. If neither confirms the state change, raise `BMDVerificationError`. On `POCKET_6K_G2 v7.9`, `CAMERA_STATUS` notifications are unreliable — always attempt the echo first and treat the status read as a secondary check only.
 
-### 4. Observable state model
-A `CameraState` object reflects the last-known camera state. It is updated **only** from incoming BLE notifications — never inferred from "I sent command X therefore state is now Y". On connect, read the current state before any automation begins.
+*Current implementation status:* recording verification is **echo-only** — none of the known `CAMERA_STATUS` bits encode recording state, so there is no meaningful secondary cross-check for it yet. See `docs/session_and_verification.md`.
+
+### 4. Observable state model *(planned)*
+A `CameraState` object reflects the last-known camera state. It is updated **only** from incoming BLE notifications — never inferred from "I sent command X therefore state is now Y". On connect, read the current state before any automation begins. *(Not yet implemented — no `state.py` / `CameraState` / `StorageState` exists today; see `docs/session_and_verification.md` for what verification does instead.)*
 
 ### 5. Strict transport / protocol separation
 - `camera_controller.py` — BLE transport only: connect, disconnect, raw byte read/write, notification subscription. No BMD protocol knowledge.
@@ -85,37 +92,45 @@ All I/O is async. No blocking calls anywhere. Use `asyncio.wait_for()` for all t
 
 ## Package Structure
 
+Entries marked *(planned)* do not exist yet — they are the target layout for
+future subsystems. Everything else is implemented and on disk today.
+
 ```
 src/bmd_ble/
-  __init__.py               # Public API surface — what scripts import from
+  __init__.py               # Public API surface — exports CameraSession, CameraProfile,
+                            # get_profile, KNOWN_PROFILES, BMDVerificationError
   constants.py              # BLE UUIDs and timing constants (fixed by spec)
   exceptions.py             # BMDConnectionError, BMDTimeoutError, BMDCommandError,
                             # BMDVerificationError, BMDUnsupportedError, BMDStorageError
+                            # (only BMDVerificationError is raised today; the rest are
+                            # reserved for the planned subsystems that will use them)
   scanner.py                # BLE discovery by advertisement name
   camera_profile.py         # Load, validate, and cache model/firmware profiles
   camera_controller.py      # BLE transport layer — raw bytes only
   notification_router.py    # Buffer and route INCOMING_CONTROL notifications by (category, param)
-  state.py                  # CameraState + StorageState dataclasses — updated from notifications only
+  state.py                  # (planned) CameraState + StorageState dataclasses —
+                            # updated from notifications only
   session.py                # CameraSession context manager — user-facing API
   protocol/
     __init__.py
     codec.py                # BMD packet header encode / decode
-    types.py                # BMD data type constants (void, bool, int8, int16, int32,
-                            # int64, string, fixed16)
+    types.py                # BMD data type constants (official spec coding — see
+                            # "Data types" below)
     categories/
       __init__.py
       recording.py          # Record start / stop
-      settings.py           # Codec, quality, resolution, FPS
-      media.py              # Photo capture, playback controls
-      metadata.py           # Video / photo metadata reads
+      settings.py           # (planned) Codec, quality, resolution, FPS
+      media.py              # (planned) Photo capture, playback controls
+      metadata.py           # (planned) Video / photo metadata reads
 
 tools/
-  common/                   # Shared BLE capture/decode engine (tools/common/capture.py),
-                             # used by both sniffers/ and control/ — not an entrypoint itself
+  common/                   # Shared BLE capture/decode engine (tools/common/capture.py)
+                            # and guided-discovery logic (tools/common/discovery.py),
+                            # used by both sniffers/ and control/ — not an entrypoint itself
   sniffers/                 # Passive BLE-notification capture for reverse engineering (listen-only)
   control/                  # Active camera control — sends commands, captures the response
-                             # (changes real camera state; use deliberately)
-  query/                    # Characteristic inspection (existing)
+                            # (changes real camera state; use deliberately)
+  query/                    # Read-only characteristic inspection
   captures/                 # Runtime output of sniffers/ and control/ scripts (gitignored)
 
 Tools are grouped by folder according to what kind of thing they do — read-only
@@ -128,14 +143,17 @@ payloads/
   schema.json               # JSON Schema — validates all payload files at load time
 
 examples/
-  record_start_stop.py
-  change_codec.py
-  capture_photo.py
-  playback.py
+  scan_camera.py            # Discover cameras by BLE advertisement name
+  connect_to_camera.py      # Connect-only smoke test (connect, hold, disconnect)
+  monitor_incoming.py       # Stream raw INCOMING_CONTROL notifications
+  record_start_stop.py      # Echo-verified record start/stop via CameraSession
+  change_codec.py           # (planned)
+  capture_photo.py          # (planned)
+  playback.py               # (planned)
 
 tests/
   unit/                     # No hardware, full mocking — must pass in CI
-  integration/              # Mocked BLE, full command + verification round-trips
+  integration/              # (planned) Mocked BLE, full command + verification round-trips
 ```
 
 `session.py` is what user scripts import. Scripts never import `camera_controller`, `notification_router`, or anything from `protocol/` directly.
@@ -159,7 +177,8 @@ added, a new `docs/<feature>.md` must be created alongside the code change.
 | File | Covers |
 |---|---|
 | `docs/protocol.md` | **Full protocol reference** — SDI camera control categories/parameters, data types, operations, BLE GATT layer, spec-vs-sniffer divergences. Read before any protocol work |
-| `docs/winrt_ble_connection_hardening.md` | BLE reconnect loop, WinRT liveness detection, generation guards, connect-lock |
+| `docs/packet_structure_and_constants.md` | Packet header byte layout, length-field counting base, `protocol/codec.py` design, and how the original spec-assumed structure was corrected against a real capture |
+| `docs/winrt_ble_connection_hardening.md` | BLE transport reliability on Windows/WinRT — reconnect loop, liveness detection via notification timestamps, connection-generation guards, connect-lock, known limitations |
 | `docs/event_subscription_and_logging.md` | Notification subscription strategy (`subscribe_all`), generation-guarding wrapper, per-session file logging |
 | `docs/recording.md` | Record start/stop category scaffold, verification and storage-precondition strategy, remaining sniffer work |
 | `docs/sniffer_capture_engine.md` | Reusable BLE-notification capture engine (`tools/common/capture.py`) driving labeled operator-triggered capture windows |
@@ -209,16 +228,24 @@ Populate this table as categories are confirmed from sniffer sessions. Each cate
 
 ### Data types (`protocol/types.py`)
 
-| Value | Type |
-|---|---|
-| 0 | void |
-| 1 | bool |
-| 2 | int8 |
-| 3 | int16 |
-| 4 | int32 |
-| 5 | int64 |
-| 6 | string |
-| 7 | fixed16 |
+The coding follows the official *Blackmagic Camera Control Developer
+Information* document:
+
+| Value | Type | Notes |
+|---|---|---|
+| 0 | void / boolean | void = no payload (trigger); boolean = 1 byte per element (0 = false). `DataType.BOOL` is an alias of `DataType.VOID` |
+| 1 | int8 | signed byte |
+| 2 | int16 | |
+| 3 | int32 | |
+| 4 | int64 | |
+| 5 | string | UTF-8 |
+| 128 | fixed16 | signed 5.11 fixed point: `encoded = round(real × 2048)` |
+
+Provenance: the only data-type byte sniffer-verified over BLE so far is `0x01`
+(int8) on the `POCKET_6K_G2 v7.9` recording command and echo. All other codes
+come from the official spec and have not yet been observed on real hardware —
+capture one before trusting a multi-byte decode. Full discussion:
+`docs/protocol.md` §3.
 
 ---
 
@@ -245,7 +272,7 @@ Populate this table as categories are confirmed from sniffer sessions. Each cate
     "recording": {
       "category": 10,
       "parameter": 1,
-      "data_type": "BOOL",
+      "data_type": "INT8",
       "reserved": 1,
       "values": { "start": 2, "stop": 0 },
       "echo_operation": 2,
@@ -272,7 +299,10 @@ All protocol values come from sniffer captures. `status` is set to `"VERIFIED"` 
 
 ---
 
-## Storage Media Monitoring
+## Storage Media Monitoring *(planned)*
+
+This section is design intent — no storage monitoring is implemented yet
+(`StorageState`/`CameraState` do not exist; see design principle 4).
 
 Storage state is read on connect and updated from `CAMERA_STATUS` notifications. It is tracked in `StorageState` (part of `CameraState`) and covers:
 
@@ -298,7 +328,11 @@ Storage characteristics to monitor are per-camera. Add them to the payload JSON 
 
 ## Logging Conventions
 
-All loggers use `logging.getLogger(__name__)`. Do not create named loggers with custom string names.
+All loggers use `logging.getLogger(__name__)`, or a per-instance child of it
+derived from `__name__` (e.g. `logging.getLogger(f"{__name__}.{profile.model_key}")`,
+as `camera_controller.py` does for per-session file logging — see
+`docs/event_subscription_and_logging.md`). Never invent a logger name that is
+not rooted in `__name__`.
 
 ### Log levels
 
@@ -311,13 +345,13 @@ All loggers use `logging.getLogger(__name__)`. Do not create named loggers with 
 
 ### Format
 
-Every log line that involves a camera operation must include the camera identity. Use a consistent prefix:
+Every log line that involves a camera operation must include the camera identity. The transport layer prefixes with `[<ble_name> @ <address>]` (before a BLE address is known — e.g. at profile load — `[<model_key> @ <ble_name>]` is used instead). Example lines, using the real sniffer-verified `POCKET_6K_G2 v7.9` record-start bytes:
 
 ```
-[POCKET_6K_G2 @ AA:BB:CC:DD:EE:01] Recording start — sending command
-[POCKET_6K_G2 @ AA:BB:CC:DD:EE:01] TX: 00 06 00 00 0a 01 01 00 01
-[POCKET_6K_G2 @ AA:BB:CC:DD:EE:01] RX echo: 00 06 00 00 0a 01 01 00 01 — verified ✓
-[POCKET_6K_G2 @ AA:BB:CC:DD:EE:01] Storage: 00:42:17 remaining
+[A:AF3DC814 @ AA:BB:CC:DD:EE:01] Recording start — sending command
+[A:AF3DC814 @ AA:BB:CC:DD:EE:01] TX: FF 05 00 01 0A 01 01 00 02
+[A:AF3DC814 @ AA:BB:CC:DD:EE:01] RX: FF 0A ...  (14-byte CAMERA_REPORT echo; payload 02 00 40 00 01 03)
+[A:AF3DC814 @ AA:BB:CC:DD:EE:01] Recording start verified via INCOMING_CONTROL echo
 ```
 
 The `CameraSession` (or `CameraController`) must inject the identity prefix so that every log line from any module is unambiguously tied to the camera that produced it.
@@ -380,7 +414,7 @@ The echo must be buffered *before* the write is issued. A router that only start
 | Suite | Location | Hardware | Runs in CI |
 |---|---|---|---|
 | Unit | `tests/unit/` | No — full mocking | Yes |
-| Integration | `tests/integration/` | No — mocked BLE, real round-trips | Yes |
+| Integration *(planned)* | `tests/integration/` | No — mocked BLE, real round-trips | Yes, once it exists |
 | Hardware | Manual | Yes | No |
 
 CI runs on Windows only, Python 3.11 and 3.12, via GitHub Actions. Unit tests must pass on every push. Integration tests must pass before any profile is marked `VERIFIED`.
@@ -408,7 +442,7 @@ python -m ruff check . && python -m ruff format --check .
 - Never assume a BLE write succeeded — always verify
 - Never update `CameraState` from a sent command — only from received notifications
 - Never import `camera_controller`, `notification_router`, or `protocol/` directly in scripts — use `session.py`
-- Never catch `Exception` broadly — catch specific BLE and OS exceptions only
+- Never catch `Exception` broadly — catch specific BLE and OS exceptions only. Sole carve-out: `contextlib.suppress(Exception)` is permitted for best-effort teardown during disconnect cleanup, where any late WinRT error is unactionable (see `camera_controller.py`)
 - Never add a new camera to `KNOWN_PROFILES` before its JSON payload exists
 - Never start recording or photo capture without first checking storage state
 - Never poll storage state in a loop — read once on connect, update from notifications

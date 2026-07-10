@@ -20,7 +20,7 @@
     "recording": {
       "category": 10,
       "parameter": 1,
-      "data_type": "BOOL",
+      "data_type": "INT8",
       "reserved": 1,
       "values": {
         "start": 2,
@@ -34,7 +34,7 @@
           "tools/captures/POCKET_6K_G2_v7.9/ (local, gitignored)"
         ],
         "verified_on": "2026-06-19",
-        "notes": "3/3 start/stop cycles echo-verified on real hardware via examples/record_start_stop.py. echo_operation is the operation byte the camera itself uses when reporting this category/parameter (distinct from ASSIGN used by the controller's command). Echo payload trailing bytes 00 40 00 01 03 not yet understood — hypothesis: SDI Cat 10 Param 1 transport-mode struct, see docs/protocol.md."
+        "notes": "3/3 start/stop cycles echo-verified on real hardware via examples/record_start_stop.py. echo_operation is the operation byte the camera itself uses when reporting this category/parameter (distinct from ASSIGN used by the controller's command). Echo payload trailing bytes 00 40 00 01 03 not yet understood — hypothesis: SDI Cat 10 Param 1 transport-mode struct, see docs/protocol.md. 2026-07-09: data_type relabelled BOOL -> INT8 when DataType was remapped to the official spec coding; the captured wire byte (0x01) is unchanged."
       }
     }
   }

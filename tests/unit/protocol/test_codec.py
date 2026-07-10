@@ -44,7 +44,7 @@ class TestEncodePacket:
             command_id=0x00,
             category=0x0A,
             parameter=0x01,
-            data_type=DataType.BOOL,
+            data_type=DataType.INT8,
             operation=Operation.ASSIGN,
         )
         packet = encode_packet(header, payload=b"\x01")
@@ -89,7 +89,7 @@ class TestEncodePacket:
             command_id=0x00,
             category=0x0A,
             parameter=0x01,
-            data_type=DataType.BOOL,
+            data_type=DataType.INT8,
             operation=Operation.ASSIGN,
             reserved=0x01,
         )
@@ -107,7 +107,7 @@ class TestEncodePacket:
             command_id=0x00,
             category=0x0A,
             parameter=0x01,
-            data_type=DataType.BOOL,
+            data_type=DataType.INT8,
             operation=Operation.ASSIGN,
             reserved=0x01,
         )
@@ -144,7 +144,7 @@ class TestDecodePacket:
             command_id=0x00,
             category=0x0A,
             parameter=0x01,
-            data_type=DataType.BOOL,
+            data_type=DataType.INT8,
             operation=Operation.CAMERA_REPORT,
         )
         packet = encode_packet(header, payload=b"\x02")
@@ -192,7 +192,7 @@ class TestDecodePacket:
 
         assert header.category == 0x0A
         assert header.parameter == 0x01
-        assert header.data_type == DataType.BOOL
+        assert header.data_type == DataType.INT8
         assert header.operation == Operation.ASSIGN
         assert header.reserved == 0x01
         assert payload == bytes([0x02])
@@ -205,7 +205,7 @@ class TestDecodePacket:
 
         assert header.category == 0x0A
         assert header.parameter == 0x01
-        assert header.data_type == DataType.BOOL
+        assert header.data_type == DataType.INT8
         assert header.operation == Operation.ASSIGN
         assert header.reserved == 0x01
         assert payload == bytes([0x00])
@@ -218,13 +218,13 @@ class TestEncodeAssign:
         """Byte-for-byte match with the sniffer-verified POCKET_6K_G2 v7.9
         record-start command (see docs/protocol.md §6)."""
         packet = encode_assign(
-            category=0x0A, parameter=0x01, data_type=DataType.BOOL, value=2, reserved=0x01
+            category=0x0A, parameter=0x01, data_type=DataType.INT8, value=2, reserved=0x01
         )
 
         assert packet == bytes([0xFF, 0x05, 0x00, 0x01, 0x0A, 0x01, 0x01, 0x00, 0x02])
 
     def test_reserved_defaults_to_codec_reserved_byte(self):
-        packet = encode_assign(category=0x0A, parameter=0x01, data_type=DataType.BOOL, value=0)
+        packet = encode_assign(category=0x0A, parameter=0x01, data_type=DataType.INT8, value=0)
 
         assert packet[3] == RESERVED_BYTE
 

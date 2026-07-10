@@ -21,7 +21,8 @@ cross-validated against captured command and ``INCOMING_CONTROL`` echo, then
 verified live across 3/3 start/stop cycles via ``CameraSession``'s echo
 check (see ``payloads/models/POCKET_6K_G2_v7.9.json``'s
 ``commands.recording.provenance`` and ``docs/recording.md``). Real hardware
-does not use a plain boolean 0/1 payload; record start is ``2``, stop is
+does not use a plain boolean 0/1 payload; the data-type byte is ``0x01``
+(``INT8`` under the official spec coding), record start is ``2``, stop is
 ``0`` (SDI transport-mode semantics — see ``docs/protocol.md`` §6). The
 echo uses a third ``Operation`` value (``CAMERA_REPORT``, ``0x02``) and a
 longer payload than the assign-style command.
@@ -100,7 +101,7 @@ def decode_recording_state(payload: bytes, data_type: DataType) -> bool:
     recording from stopped, so no value beyond True/False is needed here.
 
     A real ``CAMERA_REPORT``-operation echo carries more bytes than the
-    nominal data type width (sniffer-verified: 6 bytes for ``BOOL``, not 1 —
+    nominal data type width (sniffer-verified: 6 bytes for ``INT8``, not 1 —
     the recording flag is the leading byte, the trailing bytes are not yet
     understood). Only the leading ``width`` bytes are read; any extra
     trailing bytes are ignored, not treated as an error.

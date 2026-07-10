@@ -1,5 +1,7 @@
 # Event Subscription and Logging
 
+**Status:** implemented — `subscribe_all()` + per-session file logging are live.
+
 ## Overview
 
 `BMDCameraController.connect()` automatically subscribes to three BLE characteristics —
@@ -142,9 +144,13 @@ left-padded to 8 chars. Logger name is the child logger name (`bmd_ble.camera_co
 Every log line that involves a BLE operation includes `[BLE_NAME @ ADDRESS]`:
 
 ```
-2026-06-19T14:30:22.015  DEBUG     bmd_ble.camera_controller.POCKET_6K_G2  [A:AF3DC814 @ AA:BB:CC:DD:EE:01] RX: 00 06 0A 01 00 01
+2026-06-19T14:30:22.015  DEBUG     bmd_ble.camera_controller.POCKET_6K_G2  [A:AF3DC814 @ AA:BB:CC:DD:EE:01] TX: FF 05 00 01 0A 01 01 00 02
 2026-06-19T14:30:22.016  INFO      bmd_ble.camera_controller.POCKET_6K_G2  [A:AF3DC814 @ AA:BB:CC:DD:EE:01] Subscribed to TIMECODE
 ```
+
+(The TX bytes are the real sniffer-verified `POCKET_6K_G2 v7.9` record-start
+command — every packet in either direction starts with the fixed `FF` prefix;
+see `docs/protocol.md` §2.)
 
 This allows log lines from multiple controller instances to be distinguished when they
 share a console stream.

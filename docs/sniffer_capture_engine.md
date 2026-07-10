@@ -1,5 +1,7 @@
 # Sniffer Capture Engine
 
+**Status:** implemented — `tools/common/capture.py` drives both passive sniffers and active control tools.
+
 ## Overview
 
 `tools/common/capture.py` is a reusable BLE-notification capture engine
