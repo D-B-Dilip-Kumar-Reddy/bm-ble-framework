@@ -108,6 +108,8 @@ src/bmd_ble/
   camera_profile.py         # Load, validate, and cache model/firmware profiles
   camera_controller.py      # BLE transport layer — raw bytes only
   notification_router.py    # Buffer and route INCOMING_CONTROL notifications by (category, param)
+  timecode.py               # TIMECODE characteristic BCD decode + clip-duration math
+                            # (not a BMD command packet — see docs/timecode.md)
   state.py                  # (planned) CameraState + StorageState dataclasses —
                             # updated from notifications only
   session.py                # CameraSession context manager — user-facing API
