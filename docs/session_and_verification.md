@@ -76,6 +76,17 @@ attempting to build or send a command — used by
 on an unpopulated profile. See `docs/payload_profiles.md` for the profile
 structure.
 
+### Timecode tracking and clip duration
+
+`__aenter__` also subscribes `TIMECODE`, storing the latest decoded reading
+(`timecode.decode_timecode` — see `docs/timecode.md`) via a private callback.
+`record_start()`/`record_stop()` each snapshot that latest reading into
+`last_start_timecode`/`last_stop_timecode` immediately after their echo
+confirms the state change — a failed/unconfirmed write snapshots nothing.
+`last_clip_duration_seconds() -> float | None` returns the elapsed time
+between the two snapshots (hours/minutes/seconds precision only — see
+`docs/timecode.md` for why), or `None` if either snapshot is missing.
+
 ### Why `CAMERA_STATUS` isn't used as a secondary cross-check here
 
 CLAUDE.md's verification strategy calls for an echo (primary) *and* a
@@ -115,6 +126,10 @@ byte gets fully decoded), the secondary check can be added here.
 `None`, `arm` clears a stale match) and that undecodable notifications are
 ignored. `tests/unit/test_session.py` mocks `BMDCameraController` and
 `NotificationRouter` to cover: success on a matching echo, `BMDVerificationError`
-on timeout, `BMDVerificationError` on a mismatched confirmed state, and that
-missing profile fields raise before any write is attempted. No real BLE in
-either test file.
+on timeout, `BMDVerificationError` on a mismatched confirmed state, missing
+profile command/values raising before any write is attempted, TIMECODE
+snapshot capture (including that a failed verification snapshots nothing,
+and that no TIMECODE reading yet yields `None`), and
+`last_clip_duration_seconds()`. No real BLE in either test file.
+`tests/unit/test_timecode.py` covers `decode_timecode`/`duration_seconds`
+directly — see `docs/timecode.md`.

@@ -186,6 +186,7 @@ added, a new `docs/<feature>.md` must be created alongside the code change.
 | `docs/session_and_verification.md` | `CameraSession`, `NotificationRouter` echo buffering (`arm`/`wait_for`), why `CAMERA_STATUS` isn't a secondary cross-check for recording yet |
 | `docs/payload_profiles.md` | Profile JSON structure (`commands` map, `values`, `provenance`), `payloads/schema.json` load-time validation, `CommandSpec` API |
 | `docs/command_discovery.md` | Guided command discovery (`tools/control/discover_command.py`) — candidate sweep, operator confirmation, emitted profile blocks |
+| `docs/timecode.md` | `TIMECODE` BCD decode, clip-duration math (`timecode.py`), and why the 4th BCD field isn't used in duration yet |
 
 ---
 

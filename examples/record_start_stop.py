@@ -10,6 +10,13 @@ within the session's echo timeout — this script never assumes success from
 and a summary at the end reports how many start/stop echoes were confirmed
 out of the total, plus a per-cycle breakdown.
 
+Each cycle also captures the camera's TIMECODE reading at the moment
+record_start and record_stop are each confirmed, and prints the resulting
+clip duration via CameraSession.last_clip_duration_seconds() — see
+docs/timecode.md for why this is hours/minutes/seconds precision only today
+(the TIMECODE value's 4th field isn't decoded into the duration yet, pending
+real-hardware confirmation of what it means).
+
 Usage:
     python examples/record_start_stop.py
 
@@ -44,23 +51,30 @@ async def _confirm(action, label: str) -> bool:
     return True
 
 
-def _print_summary(results: list[tuple[int, bool, bool]]) -> None:
+def _format_timecode(tc) -> str:
+    if tc is None:
+        return "n/a"
+    return f"{tc.hours:02d}:{tc.minutes:02d}:{tc.seconds:02d}:{tc.subfield:02d}"
+
+
+def _print_summary(results: list[tuple[int, bool, bool, float | None]]) -> None:
     total = len(results)
-    start_confirmed = sum(1 for _, start_ok, _ in results if start_ok)
-    stop_confirmed = sum(1 for _, _, stop_ok in results if stop_ok)
+    start_confirmed = sum(1 for _, start_ok, _, _ in results if start_ok)
+    stop_confirmed = sum(1 for _, _, stop_ok, _ in results if stop_ok)
 
     print("\n=== Summary ===")
     print(f"record_start confirmed: {start_confirmed}/{total}")
     print(f"record_stop confirmed:  {stop_confirmed}/{total}")
-    for cycle, start_ok, stop_ok in results:
+    for cycle, start_ok, stop_ok, duration in results:
+        duration_str = f"{duration:.0f}s" if duration is not None else "n/a"
         print(
             f"  Cycle {cycle}: start={'OK' if start_ok else 'FAILED'} "
-            f"stop={'OK' if stop_ok else 'FAILED'}"
+            f"stop={'OK' if stop_ok else 'FAILED'} clip_duration={duration_str}"
         )
 
 
 async def main() -> None:
-    results: list[tuple[int, bool, bool]] = []
+    results: list[tuple[int, bool, bool, float | None]] = []
 
     async with CameraSession(MODEL_KEY, FIRMWARE) as session:
         for cycle in range(1, CYCLES + 1):
@@ -68,17 +82,26 @@ async def main() -> None:
 
             start_ok = await _confirm(session.record_start, "record_start")
             if start_ok:
+                print(f"  start timecode: {_format_timecode(session.last_start_timecode)}")
                 await asyncio.sleep(RECORD_SECONDS)
 
             stop_ok = await _confirm(session.record_stop, "record_stop")
-            results.append((cycle, start_ok, stop_ok))
+            if stop_ok:
+                print(f"  stop timecode:  {_format_timecode(session.last_stop_timecode)}")
+
+            duration = session.last_clip_duration_seconds() if start_ok and stop_ok else None
+            if start_ok and stop_ok:
+                duration_str = f"{duration:.0f}s" if duration is not None else "unavailable"
+                print(f"  clip duration:  {duration_str}")
+
+            results.append((cycle, start_ok, stop_ok, duration))
 
             if cycle < CYCLES:
                 await asyncio.sleep(PAUSE_BETWEEN_CYCLES_S)
 
     _print_summary(results)
 
-    if not all(start_ok and stop_ok for _, start_ok, stop_ok in results):
+    if not all(start_ok and stop_ok for _, start_ok, stop_ok, _ in results):
         raise SystemExit(1)
 
 
