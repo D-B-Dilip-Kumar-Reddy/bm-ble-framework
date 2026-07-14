@@ -5,6 +5,7 @@ __pycache__/
 
 # Sniffer/control capture output (raw per-session BLE capture dumps — not for commit)
 tools/captures/
+tools/control/logs
 
 # C extensions
 *.so
