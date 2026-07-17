@@ -108,8 +108,8 @@ src/bmd_ble/
   camera_profile.py         # Load, validate, and cache model/firmware profiles
   camera_controller.py      # BLE transport layer — raw bytes only
   notification_router.py    # Buffer and route INCOMING_CONTROL notifications by (category, param)
-  timecode.py               # TIMECODE characteristic BCD decode + clip-duration math
-                            # (not a BMD command packet — see docs/timecode.md)
+  timecode.py               # TIMECODE characteristic decode + clip-duration math
+                            # (wrapped BMD packet, distinct characteristic — see docs/timecode.md)
   state.py                  # (planned) CameraState + StorageState dataclasses —
                             # updated from notifications only
   session.py                # CameraSession context manager — user-facing API
@@ -188,7 +188,7 @@ added, a new `docs/<feature>.md` must be created alongside the code change.
 | `docs/session_and_verification.md` | `CameraSession`, `NotificationRouter` echo buffering (`arm`/`wait_for`), why `CAMERA_STATUS` isn't a secondary cross-check for recording yet |
 | `docs/payload_profiles.md` | Profile JSON structure (`commands` map, `values`, `provenance`), `payloads/schema.json` load-time validation, `CommandSpec` API |
 | `docs/command_discovery.md` | Guided command discovery (`tools/control/discover_command.py`) — candidate sweep, operator confirmation, emitted profile blocks |
-| `docs/timecode.md` | `TIMECODE` BCD decode, clip-duration math (`timecode.py`), and why the 4th BCD field isn't used in duration yet |
+| `docs/timecode.md` | `TIMECODE` wire format (wrapped BMD packet, confirmed by real capture), BCD decode, clip-duration math (`timecode.py`), and why the `frames` field isn't used in duration yet |
 
 ---
 
@@ -378,7 +378,7 @@ For every write command:
 
 1. Confirm `INCOMING_CONTROL` notifications are active and `NotificationRouter` is buffering
 2. Write command bytes to `OUTGOING_CONTROL`
-3. Await matching echo on `INCOMING_CONTROL` with configurable timeout (default 2 s)
+3. Await matching echo on `INCOMING_CONTROL` with configurable timeout (default 3 s — bumped from an initial 2 s after real-hardware logs showed occasional echo arrivals taking close to that long)
 4. If echo arrives — optionally read `CAMERA_STATUS` as a cross-check
 5. If echo times out and camera is still connected — attempt `CAMERA_STATUS` read
 6. If neither check confirms the expected state → raise `BMDVerificationError`
