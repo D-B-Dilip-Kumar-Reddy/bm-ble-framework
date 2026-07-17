@@ -27,6 +27,7 @@ each recording lasts.
 
 import asyncio
 import logging
+import sys
 
 from bmd_ble import BMDVerificationError, CameraSession
 
@@ -54,7 +55,7 @@ async def _confirm(action, label: str) -> bool:
 def _format_timecode(tc) -> str:
     if tc is None:
         return "n/a"
-    return f"{tc.hours:02d}:{tc.minutes:02d}:{tc.seconds:02d}:{tc.subfield:02d}"
+    return f"{tc.hours:02d}:{tc.minutes:02d}:{tc.seconds:02d}:{tc.frames:02d}"
 
 
 def _print_summary(results: list[tuple[int, bool, bool, float | None]]) -> None:
@@ -106,5 +107,10 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
+    # Redirected/piped stdout is fully buffered by default in CPython, while
+    # logging's StreamHandler flushes per record — without this, captured
+    # log files interleave print() and logging output out of chronological
+    # order, making TX/RX timing hard to trust when diagnosing issues later.
+    sys.stdout.reconfigure(line_buffering=True)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     asyncio.run(main())

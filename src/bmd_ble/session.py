@@ -38,7 +38,7 @@ from .timecode import Timecode, decode_timecode, duration_seconds
 class CameraSession:
     """Async context manager: connect, verified operations, disconnect."""
 
-    def __init__(self, model_key: str, firmware: str, *, echo_timeout_s: float = 2.0) -> None:
+    def __init__(self, model_key: str, firmware: str, *, echo_timeout_s: float = 3.0) -> None:
         self.profile = CameraProfile.for_model(model_key=model_key, firmware=firmware)
         self.echo_timeout_s = echo_timeout_s
         self._router = NotificationRouter()

@@ -176,13 +176,14 @@ Per CLAUDE.md, "Workflow: Adding a New Command":
    yet) — recording's own verification is recorded as structured
    `commands.recording.provenance` data (`status: "VERIFIED"`, method,
    capture refs, date) in `payloads/models/POCKET_6K_G2_v7.9.json`.
-8. ~~Capture the clip length.~~ Done, provisionally — `CameraSession` now
-   snapshots the `TIMECODE` reading around a confirmed `record_start`/
-   `record_stop` and exposes `last_clip_duration_seconds()` (see
-   `docs/timecode.md`). Duration is hours/minutes/seconds precision only:
-   the TIMECODE value's 4th BCD field (frames? milliseconds?) is decoded but
-   not yet used in the math, since its semantics haven't been confirmed
-   against a real capture. **Next**: run `examples/record_start_stop.py` on
-   real hardware and inspect the printed `HH:MM:SS:subfield` readings to
-   confirm what the 4th field means, then extend `duration_seconds` to be
-   frame-accurate if warranted.
+8. ~~Capture the clip length.~~ Done — `CameraSession` snapshots the
+   `TIMECODE` reading around a confirmed `record_start`/`record_stop` and
+   exposes `last_clip_duration_seconds()` (see `docs/timecode.md`). The real
+   wire format (a wrapped BMD-style packet, not a bare BCD value) was
+   confirmed against real captures on both `POCKET_6K_G2 v7.9` and
+   `POCKET_6K_PRO v8.6`. Duration is still hours/minutes/seconds precision
+   only: the `frames` field is decoded and displayed but not yet used in the
+   math, since its rollover point isn't confirmed to hold across frame
+   rates. **Next**: capture a longer recording, or one at a different frame
+   rate, to confirm the `frames` rollover and extend `duration_seconds` to
+   be frame-accurate if warranted.

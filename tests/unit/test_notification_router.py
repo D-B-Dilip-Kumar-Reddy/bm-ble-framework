@@ -37,7 +37,7 @@ class TestHandleIncoming:
         router = NotificationRouter()
         router.handle_incoming(SimpleNamespace(), _packet(0x02))
 
-        header, payload = router._latest[(CATEGORY, PARAMETER)]
+        _seq, header, payload = router._latest[(CATEGORY, PARAMETER)]
         assert header.category == CATEGORY
         assert header.parameter == PARAMETER
         assert payload == bytes([0x02])
@@ -91,6 +91,29 @@ class TestWaitFor:
         result = await router.wait_for(CATEGORY, PARAMETER, timeout=0.05)
 
         assert result is None
+
+    @pytest.mark.asyncio
+    async def test_ignores_duplicate_retransmit_of_previously_consumed_echo(self):
+        """Regression test: a command sharing a (category, parameter) key with
+        the previous one (e.g. recording start/stop) must not be satisfied by
+        a retransmitted duplicate of the previous command's echo, even though
+        it arrives after arm() — only a payload distinct from the last
+        consumed one counts as fresh. See NotificationRouter's docstring."""
+        router = NotificationRouter()
+
+        router.arm(CATEGORY, PARAMETER)
+        router.handle_incoming(SimpleNamespace(), _packet(0x02))  # e.g. record_start echo
+        first = await router.wait_for(CATEGORY, PARAMETER, timeout=1.0)
+        assert first is not None
+        assert first[1] == bytes([0x02])
+
+        router.arm(CATEGORY, PARAMETER)
+        router.handle_incoming(SimpleNamespace(), _packet(0x02))  # stale retransmit duplicate
+        router.handle_incoming(SimpleNamespace(), _packet(0x00))  # real record_stop echo
+        second = await router.wait_for(CATEGORY, PARAMETER, timeout=1.0)
+
+        assert second is not None
+        assert second[1] == bytes([0x00])
 
 
 def test_decode_packet_still_works_directly():

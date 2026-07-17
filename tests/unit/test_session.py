@@ -12,11 +12,32 @@ import pytest
 
 from bmd_ble.camera_profile import CameraProfile
 from bmd_ble.exceptions import BMDVerificationError
+from bmd_ble.protocol.codec import CommandHeader, Operation, encode_packet
+from bmd_ble.protocol.types import DataType
 from bmd_ble.session import CameraSession
-from bmd_ble.timecode import Timecode
+from bmd_ble.timecode import TIMECODE_CATEGORY, TIMECODE_PARAMETER, Timecode
 
 MODEL_KEY = "POCKET_6K_G2"
 FIRMWARE = "v7.9"
+
+
+def _bcd(value: int) -> int:
+    tens, ones = divmod(value, 10)
+    return (tens << 4) | ones
+
+
+def _timecode_packet(*, frames: int, seconds: int, minutes: int, hours: int) -> bytearray:
+    header = CommandHeader(
+        destination=0xFF,
+        command_id=0x00,
+        reserved=0xFF,
+        category=TIMECODE_CATEGORY,
+        parameter=TIMECODE_PARAMETER,
+        data_type=DataType.INT32,
+        operation=Operation.ASSIGN,
+    )
+    payload = bytes(_bcd(v) for v in (frames, seconds, minutes, hours))
+    return bytearray(encode_packet(header, payload))
 
 
 def make_profile(recording_block: dict | str = "default") -> CameraProfile:
@@ -132,7 +153,7 @@ class TestTimecodeCapture:
     async def test_record_start_snapshots_latest_timecode(self):
         session = make_session(make_profile())
         session._router.wait_for.return_value = self._confirmed_echo(value=2)
-        tc = Timecode(hours=1, minutes=0, seconds=0, subfield=0)
+        tc = Timecode(hours=1, minutes=0, seconds=0, frames=0)
         session._latest_timecode = tc
 
         await session.record_start()
@@ -144,7 +165,7 @@ class TestTimecodeCapture:
     async def test_record_stop_snapshots_latest_timecode(self):
         session = make_session(make_profile())
         session._router.wait_for.return_value = self._confirmed_echo(value=0)
-        tc = Timecode(hours=1, minutes=0, seconds=10, subfield=0)
+        tc = Timecode(hours=1, minutes=0, seconds=10, frames=0)
         session._latest_timecode = tc
 
         await session.record_stop()
@@ -165,7 +186,7 @@ class TestTimecodeCapture:
     async def test_failed_verification_does_not_snapshot_timecode(self):
         session = make_session(make_profile())
         session._router.wait_for.return_value = None  # no echo -> raises
-        session._latest_timecode = Timecode(hours=0, minutes=0, seconds=5, subfield=0)
+        session._latest_timecode = Timecode(hours=0, minutes=0, seconds=5, frames=0)
 
         with pytest.raises(BMDVerificationError):
             await session.record_start()
@@ -174,10 +195,11 @@ class TestTimecodeCapture:
 
     def test_handle_timecode_decodes_and_stores(self):
         session = make_session(make_profile())
+        packet = _timecode_packet(frames=10, seconds=53, minutes=12, hours=9)
 
-        session._handle_timecode(MagicMock(), bytearray.fromhex("09125310"))
+        session._handle_timecode(MagicMock(), packet)
 
-        assert session._latest_timecode == Timecode(hours=9, minutes=12, seconds=53, subfield=10)
+        assert session._latest_timecode == Timecode(hours=9, minutes=12, seconds=53, frames=10)
 
     def test_handle_timecode_ignores_malformed_data(self):
         session = make_session(make_profile())
@@ -190,26 +212,26 @@ class TestTimecodeCapture:
 class TestLastClipDurationSeconds:
     def test_returns_none_when_start_missing(self):
         session = make_session(make_profile())
-        session.last_stop_timecode = Timecode(hours=0, minutes=0, seconds=5, subfield=0)
+        session.last_stop_timecode = Timecode(hours=0, minutes=0, seconds=5, frames=0)
 
         assert session.last_clip_duration_seconds() is None
 
     def test_returns_none_when_stop_missing(self):
         session = make_session(make_profile())
-        session.last_start_timecode = Timecode(hours=0, minutes=0, seconds=0, subfield=0)
+        session.last_start_timecode = Timecode(hours=0, minutes=0, seconds=0, frames=0)
 
         assert session.last_clip_duration_seconds() is None
 
     def test_computes_duration_when_both_present(self):
         session = make_session(make_profile())
-        session.last_start_timecode = Timecode(hours=0, minutes=0, seconds=0, subfield=0)
-        session.last_stop_timecode = Timecode(hours=0, minutes=0, seconds=7, subfield=0)
+        session.last_start_timecode = Timecode(hours=0, minutes=0, seconds=0, frames=0)
+        session.last_stop_timecode = Timecode(hours=0, minutes=0, seconds=7, frames=0)
 
         assert session.last_clip_duration_seconds() == 7.0
 
     def test_returns_none_when_stop_not_after_start(self):
         session = make_session(make_profile())
-        session.last_start_timecode = Timecode(hours=0, minutes=0, seconds=10, subfield=0)
-        session.last_stop_timecode = Timecode(hours=0, minutes=0, seconds=5, subfield=0)
+        session.last_start_timecode = Timecode(hours=0, minutes=0, seconds=10, frames=0)
+        session.last_stop_timecode = Timecode(hours=0, minutes=0, seconds=5, frames=0)
 
         assert session.last_clip_duration_seconds() is None
