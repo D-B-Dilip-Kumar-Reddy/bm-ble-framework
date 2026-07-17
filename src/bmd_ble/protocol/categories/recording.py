@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import struct
 
-from ..codec import RESERVED_BYTE, CommandHeader, encode_assign
+from ..codec import RESERVED_BYTE, CommandHeader, encode_assign, header_matches
 from ..types import DATA_TYPE_BYTE_WIDTHS, DATA_TYPE_STRUCT_FORMATS, DataType
 
 
@@ -90,7 +90,7 @@ def is_recording_state_echo(header: CommandHeader, *, category: int, parameter: 
     command before decoding its payload — see CLAUDE.md's verification
     strategy (echo first, ``CAMERA_STATUS`` as secondary cross-check).
     """
-    return header.category == category and header.parameter == parameter
+    return header_matches(header, category=category, parameter=parameter)
 
 
 def decode_recording_state(payload: bytes, data_type: DataType) -> bool:

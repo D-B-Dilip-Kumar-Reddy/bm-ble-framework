@@ -109,6 +109,42 @@ class CommandSpec:
     provenance: CommandProvenance | None = None
 
 
+@dataclass(frozen=True)
+class StorageSignalSpec:
+    """One sniffer-observed passive storage-monitoring signal from a
+    profile's ``storage`` map.
+
+    Unlike ``CommandSpec``, nothing here is ever sent by this repo's code —
+    these are decode-only hints for notifications the camera emits
+    unprompted (CLAUDE.md design principle 10, planned storage monitoring).
+    That's why this doesn't carry ``reserved``/``operation``/
+    ``echo_operation``: those only mean something for a command this repo
+    encodes and writes to ``OUTGOING_CONTROL``.
+    """
+
+    name: str
+    category: int
+    parameter: int
+    data_type: DataType
+    values: dict[str, int]
+    byte_offset: int = 0
+    provenance: CommandProvenance | None = None
+
+
+def _parse_provenance(block: dict) -> CommandProvenance | None:
+    """Parse a ``provenance`` sub-block shared by ``commands`` and ``storage`` entries."""
+    provenance_raw = block.get("provenance")
+    if provenance_raw is None:
+        return None
+    return CommandProvenance(
+        status=provenance_raw.get("status", "UNVERIFIED"),
+        method=provenance_raw.get("method"),
+        capture_refs=tuple(provenance_raw.get("capture_refs", ())),
+        verified_on=provenance_raw.get("verified_on"),
+        notes=provenance_raw.get("notes"),
+    )
+
+
 @dataclass
 class CameraProfile:
     """
@@ -133,6 +169,10 @@ class CameraProfile:
 
     # Sniffer-confirmed command families, keyed by command name.
     commands: dict[str, CommandSpec] = field(default_factory=dict)
+
+    # Passively-observed storage-monitoring signals, keyed by signal name.
+    # Never sent — see StorageSignalSpec's docstring.
+    storage: dict[str, StorageSignalSpec] = field(default_factory=dict)
 
     # Raw JSON for reference
     _raw: dict = field(default_factory=dict, repr=False, compare=False)
@@ -159,6 +199,32 @@ class CameraProfile:
             raise ValueError(
                 f"Profile {self.model_key}_{self.firmware} command '{name}' is missing "
                 f"values: {', '.join(missing)} — populate commands.{name}.values in {json_path}."
+            )
+        return spec
+
+    # ── Storage signal access ───────────────────────────────────────────────
+
+    def storage_signal(self, name: str) -> StorageSignalSpec | None:
+        """The named storage signal block, or None when this profile lacks it."""
+        return self.storage.get(name)
+
+    def require_storage_signal(
+        self, name: str, value_names: tuple[str, ...] = ()
+    ) -> StorageSignalSpec:
+        """Return the named storage signal block, raising ValueError when the
+        block or any of ``value_names`` is missing from the profile JSON."""
+        json_path = f"payloads/models/{self.model_key}_{self.firmware}.json"
+        spec = self.storage.get(name)
+        if spec is None:
+            raise ValueError(
+                f"Profile {self.model_key}_{self.firmware} has no '{name}' storage block — "
+                f"populate {json_path}'s storage.{name} first."
+            )
+        missing = [value for value in value_names if value not in spec.values]
+        if missing:
+            raise ValueError(
+                f"Profile {self.model_key}_{self.firmware} storage signal '{name}' is missing "
+                f"values: {', '.join(missing)} — populate storage.{name}.values in {json_path}."
             )
         return spec
 
@@ -204,10 +270,10 @@ class CameraProfile:
                 profile.ble_name,
                 profile.status,
             )
-        for spec in profile.commands.values():
+        for spec in (*profile.commands.values(), *profile.storage.values()):
             if spec.provenance is not None and spec.provenance.status != "VERIFIED":
                 logger.info(
-                    "[%s @ %s] Command '%s' provenance status is %s",
+                    "[%s @ %s] '%s' provenance status is %s",
                     model_key,
                     profile.ble_name,
                     spec.name,
@@ -232,18 +298,6 @@ class CameraProfile:
         for name, block in raw.get("commands", {}).items():
             if name.startswith("_"):
                 continue
-            provenance_raw = block.get("provenance")
-            provenance = (
-                CommandProvenance(
-                    status=provenance_raw.get("status", "UNVERIFIED"),
-                    method=provenance_raw.get("method"),
-                    capture_refs=tuple(provenance_raw.get("capture_refs", ())),
-                    verified_on=provenance_raw.get("verified_on"),
-                    notes=provenance_raw.get("notes"),
-                )
-                if provenance_raw is not None
-                else None
-            )
             commands[name] = CommandSpec(
                 name=name,
                 category=block["category"],
@@ -255,7 +309,23 @@ class CameraProfile:
                 reserved=block.get("reserved", 0x00),
                 operation=block.get("operation"),
                 echo_operation=block.get("echo_operation"),
-                provenance=provenance,
+                provenance=_parse_provenance(block),
+            )
+
+        storage: dict[str, StorageSignalSpec] = {}
+        for name, block in raw.get("storage", {}).items():
+            if name.startswith("_"):
+                continue
+            storage[name] = StorageSignalSpec(
+                name=name,
+                category=block["category"],
+                parameter=block["parameter"],
+                data_type=DataType[block["data_type"]],
+                values={
+                    key: value for key, value in block["values"].items() if not key.startswith("_")
+                },
+                byte_offset=block.get("byte_offset", 0),
+                provenance=_parse_provenance(block),
             )
 
         return cls(
@@ -268,6 +338,7 @@ class CameraProfile:
             gap_metadata_readable=gap_meta_data.get("readable", False),
             device_info_metadata_readable=device_info_meta_data.get("readable", False),
             commands=commands,
+            storage=storage,
             _raw=raw,
         )
 

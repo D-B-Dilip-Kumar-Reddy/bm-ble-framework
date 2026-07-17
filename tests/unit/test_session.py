@@ -7,6 +7,7 @@ production.
 """
 
 import asyncio
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -57,11 +58,34 @@ def _recording_packet(value: int) -> bytearray:
     return bytearray(encode_packet(header, payload=bytes([value])))
 
 
-def make_profile(recording_block: dict | str = "default") -> CameraProfile:
-    """A real CameraProfile with a controllable `commands.recording` block.
+def _storage_packet(value: int, *, byte_offset: int = 1) -> bytearray:
+    """A storage-category CAMERA_REPORT matching the default profile's
+    write_margin_warning block (category=0x09/parameter=0x01/INT8,
+    meaningful byte at offset 1) — mirrors the real 3-byte capture
+    (`00 01 00` / `00 FE 00`), with `value` placed at `byte_offset` and the
+    other two bytes zero."""
+    header = CommandHeader(
+        destination=0xFF,
+        command_id=0x00,
+        reserved=0x00,
+        category=0x09,
+        parameter=0x01,
+        data_type=DataType.INT8,
+        operation=Operation.CAMERA_REPORT,
+    )
+    payload = bytearray(3)
+    payload[byte_offset] = value & 0xFF
+    return bytearray(encode_packet(header, payload=bytes(payload)))
 
-    Pass ``recording_block=None`` for a profile without the block, or a dict
-    to override the default sniffer-verified G2 values.
+
+def make_profile(
+    recording_block: dict | str = "default", storage_block: dict | str = "default"
+) -> CameraProfile:
+    """A real CameraProfile with controllable `commands.recording` and
+    `storage.write_margin_warning` blocks.
+
+    Pass ``None`` for either to build a profile lacking that block, or a
+    dict to override the defaults.
     """
     if recording_block == "default":
         recording_block = {
@@ -71,9 +95,19 @@ def make_profile(recording_block: dict | str = "default") -> CameraProfile:
             "reserved": 0x01,
             "values": {"start": 2, "stop": 0},
         }
+    if storage_block == "default":
+        storage_block = {
+            "category": 0x09,
+            "parameter": 0x01,
+            "data_type": "INT8",
+            "byte_offset": 1,
+            "values": {"nominal": 1, "low_margin": -2},
+        }
     raw = {"_meta": {"model": "Pocket 6K G2", "ble_name": "A:TEST"}}
     if recording_block is not None:
         raw["commands"] = {"recording": recording_block}
+    if storage_block is not None:
+        raw["storage"] = {"write_margin_warning": storage_block}
     return CameraProfile._from_raw(MODEL_KEY, FIRMWARE, raw)
 
 
@@ -83,6 +117,7 @@ def make_session(profile: CameraProfile) -> CameraSession:
     session = CameraSession.__new__(CameraSession)
     session.profile = profile
     session.echo_timeout_s = 2.0
+    session.write_margin_window_s = 2.0
     session._router = MagicMock()
     session._router.wait_for = AsyncMock()
     session._controller = AsyncMock()
@@ -91,6 +126,8 @@ def make_session(profile: CameraProfile) -> CameraSession:
     session.last_stop_timecode = None
     session.is_recording = None
     session.last_stop_reason = None
+    session.last_stop_signal = None
+    session._last_low_margin_at = None
     session._unexpected_stop_event = asyncio.Event()
     session._pending_command = False
     return session
@@ -432,3 +469,94 @@ class TestRecordStopNoOp:
         await session.record_stop()
 
         session._controller.write_outgoing_control.assert_awaited_once()
+
+
+class TestObserveWriteMargin:
+    """CANDIDATE signal (see docs/recording.md): a storage notification
+    observed to precede a camera-initiated stop on a known-slow SD card.
+    `_observe_write_margin` tracks it; `_observe_recording_state` only
+    attaches it to an unexpected stop when it fired recently enough, and
+    never claims it without direct supporting evidence for that stop."""
+
+    def test_low_margin_alone_does_not_touch_stop_fields(self):
+        session = make_session(make_profile())
+
+        session._observe_write_margin(_storage_packet(-2))
+
+        assert session._last_low_margin_at is not None
+        assert session.last_stop_reason is None
+        assert session.last_stop_signal is None
+
+    def test_nominal_reading_never_sets_low_margin_timestamp(self):
+        session = make_session(make_profile())
+
+        session._observe_write_margin(_storage_packet(1))
+
+        assert session._last_low_margin_at is None
+
+    def test_ignores_malformed_data(self):
+        session = make_session(make_profile())
+
+        session._observe_write_margin(bytearray([0x01, 0x02]))
+
+        assert session._last_low_margin_at is None
+
+    def test_no_op_without_a_storage_command_block(self):
+        session = make_session(make_profile(storage_block=None))
+
+        session._observe_write_margin(_storage_packet(-2))
+
+        assert session._last_low_margin_at is None
+
+    def test_unexpected_stop_within_window_sets_low_write_margin_signal(self):
+        session = make_session(make_profile())
+        session.is_recording = True
+
+        session._observe_write_margin(_storage_packet(-2))
+        session._observe_recording_state(_recording_packet(0))
+
+        assert session.last_stop_reason == "unexpected"
+        assert session.last_stop_signal == "low_write_margin"
+
+    def test_unexpected_stop_with_no_prior_warning_keeps_signal_none(self):
+        session = make_session(make_profile())
+        session.is_recording = True
+
+        session._observe_recording_state(_recording_packet(0))
+
+        assert session.last_stop_reason == "unexpected"
+        assert session.last_stop_signal is None
+
+    def test_unexpected_stop_outside_window_keeps_signal_none(self):
+        session = make_session(make_profile())
+        session.is_recording = True
+        session.write_margin_window_s = 2.0
+        session._last_low_margin_at = time.monotonic() - 5.0  # older than the window
+
+        session._observe_recording_state(_recording_packet(0))
+
+        assert session.last_stop_reason == "unexpected"
+        assert session.last_stop_signal is None
+
+    def test_requested_stop_never_sets_low_write_margin_signal(self):
+        """A confirmed record_stop() must not pick up a stale low-margin
+        reading — last_stop_signal only ever applies to unexpected stops."""
+        session = make_session(make_profile())
+        session.is_recording = True
+        session._pending_command = True
+
+        session._observe_write_margin(_storage_packet(-2))
+        session._observe_recording_state(_recording_packet(0))
+
+        assert session.last_stop_reason is None  # unchanged: _pending_command suppressed it
+        assert session.last_stop_signal is None
+
+    def test_low_margin_timestamp_resets_on_fresh_recording_start(self):
+        session = make_session(make_profile())
+        session.is_recording = False
+        session._last_low_margin_at = time.monotonic()
+
+        session._observe_recording_state(_recording_packet(2))
+
+        assert session.is_recording is True
+        assert session._last_low_margin_at is None

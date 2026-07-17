@@ -31,12 +31,20 @@ category, so `is_recording` reflects the camera's actual last-reported state
 and a camera-initiated stop — observed on real hardware when the SD card's
 write speed can't keep up — is detected immediately instead of only being
 noticed the next time record_stop() is called. See docs/recording.md.
+
+It also watches for a second, CANDIDATE-status signal — a storage
+notification observed to precede that same camera-initiated stop on real
+hardware — and surfaces it as `last_stop_signal` when it fires shortly
+before an unexpected stop. This is a narrow diagnostic annotation, not the
+CLAUDE.md-planned storage-monitoring subsystem (no card-ready checks, no
+capacity tracking) — see docs/recording.md.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import time
 from typing import Any
 
 from .camera_controller import BMDCameraController
@@ -49,6 +57,7 @@ from .protocol.categories.recording import (
     encode_record_stop,
     is_recording_state_echo,
 )
+from .protocol.categories.storage import decode_write_margin, is_storage_notification
 from .protocol.codec import decode_packet
 from .scanner import scan_for_camera
 from .timecode import Timecode, decode_timecode, duration_seconds
@@ -64,10 +73,15 @@ class CameraSession:
         *,
         echo_timeout_s: float = 3.0,
         connect_settle_s: float = 6.0,
+        write_margin_window_s: float = 2.0,
     ) -> None:
         self.profile = CameraProfile.for_model(model_key=model_key, firmware=firmware)
         self.echo_timeout_s = echo_timeout_s
         self.connect_settle_s = connect_settle_s
+        # Real-hardware evidence: a low-write-margin warning has been
+        # observed 0.1-1.4s before every camera-initiated stop seen so far
+        # (6/6 occurrences, 2 camera models) — see docs/recording.md.
+        self.write_margin_window_s = write_margin_window_s
         self._router = NotificationRouter()
         self._controller: BMDCameraController | None = None
         self._latest_timecode: Timecode | None = None
@@ -87,6 +101,13 @@ class CameraSession:
         # The *specific reason* for an unexpected stop isn't decodable from
         # the wire yet — only that one happened.
         self.last_stop_reason: str | None = None
+        # A separate, additive attribute (not folded into last_stop_reason,
+        # which stays exactly "requested" | "unexpected" | None) — set to
+        # "low_write_margin" when a CANDIDATE low-margin storage signal was
+        # observed shortly before an unexpected stop. None otherwise,
+        # including for every requested stop. See docs/recording.md.
+        self.last_stop_signal: str | None = None
+        self._last_low_margin_at: float | None = None
         self._unexpected_stop_event = asyncio.Event()
         self._pending_command = False
 
@@ -109,9 +130,11 @@ class CameraSession:
 
     def _handle_incoming(self, characteristic: Any, data: bytearray) -> None:
         """INCOMING_CONTROL callback: feeds the echo router, then watches for
-        an unsolicited recording-state change. Never raises."""
+        an unsolicited recording-state change and the CANDIDATE write-margin
+        signal. Never raises."""
         self._router.handle_incoming(characteristic, data)
         self._observe_recording_state(data)
+        self._observe_write_margin(data)
 
     def _observe_recording_state(self, data: bytearray) -> None:
         """Update `is_recording` from any recording-category notification,
@@ -137,13 +160,48 @@ class CameraSession:
 
         was_recording = self.is_recording
         self.is_recording = confirmed
+        if confirmed and not was_recording:
+            # A new clip started — a stale low-margin reading from the
+            # *previous* clip must not leak into this one's stop classification.
+            self._last_low_margin_at = None
         if was_recording and not confirmed and not self._pending_command:
             # Mirrors the requested-stop branch in _set_recording_state, so
             # last_clip_duration_seconds() stays meaningful whether the stop
             # was requested or observed unsolicited.
             self.last_stop_timecode = self._latest_timecode
             self.last_stop_reason = "unexpected"
+            if (
+                self._last_low_margin_at is not None
+                and time.monotonic() - self._last_low_margin_at <= self.write_margin_window_s
+            ):
+                self.last_stop_signal = "low_write_margin"
             self._unexpected_stop_event.set()
+
+    def _observe_write_margin(self, data: bytearray) -> None:
+        """Track the most recent CANDIDATE low-write-margin storage signal
+        (see docs/recording.md's "Camera-initiated stop detection" section).
+        Never raises: a profile without the storage block, or a packet this
+        can't decode, simply isn't this signal.
+        """
+        try:
+            spec = self.profile.require_storage_signal(
+                "write_margin_warning", ("nominal", "low_margin")
+            )
+        except ValueError:
+            return
+        try:
+            header, payload = decode_packet(bytes(data))
+        except ValueError:
+            return
+        if not is_storage_notification(header, category=spec.category, parameter=spec.parameter):
+            return
+        try:
+            value = decode_write_margin(payload, spec.data_type, byte_offset=spec.byte_offset)
+        except ValueError:
+            return
+
+        if value == spec.values["low_margin"]:
+            self._last_low_margin_at = time.monotonic()
 
     def _handle_timecode(self, _characteristic: Any, data: bytearray) -> None:
         """TIMECODE callback — decodes and stores the latest reading. Never raises."""

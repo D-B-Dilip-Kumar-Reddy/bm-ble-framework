@@ -69,7 +69,9 @@
     },
     "storage": {
       "type": "object",
-      "description": "Per-camera storage-monitoring characteristics and decode hints. Deliberately loose until the first storage sniffer capture lands; tighten this definition then."
+      "description": "Per-camera storage-monitoring signals (CLAUDE.md design principle 10). Same command-block shape as `commands`, but nothing under here is ever sent by this repo's code — these are decode-only hints for notifications the camera emits unprompted.",
+      "patternProperties": { "^_": {} },
+      "additionalProperties": { "$ref": "#/$defs/storageSignal" }
     }
   },
   "patternProperties": { "^_": {} },
@@ -115,6 +117,35 @@
         "echo_operation": {
           "$ref": "#/$defs/byte",
           "description": "Operation byte the camera uses when reporting this category/parameter on INCOMING_CONTROL (0x02 CAMERA_REPORT on every capture so far). Raw integer so an unknown future value still round-trips."
+        },
+        "provenance": { "$ref": "#/$defs/provenance" }
+      },
+      "patternProperties": { "^_": {} },
+      "additionalProperties": false
+    },
+    "storageSignal": {
+      "type": "object",
+      "required": ["category", "parameter", "data_type", "values", "provenance"],
+      "description": "A passively-decoded storage-monitoring notification. Same shape as `command` minus the send-only fields (reserved, operation, echo_operation) — nothing under `storage` is ever sent by this repo's code.",
+      "properties": {
+        "category": { "$ref": "#/$defs/byte" },
+        "parameter": { "$ref": "#/$defs/byte" },
+        "data_type": {
+          "enum": ["VOID", "BOOL", "INT8", "INT16", "INT32", "INT64", "STRING", "FIXED16"],
+          "description": "Symbolic name matching protocol/types.py DataType (official spec coding: VOID/BOOL=0, INT8=1, INT16=2, INT32=3, INT64=4, STRING=5, FIXED16=128)."
+        },
+        "byte_offset": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "Byte offset within the payload that carries the signal. Most storage signals will use 0 (the leading byte); a signal may need a nonzero offset when earlier bytes are constant/unexplained on every capture seen so far."
+        },
+        "values": {
+          "type": "object",
+          "minProperties": 1,
+          "description": "Named payload values, e.g. {\"nominal\": 1, \"low_margin\": -2}. Only the exact values actually observed on the wire — never a sign-based or range-based generalization (CLAUDE.md design principle 6).",
+          "patternProperties": { "^_": {} },
+          "additionalProperties": { "type": "integer" }
         },
         "provenance": { "$ref": "#/$defs/provenance" }
       },

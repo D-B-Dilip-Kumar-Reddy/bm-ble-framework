@@ -163,20 +163,37 @@ recording). Summary of the `CameraSession` surface it adds:
 ```python
 session.is_recording        # bool | None — notification-derived, never inferred
 session.last_stop_reason     # "requested" | "unexpected" | None
+session.last_stop_signal     # "low_write_margin" | None — see below
+session.write_margin_window_s  # float, default 2.0
 await session.wait_while_recording(timeout)  # -> bool; False = stopped early
 ```
 
 `_handle_incoming` (the real `INCOMING_CONTROL` subscribe callback, replacing
 the router's `handle_incoming` directly) now feeds every notification through
-both the router (for the pull-based echo wait) and `_observe_recording_state`
-(a continuous push-based watch). `is_recording` reflects the last-reported
-state from *any* recording-category notification, not just ones a pending
-`record_start()`/`record_stop()` call is waiting on. A `True → False`
-transition observed while no such call is in flight (tracked via
-`_pending_command`) is an unexpected stop: `last_stop_reason` becomes
-`"unexpected"`, `last_stop_timecode` is snapshotted (so
+the router (for the pull-based echo wait), `_observe_recording_state`, and
+`_observe_write_margin` (both continuous push-based watches). `is_recording`
+reflects the last-reported state from *any* recording-category notification,
+not just ones a pending `record_start()`/`record_stop()` call is waiting on.
+A `True → False` transition observed while no such call is in flight
+(tracked via `_pending_command`) is an unexpected stop: `last_stop_reason`
+becomes `"unexpected"`, `last_stop_timecode` is snapshotted (so
 `last_clip_duration_seconds()` still works), and callers blocked in
 `wait_while_recording()` return `False` immediately.
+
+`_observe_write_margin` separately tracks a CANDIDATE storage signal (see
+`docs/recording.md`'s "A CANDIDATE signal: the write-margin warning") that's
+been observed to precede that same kind of unexpected stop on real
+hardware. If a low-margin reading was seen within `write_margin_window_s`
+of an unexpected stop, `last_stop_signal` is set to `"low_write_margin"` —
+a separate attribute from `last_stop_reason`, deliberately: folding this
+into `last_stop_reason` as a compound string would silently break any
+caller doing `if session.last_stop_reason == "unexpected":`, exactly the
+case where the extra detail matters most. `last_stop_signal` stays `None`
+for every requested stop and for an unexpected stop with no preceding
+warning — it never claims a specific cause without direct supporting
+evidence for that particular stop. A stale reading from a *previous* clip
+can't leak into the next one either: `_observe_recording_state` resets the
+tracked timestamp on every fresh `False → True` recording transition.
 
 `record_stop()` is a no-op when `is_recording` already positively confirms
 `False` (an already-stopped camera doesn't echo a redundant stop command —
@@ -203,9 +220,10 @@ byte gets fully decoded), the secondary check can be added here.
 
 - **Storage preconditions** (CLAUDE.md design principle 10) — checking
   storage state before recording requires notification-driven storage
-  state tracking, which doesn't exist yet (no storage characteristic
-  parsing). Not implemented. Note: `is_recording`/`last_stop_reason` are a
-  small, notification-driven slice of what CLAUDE.md's planned
+  state tracking, which doesn't exist yet (no card-ready check, no
+  remaining-capacity tracking, no `BMDStorageError` gating). Not
+  implemented. Note: `is_recording`/`last_stop_reason`/`last_stop_signal`
+  are a small, notification-driven slice of what CLAUDE.md's planned
   `CameraState` (design principle 4) would eventually cover — they live as
   plain attributes on `CameraSession` for now rather than a separate
   `state.py`/`CameraState` object, since recording is still the only
@@ -215,11 +233,12 @@ byte gets fully decoded), the secondary check can be added here.
   `CameraSession` doesn't wrap them yet.
 - **Reconnect wiring beyond `camera_controller.connect()`'s own behavior** —
   no additional session-level retry/backoff logic.
-- **Any category other than recording** — `CameraSession` only has
-  `record_start`/`record_stop` today.
-- **Attributing a specific cause to an unexpected stop** (e.g. "slow write
-  speed" vs. "card full") — not decodable from the wire yet, see
-  `docs/recording.md`.
+- **Any category other than recording (and one CANDIDATE storage signal)** —
+  `CameraSession` only has `record_start`/`record_stop` today.
+- **Confirmed causation for an unexpected stop.** `last_stop_signal ==
+  "low_write_margin"` reports a correlated CANDIDATE signal, not a decoded
+  "reason code" — it hasn't been isolated from other possible autostop
+  causes (card full, card removed, power loss). See `docs/recording.md`.
 
 ---
 
@@ -239,9 +258,16 @@ on timeout, `BMDVerificationError` on a mismatched confirmed state, missing
 profile command/values raising before any write is attempted, TIMECODE
 snapshot capture (including that a failed verification snapshots nothing,
 and that no TIMECODE reading yet yields `None`), `last_clip_duration_seconds()`,
-the post-connect settle wait, and camera-initiated stop detection
+the post-connect settle wait, camera-initiated stop detection
 (`_observe_recording_state` updating `is_recording` and flagging/not-flagging
 an unexpected stop depending on `_pending_command`, `wait_while_recording()`
-returning `True`/`False`, and `record_stop()`'s no-op guard). No real BLE in
-either test file. `tests/unit/test_timecode.py` covers
-`decode_timecode`/`duration_seconds` directly — see `docs/timecode.md`.
+returning `True`/`False`, and `record_stop()`'s no-op guard), and the
+write-margin signal (`_observe_write_margin` tracking a low-margin reading;
+`last_stop_signal` set only when that reading falls within
+`write_margin_window_s` of an unexpected stop, staying `None` for a
+requested stop, a stop with no preceding warning, or a reading outside the
+window; and the timestamp resetting on a fresh recording start). No real
+BLE in either test file. `tests/unit/protocol/categories/test_storage.py`
+covers `is_storage_notification`/`decode_write_margin` directly.
+`tests/unit/test_timecode.py` covers `decode_timecode`/`duration_seconds`
+directly — see `docs/timecode.md`.

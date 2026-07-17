@@ -121,6 +121,8 @@ src/bmd_ble/
     categories/
       __init__.py
       recording.py          # Record start / stop
+      storage.py            # Passive decode of storage-monitoring
+                            # notifications (CANDIDATE write-margin signal)
       settings.py           # (planned) Codec, quality, resolution, FPS
       media.py              # (planned) Photo capture, playback controls
       metadata.py           # (planned) Video / photo metadata reads
@@ -228,6 +230,7 @@ Populate this table as categories are confirmed from sniffer sessions. Each cate
 | Category | Description | File |
 |---|---|---|
 | `0x0A` | Recording (record start/stop) | `protocol/categories/recording.py` |
+| `0x09` (param `0x01`) | Storage write-margin signal — CANDIDATE, not confirmed causation, see `docs/recording.md` (category `0x09` is the same ambient-telemetry category `TIMECODE` param `0x04` already lives in) | `protocol/categories/storage.py` |
 
 ### Data types (`protocol/types.py`)
 

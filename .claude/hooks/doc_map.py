@@ -35,6 +35,7 @@ DOC_MAP: list[tuple[str, list[str]]] = [
         ["docs/packet_structure_and_constants.md", "docs/protocol.md"],
     ),
     ("src/bmd_ble/protocol/categories/recording.py", ["docs/recording.md"]),
+    ("src/bmd_ble/protocol/categories/storage.py", ["docs/recording.md"]),
     (
         "src/bmd_ble/camera_controller.py",
         [

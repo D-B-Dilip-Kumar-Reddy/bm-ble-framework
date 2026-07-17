@@ -28,6 +28,7 @@ from bmd_ble.camera_profile import (
     KNOWN_PROFILES,
     CameraProfile,
     CommandSpec,
+    StorageSignalSpec,
     validate_profile,
 )
 from bmd_ble.protocol.types import DataType
@@ -55,6 +56,24 @@ def make_valid_raw(**overrides) -> dict:
             }
         },
     }
+    raw.update(overrides)
+    return raw
+
+
+def make_valid_raw_with_storage(**overrides) -> dict:
+    """`make_valid_raw` plus a schema-valid `storage.write_margin_warning` block."""
+    raw = make_valid_raw(
+        storage={
+            "write_margin_warning": {
+                "category": 9,
+                "parameter": 1,
+                "data_type": "INT8",
+                "byte_offset": 1,
+                "values": {"nominal": 1, "low_margin": -2},
+                "provenance": {"status": "CANDIDATE"},
+            }
+        }
+    )
     raw.update(overrides)
     return raw
 
@@ -128,6 +147,25 @@ class TestProfileLoading:
 
         assert any("UNVERIFIED" in record.message for record in caplog.records)
 
+    def test_non_verified_storage_signal_logs_info(self, tmp_path, monkeypatch, caplog):
+        """A CANDIDATE storage entry gets the same provenance-status INFO
+        log every non-VERIFIED commands block already gets — the logging
+        loop must walk storage too, not just commands."""
+        models_dir = tmp_path / "models"
+        models_dir.mkdir(parents=True)
+        (models_dir / "POCKET_6K_G2_v7.9.json").write_text(
+            json.dumps(make_valid_raw_with_storage()), encoding="utf-8"
+        )
+        monkeypatch.setattr("bmd_ble.camera_profile.MODELS_DIR", models_dir)
+
+        with caplog.at_level(logging.INFO, logger="bmd_ble.camera_profile"):
+            CameraProfile.for_model("POCKET_6K_G2", "v7.9")
+
+        assert any(
+            "write_margin_warning" in record.message and "CANDIDATE" in record.message
+            for record in caplog.records
+        )
+
 
 class TestValidateProfile:
     def test_accepts_valid_profile(self):
@@ -183,6 +221,28 @@ class TestValidateProfile:
         raw["commands"]["recording"]["_comment"] = "block note"
         validate_profile(raw, source="test.json")
 
+    def test_accepts_valid_storage_block(self):
+        validate_profile(make_valid_raw_with_storage(), source="test.json")
+
+    def test_rejects_unknown_key_in_storage_block(self):
+        """additionalProperties: false catches typos, same as commands."""
+        raw = make_valid_raw_with_storage()
+        raw["storage"]["write_margin_warning"]["catagory"] = 9
+        with pytest.raises(ValueError, match="catagory"):
+            validate_profile(raw, source="test.json")
+
+    def test_rejects_non_integer_storage_value(self):
+        raw = make_valid_raw_with_storage()
+        raw["storage"]["write_margin_warning"]["values"]["nominal"] = "1"
+        with pytest.raises(ValueError, match="values"):
+            validate_profile(raw, source="test.json")
+
+    def test_rejects_storage_block_without_provenance(self):
+        raw = make_valid_raw_with_storage()
+        del raw["storage"]["write_margin_warning"]["provenance"]
+        with pytest.raises(ValueError, match="provenance"):
+            validate_profile(raw, source="test.json")
+
 
 class TestFromRawLeniency:
     """_from_raw stays deliberately lenient (validation is for_model's job)
@@ -197,6 +257,7 @@ class TestFromRawLeniency:
         assert profile.status == "UNKNOWN"
         assert profile.ble_name == ""
         assert profile.commands == {}
+        assert profile.storage == {}
 
     def test_uses_partial_meta_defaults(self):
         profile = CameraProfile._from_raw("POCKET_6K_G2", "v7.9", {"_meta": {"model": "P6K G2"}})
@@ -265,6 +326,68 @@ class TestRequireCommand:
             profile.require_command("recording", ("start", "stop"))
 
 
+class TestStorageResolution:
+    def test_resolves_write_margin_warning_block(self):
+        profile = CameraProfile._from_raw("POCKET_6K_G2", "v7.9", make_valid_raw_with_storage())
+
+        spec = profile.storage_signal("write_margin_warning")
+        assert isinstance(spec, StorageSignalSpec)
+        assert spec.name == "write_margin_warning"
+        assert spec.category == 9
+        assert spec.parameter == 1
+        assert spec.data_type == DataType.INT8
+        assert spec.byte_offset == 1
+        assert spec.values == {"nominal": 1, "low_margin": -2}
+        assert spec.provenance is not None
+        assert spec.provenance.status == "CANDIDATE"
+
+    def test_byte_offset_defaults_to_zero_when_absent(self):
+        raw = make_valid_raw_with_storage()
+        del raw["storage"]["write_margin_warning"]["byte_offset"]
+        profile = CameraProfile._from_raw("POCKET_6K_G2", "v7.9", raw)
+
+        assert profile.storage_signal("write_margin_warning").byte_offset == 0
+
+    def test_comment_keys_are_skipped(self):
+        raw = make_valid_raw_with_storage()
+        raw["storage"]["_comment"] = "note"
+        raw["storage"]["write_margin_warning"]["values"]["_comment"] = "note"
+        profile = CameraProfile._from_raw("POCKET_6K_G2", "v7.9", raw)
+
+        assert set(profile.storage) == {"write_margin_warning"}
+        assert profile.storage_signal("write_margin_warning").values == {
+            "nominal": 1,
+            "low_margin": -2,
+        }
+
+    def test_storage_signal_returns_none_when_absent(self):
+        profile = CameraProfile._from_raw("POCKET_6K_PRO", "v8.6", {})
+
+        assert profile.storage_signal("write_margin_warning") is None
+
+
+class TestRequireStorageSignal:
+    def test_returns_spec_when_present(self):
+        profile = CameraProfile._from_raw("POCKET_6K_G2", "v7.9", make_valid_raw_with_storage())
+
+        spec = profile.require_storage_signal("write_margin_warning", ("nominal", "low_margin"))
+        assert spec.values["low_margin"] == -2
+
+    def test_raises_naming_missing_block(self):
+        profile = CameraProfile._from_raw("POCKET_6K_PRO", "v8.6", {})
+
+        with pytest.raises(ValueError, match="no 'write_margin_warning' storage block"):
+            profile.require_storage_signal("write_margin_warning")
+
+    def test_raises_naming_missing_values(self):
+        raw = make_valid_raw_with_storage()
+        del raw["storage"]["write_margin_warning"]["values"]["low_margin"]
+        profile = CameraProfile._from_raw("POCKET_6K_G2", "v7.9", raw)
+
+        with pytest.raises(ValueError, match="missing.*values: low_margin"):
+            profile.require_storage_signal("write_margin_warning", ("nominal", "low_margin"))
+
+
 def test_pocket_6k_pro_profile_resolves_recording_command():
     """POCKET_6K_PRO_v8.6.json's recording block was populated via
     tools/control/discover_command.py on real hardware — must load and
@@ -278,3 +401,19 @@ def test_pocket_6k_pro_profile_resolves_recording_command():
     assert spec.provenance is not None
     assert spec.provenance.status == "VERIFIED"
     assert spec.provenance.method == "guided-discovery (tools/control/discover_command.py)"
+
+
+@pytest.mark.parametrize(("model_key", "firmware"), KNOWN_PROFILES)
+def test_every_known_profile_resolves_write_margin_warning_storage_signal(model_key, firmware):
+    """Both real profiles carry an identical CANDIDATE write_margin_warning
+    block — passive real-hardware evidence, not sent by this repo's code,
+    see docs/recording.md's Camera-initiated stop detection section."""
+    profile = CameraProfile.for_model(model_key, firmware)
+
+    spec = profile.require_storage_signal("write_margin_warning", ("nominal", "low_margin"))
+    assert spec.category == 9
+    assert spec.parameter == 1
+    assert spec.byte_offset == 1
+    assert spec.values == {"nominal": 1, "low_margin": -2}
+    assert spec.provenance is not None
+    assert spec.provenance.status == "CANDIDATE"

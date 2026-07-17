@@ -37,5 +37,22 @@
         "notes": "3/3 start/stop cycles echo-verified on real hardware via examples/record_start_stop.py. echo_operation is the operation byte the camera itself uses when reporting this category/parameter (distinct from ASSIGN used by the controller's command). Echo payload trailing bytes 00 40 00 01 03 not yet understood — hypothesis: SDI Cat 10 Param 1 transport-mode struct, see docs/protocol.md. 2026-07-09: data_type relabelled BOOL -> INT8 when DataType was remapped to the official spec coding; the captured wire byte (0x01) is unchanged."
       }
     }
+  },
+  "storage": {
+    "write_margin_warning": {
+      "category": 9,
+      "parameter": 1,
+      "data_type": "INT8",
+      "byte_offset": 1,
+      "values": {
+        "nominal": 1,
+        "low_margin": -2
+      },
+      "provenance": {
+        "status": "CANDIDATE",
+        "method": "passive observation from examples/record_start_stop.py real-hardware logs during induced SD card slow-write-speed testing",
+        "notes": "Raw bytes FF 07 00 00 09 01 01 02 00 FE 00. Payload byte at offset 1 flips 0x01 (nominal) -> 0xFE (-2, low_margin) 0.1-1.4s before every autonomous unexpected stop observed on a known-slow SD card — 6/6 occurrences, 3 cycles x 2 camera models (POCKET_6K_G2 v7.9, POCKET_6K_PRO v8.6). Never -2 in 7 unrelated normal-session logs, where this notification fires once per session and stays 0x01. Payload offsets 0 and 2 are constant (0x00) in every sample, both conditions. NOT yet isolated from other possible autostop causes (card full, card removed, power loss) — 'slow write speed' is inference from test context, not read off the wire alone. See docs/recording.md's 'Camera-initiated stop detection' section."
+      }
+    }
   }
 }

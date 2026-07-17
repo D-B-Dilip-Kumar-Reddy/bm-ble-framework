@@ -195,21 +195,64 @@ camera already stopped, on its own, for an as-yet-unknown reason." Fixed:
 confirms `False` — the requested end state is already true, verified from a
 notification, so there's nothing to send or wait for.
 
-**What isn't decodable yet: the *specific* stop reason.** The recording
-category's echo payload is the same single truthy/falsy byte in both the
-requested and unexpected cases — nothing in the captures so far distinguishes
-"stopped because the SD card is too slow" from any other reason a camera
-might auto-stop (card full, card removed, power issue, etc.). `last_stop_reason`
-is therefore only `"requested"` vs. `"unexpected"`, not a specific cause.
-Attributing an unexpected stop to slow write speed today is inference from
-context (it happened right after starting a recording onto a known-slow
-card), not something read off the wire. A future sniffer session that
-isolates a slow-write-speed stop from a card-full stop from a card-removed
-stop — comparing their full notification streams, including `CAMERA_STATUS`
-and the not-yet-decoded category `0x09` storage notifications visible in
-these captures — could potentially find a distinguishing signal; per
-CLAUDE.md design principle 6, nothing is assumed here without that
-verification.
+### A CANDIDATE signal: the write-margin warning
+
+The recording category's own echo payload carries no cause — it's the same
+single truthy/falsy byte in both the requested and unexpected cases. But a
+byte-level comparison of the slow-write-speed captures against 7 unrelated
+normal-session captures (same two camera models) found a second, distinct
+notification that reliably precedes the autonomous stop:
+
+```
+FF 07 00 00 09 01 01 02 00 FE 00
+```
+
+Decoded: `category=0x09`, `parameter=0x01`, `data_type=0x01` (`INT8`),
+`operation=0x02` (`CAMERA_REPORT`), 3-byte payload `00 FE 00`. The payload's
+**offset-1 byte** flips from `0x01` (`1`, "nominal") to `0xFE` (`-2`,
+"low_margin") **0.1–1.4 seconds before every autonomous stop observed** —
+6/6 occurrences, 3 start/stop cycles × 2 camera models
+(`POCKET_6K_G2 v7.9`, `POCKET_6K_PRO v8.6`). Across the 7 normal sessions,
+this notification fires exactly once per session and is always `0x01` —
+`0xFE` never appears. Payload offsets 0 and 2 are constant (`0x00`) in every
+sample, both conditions; only offset 1 carries information observed so far.
+
+This is now modeled as `payloads/models/*.json`'s `storage.write_margin_warning`
+block (`category=9, parameter=1, data_type=INT8, byte_offset=1,
+values={"nominal": 1, "low_margin": -2}`, `provenance.status: "CANDIDATE"`),
+decoded via `protocol/categories/storage.py`'s `decode_write_margin`, and
+watched continuously by `CameraSession._observe_write_margin` the same way
+`_observe_recording_state` watches the recording category — every
+`INCOMING_CONTROL` notification, not just ones an active call is waiting on.
+
+If a low-margin reading (`value == spec.values["low_margin"]`, an *exact*
+match — never a sign-based "any negative value" heuristic, per CLAUDE.md
+design principle 6) was seen within `write_margin_window_s` (default `2.0`s,
+chosen from the observed 0.1–1.4s window) before an unexpected stop,
+`CameraSession.last_stop_signal` is set to `"low_write_margin"`. Otherwise
+it stays `None` — including for every *requested* stop, and for an
+unexpected stop with no preceding warning. **`last_stop_signal` is a
+separate attribute from `last_stop_reason`**, which keeps its existing,
+documented `"requested" | "unexpected" | None` contract unchanged; a caller
+wanting the detail checks both:
+
+```python
+if session.last_stop_reason == "unexpected":
+    if session.last_stop_signal == "low_write_margin":
+        ...  # likely a slow SD card
+    else:
+        ...  # stopped for an unknown reason
+```
+
+**What this is not:** confirmed causation, or CLAUDE.md's planned "Storage
+Media Monitoring" subsystem. There is no log of a *different* autostop cause
+(card full, card removed, power loss) to rule those out — attributing this
+signal to "slow write speed" specifically is inference from test context (a
+known-slow card was used in both captures), not something read off the wire
+alone. This also doesn't implement storage-precondition gating — no
+card-ready check, no remaining-capacity tracking, no `BMDStorageError`. See
+"Remaining work" below for the real-hardware follow-up that could resolve
+this.
 
 ---
 
@@ -265,3 +308,15 @@ Per CLAUDE.md, "Workflow: Adding a New Command":
    warranted.
 9. ~~Detect a camera-initiated (unexpected) recording stop.~~ Done — see
    "Camera-initiated stop detection" below.
+10. **Isolate the write-margin warning from other autostop causes.** The
+    `storage.write_margin_warning` CANDIDATE signal (see "A CANDIDATE
+    signal: the write-margin warning" above) is real and repeatable, but
+    only compared against slow-write-speed failures vs. normal successful
+    recordings — not against a *different* autostop cause. Next: a
+    real-hardware session that deliberately induces a card-full stop and/or
+    a card-removed stop, capturing the same way, to check whether the
+    signal is specific to write speed or a more general "recording ended
+    abnormally" indicator. Out of scope for this repo's automated work — no
+    live camera in this environment; a human operator needs to run the
+    repro and share the logs, same iterative loop as every other protocol
+    finding in this doc.
