@@ -6,6 +6,7 @@ test_camera_profile.py) so `require_command` behaves exactly as in
 production.
 """
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -41,6 +42,21 @@ def _timecode_packet(*, frames: int, seconds: int, minutes: int, hours: int) -> 
     return bytearray(encode_packet(header, payload))
 
 
+def _recording_packet(value: int) -> bytearray:
+    """A recording-category CAMERA_REPORT, matching the default profile's
+    category=0x0A/parameter=0x01/INT8 (see `make_profile`'s default block)."""
+    header = CommandHeader(
+        destination=0xFF,
+        command_id=0x00,
+        reserved=0x01,
+        category=0x0A,
+        parameter=0x01,
+        data_type=DataType.INT8,
+        operation=Operation.CAMERA_REPORT,
+    )
+    return bytearray(encode_packet(header, payload=bytes([value])))
+
+
 def make_profile(recording_block: dict | str = "default") -> CameraProfile:
     """A real CameraProfile with a controllable `commands.recording` block.
 
@@ -73,6 +89,10 @@ def make_session(profile: CameraProfile) -> CameraSession:
     session._latest_timecode = None
     session.last_start_timecode = None
     session.last_stop_timecode = None
+    session.is_recording = None
+    session.last_stop_reason = None
+    session._unexpected_stop_event = asyncio.Event()
+    session._pending_command = False
     return session
 
 
@@ -275,3 +295,140 @@ class TestAenter:
         fake_controller.subscribe_incoming.assert_awaited_once()
         fake_controller.subscribe_timecode.assert_awaited_once()
         mock_sleep.assert_awaited_once_with(1.5)
+
+
+class TestObserveRecordingState:
+    """Real-hardware evidence (slow SD card write speed): the camera can
+    autonomously stop recording without us ever sending a stop command.
+    `_observe_recording_state` is what lets CameraSession notice this from
+    the notification stream instead of only finding out the next time
+    record_stop() is called. See docs/recording.md."""
+
+    def test_updates_is_recording_from_any_recording_notification(self):
+        session = make_session(make_profile())
+
+        session._observe_recording_state(_recording_packet(2))
+        assert session.is_recording is True
+
+        session._observe_recording_state(_recording_packet(0))
+        assert session.is_recording is False
+
+    def test_ignores_non_recording_notifications(self):
+        session = make_session(make_profile())
+
+        session._observe_recording_state(_timecode_packet(frames=0, seconds=0, minutes=0, hours=0))
+
+        assert session.is_recording is None
+
+    def test_ignores_malformed_data(self):
+        session = make_session(make_profile())
+
+        session._observe_recording_state(bytearray([0x01, 0x02]))
+
+        assert session.is_recording is None
+
+    def test_unsolicited_stop_flags_unexpected_and_sets_event(self):
+        session = make_session(make_profile())
+        session.is_recording = True  # already recording, no command in flight
+        tc = Timecode(hours=0, minutes=0, seconds=3, frames=0)
+        session._latest_timecode = tc
+
+        session._observe_recording_state(_recording_packet(0))
+
+        assert session.is_recording is False
+        assert session.last_stop_reason == "unexpected"
+        assert session.last_stop_timecode == tc
+        assert session._unexpected_stop_event.is_set()
+
+    def test_stop_while_pending_command_is_not_flagged_unexpected(self):
+        """The echo for our *own* record_stop() must not be mistaken for an
+        unsolicited stop — see _pending_command in _set_recording_state."""
+        session = make_session(make_profile())
+        session.is_recording = True
+        session._pending_command = True
+
+        session._observe_recording_state(_recording_packet(0))
+
+        assert session.is_recording is False
+        assert session.last_stop_reason is None
+        assert not session._unexpected_stop_event.is_set()
+
+    def test_start_transition_never_flags_unexpected(self):
+        session = make_session(make_profile())
+        session.is_recording = False
+
+        session._observe_recording_state(_recording_packet(2))
+
+        assert session.is_recording is True
+        assert session.last_stop_reason is None
+        assert not session._unexpected_stop_event.is_set()
+
+    def test_no_op_without_a_recording_command_block(self):
+        session = make_session(make_profile(recording_block=None))
+
+        session._observe_recording_state(_recording_packet(0))
+
+        assert session.is_recording is None
+
+
+class TestWaitWhileRecording:
+    @pytest.mark.asyncio
+    async def test_returns_true_when_timeout_elapses_undisturbed(self):
+        session = make_session(make_profile())
+
+        held = await session.wait_while_recording(0.05)
+
+        assert held is True
+
+    @pytest.mark.asyncio
+    async def test_returns_false_when_unexpected_stop_is_observed(self):
+        session = make_session(make_profile())
+        session.is_recording = True
+
+        async def stop_soon():
+            await asyncio.sleep(0.01)
+            session._observe_recording_state(_recording_packet(0))
+
+        asyncio.create_task(stop_soon())
+        held = await session.wait_while_recording(1.0)
+
+        assert held is False
+        assert session.last_stop_reason == "unexpected"
+
+
+class TestRecordStopNoOp:
+    @pytest.mark.asyncio
+    async def test_no_op_when_already_confirmed_not_recording(self):
+        session = make_session(make_profile())
+        session.is_recording = False
+
+        await session.record_stop()
+
+        session._controller.write_outgoing_control.assert_not_awaited()
+        session._router.wait_for.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_still_sends_when_recording_state_unknown(self):
+        session = make_session(make_profile())
+        session.is_recording = None
+        session._router.wait_for.return_value = (
+            MagicMock(category=0x0A, parameter=0x01),
+            bytes([0x00]),
+        )
+
+        await session.record_stop()
+
+        session._controller.write_outgoing_control.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_still_sends_when_recording_state_is_true(self):
+        session = make_session(make_profile())
+        session.is_recording = True
+        session._router.wait_for.return_value = (
+            MagicMock(category=0x0A, parameter=0x01),
+            bytes([0x00]),
+        )
+
+        await session.record_stop()
+
+        session._controller.write_outgoing_control.assert_awaited_once()

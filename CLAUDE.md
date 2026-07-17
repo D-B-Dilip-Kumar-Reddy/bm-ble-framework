@@ -59,7 +59,7 @@ Both checks carry configurable timeouts. If neither confirms the state change, r
 *Current implementation status:* recording verification is **echo-only** — none of the known `CAMERA_STATUS` bits encode recording state, so there is no meaningful secondary cross-check for it yet. See `docs/session_and_verification.md`.
 
 ### 4. Observable state model *(planned)*
-A `CameraState` object reflects the last-known camera state. It is updated **only** from incoming BLE notifications — never inferred from "I sent command X therefore state is now Y". On connect, read the current state before any automation begins. *(Not yet implemented — no `state.py` / `CameraState` / `StorageState` exists today; see `docs/session_and_verification.md` for what verification does instead.)*
+A `CameraState` object reflects the last-known camera state. It is updated **only** from incoming BLE notifications — never inferred from "I sent command X therefore state is now Y". On connect, read the current state before any automation begins. *(The full `state.py` / `CameraState` / `StorageState` object is not yet implemented. A small, notification-driven slice of this already exists directly on `CameraSession` — `is_recording`/`last_stop_reason`, updated only from decoded recording-category notifications, used to detect a camera-initiated stop (e.g. on a slow SD card) without waiting on a command's own echo — see `docs/session_and_verification.md` and `docs/recording.md`.)*
 
 ### 5. Strict transport / protocol separation
 - `camera_controller.py` — BLE transport only: connect, disconnect, raw byte read/write, notification subscription. No BMD protocol knowledge.

@@ -141,6 +141,78 @@ storage-related notification, not by polling.
 
 ---
 
+## Camera-initiated stop detection
+
+Real captures (`6K_G2_slow_write_speed_1.txt`, `6K_PRO_slow_write_speed_1.txt`
+— both against an SD card too slow for the recording's write bitrate) showed
+the camera autonomously stopping a recording, sending an unsolicited
+`INCOMING_CONTROL` `CAMERA_REPORT` on the recording `(category, parameter)`
+— the *same* notification shape as a normal record_stop echo — without this
+repo's code ever sending a stop command. In both captures this happened
+within about a second of `record_start` confirming, and every `record_stop()`
+call later in that cycle then got **no echo at all**: the camera was already
+stopped, so a redundant stop command apparently isn't re-echoed.
+
+Two problems followed from this, both now fixed:
+
+**Problem 1 — nothing noticed the stop until the full recording duration had
+elapsed.** `CameraSession` only watched the notification stream for a fresh
+echo *while a `record_start()`/`record_stop()` call was actively waiting for
+one* (via `NotificationRouter.arm()`/`wait_for()`). Anything arriving outside
+that window — like this unsolicited stop, arriving in the middle of a
+script's `asyncio.sleep(RECORD_SECONDS)` — was buffered but nothing ever
+looked at it until the *next* explicit call.
+
+Fixed with `_observe_recording_state()`: `CameraSession._handle_incoming`
+(the real `INCOMING_CONTROL` callback, subscribed in `__aenter__`) now feeds
+*every* notification through this method in addition to the router, decoding
+any recording-category report and updating `is_recording` unconditionally —
+this is a notification-driven read, never inferred from "we sent a command"
+(CLAUDE.md design principle 4). If it observes a `True → False` transition
+while no `record_start()`/`record_stop()` call is currently awaiting its own
+echo (tracked via `_pending_command`, set only for the duration of
+`_set_recording_state`'s own write+wait), that's classified as **unexpected**:
+`last_stop_reason` is set to `"unexpected"`, `last_stop_timecode` is
+snapshotted (mirroring what a requested stop does, so
+`last_clip_duration_seconds()` stays meaningful), and `_unexpected_stop_event`
+is set.
+
+`CameraSession.wait_while_recording(timeout)` replaces a blind
+`asyncio.sleep(duration)`: it returns `True` if `timeout` elapses with
+recording still going, `False` immediately if an unexpected stop is
+observed first — so a script can react right away instead of waiting out
+the rest of a recording that already ended. `examples/record_start_stop.py`
+uses this instead of `asyncio.sleep(RECORD_SECONDS)`.
+
+**Problem 2 — the now-redundant `record_stop()` call raised
+`BMDVerificationError` for a misleading reason.** Once the camera has
+already autonomously stopped, sending another stop command gets no echo at
+all (see above), so the old code always raised `no echo received within
+{echo_timeout_s}s` — technically true, but misleading: it reads as "we don't
+know whether the stop succeeded," when the confirmed state is actually "the
+camera already stopped, on its own, for an as-yet-unknown reason." Fixed:
+`record_stop()` is now a no-op when `is_recording` already positively
+confirms `False` — the requested end state is already true, verified from a
+notification, so there's nothing to send or wait for.
+
+**What isn't decodable yet: the *specific* stop reason.** The recording
+category's echo payload is the same single truthy/falsy byte in both the
+requested and unexpected cases — nothing in the captures so far distinguishes
+"stopped because the SD card is too slow" from any other reason a camera
+might auto-stop (card full, card removed, power issue, etc.). `last_stop_reason`
+is therefore only `"requested"` vs. `"unexpected"`, not a specific cause.
+Attributing an unexpected stop to slow write speed today is inference from
+context (it happened right after starting a recording onto a known-slow
+card), not something read off the wire. A future sniffer session that
+isolates a slow-write-speed stop from a card-full stop from a card-removed
+stop — comparing their full notification streams, including `CAMERA_STATUS`
+and the not-yet-decoded category `0x09` storage notifications visible in
+these captures — could potentially find a distinguishing signal; per
+CLAUDE.md design principle 6, nothing is assumed here without that
+verification.
+
+---
+
 ## Remaining work
 
 Per CLAUDE.md, "Workflow: Adding a New Command":
@@ -191,3 +263,5 @@ Per CLAUDE.md, "Workflow: Adding a New Command":
    longer recording, or one at a different frame rate, to confirm the
    `frames` rollover and extend `duration_seconds` to be frame-accurate if
    warranted.
+9. ~~Detect a camera-initiated (unexpected) recording stop.~~ Done — see
+   "Camera-initiated stop detection" below.

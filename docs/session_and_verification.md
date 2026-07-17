@@ -48,19 +48,33 @@ opposite):
    sequence number: `arm()` records the sequence number as of arm time, and
    `wait_for` only accepts a delivery whose sequence number is strictly
    greater.
-2. A **duplicate retransmit of the previous command's echo** can arrive
-   chronologically *after* the next command's `arm()` but *before* that
-   next command's real echo — its sequence number looks fresh, but its
-   bytes are identical to what was already consumed for the prior command.
-   Since commands sharing a key always change the payload (recording
-   start/stop toggle between two distinct values), `wait_for` also tracks
-   the payload it last returned for a key and skips any delivery that
-   repeats it, continuing to wait for a genuinely different one.
+2. A **duplicate retransmit** of an echo already visible when `arm()` is
+   called can arrive chronologically *after* `arm()` but *before* the real
+   new echo — its sequence number looks fresh, but its bytes are identical
+   to whatever the stream already showed at arm time. `arm()` snapshots
+   that payload (whatever it is, whether or not anything ever consumed it —
+   see below), and `wait_for` rejects any delivery matching it. Since
+   commands sharing a key always change the payload (recording start/stop
+   toggle between two distinct values), a genuine new echo can never equal
+   what the stream showed *before* the new command was sent, so this never
+   rejects a real one.
+
+   This is deliberately keyed off "what `arm()` saw", not "what `wait_for`
+   last *returned*" — an earlier version tracked the latter and had a real
+   bug: if a command's own `wait_for` timed out (nothing consumed), the
+   stored "last returned" value went stale, and the *next* command's
+   genuinely fresh echo could be wrongly rejected if it happened to share a
+   value with an older, unrelated consumption. Real-hardware logs where a
+   camera auto-stopped a recording without any command from this repo
+   surfaced this exact bug — see "Camera-initiated stop detection" below —
+   and `tests/unit/test_notification_router.py`'s
+   `test_fresh_echo_accepted_even_if_it_matches_an_older_unconsumed_value`
+   is a regression test for it.
 
 `CameraSession` always calls `arm()` immediately before
 `write_outgoing_control`, so `wait_for` only returns on a delivery that is
-both new-in-sequence and different in content from what the previous call
-for that key consumed.
+both new-in-sequence and different in content from what `arm()` had already
+seen.
 
 Undecodable notifications (e.g. `CAMERA_STATUS`'s raw single status byte,
 which isn't a BMD command packet) are silently discarded — the router only
@@ -140,6 +154,35 @@ value — `decode_timecode` unwraps them via `protocol.codec.decode_packet`
 before BCD-decoding the payload. See `docs/timecode.md` for the confirmed
 wire format.
 
+### Camera-initiated stop detection
+
+See `docs/recording.md`'s "Camera-initiated stop detection" section for the
+full real-hardware story (a slow SD card causing the camera to auto-stop
+recording). Summary of the `CameraSession` surface it adds:
+
+```python
+session.is_recording        # bool | None — notification-derived, never inferred
+session.last_stop_reason     # "requested" | "unexpected" | None
+await session.wait_while_recording(timeout)  # -> bool; False = stopped early
+```
+
+`_handle_incoming` (the real `INCOMING_CONTROL` subscribe callback, replacing
+the router's `handle_incoming` directly) now feeds every notification through
+both the router (for the pull-based echo wait) and `_observe_recording_state`
+(a continuous push-based watch). `is_recording` reflects the last-reported
+state from *any* recording-category notification, not just ones a pending
+`record_start()`/`record_stop()` call is waiting on. A `True → False`
+transition observed while no such call is in flight (tracked via
+`_pending_command`) is an unexpected stop: `last_stop_reason` becomes
+`"unexpected"`, `last_stop_timecode` is snapshotted (so
+`last_clip_duration_seconds()` still works), and callers blocked in
+`wait_while_recording()` return `False` immediately.
+
+`record_stop()` is a no-op when `is_recording` already positively confirms
+`False` (an already-stopped camera doesn't echo a redundant stop command —
+see `docs/recording.md` — so attempting one would otherwise raise a
+misleading `BMDVerificationError`).
+
 ### Why `CAMERA_STATUS` isn't used as a secondary cross-check here
 
 CLAUDE.md's verification strategy calls for an echo (primary) *and* a
@@ -159,9 +202,14 @@ byte gets fully decoded), the secondary check can be added here.
 ## What's deliberately out of scope
 
 - **Storage preconditions** (CLAUDE.md design principle 10) — checking
-  `CameraState.storage` before recording requires notification-driven
-  storage state tracking, which doesn't exist yet (no `CameraState`, no
-  `StorageState`, no storage characteristic parsing). Not implemented.
+  storage state before recording requires notification-driven storage
+  state tracking, which doesn't exist yet (no storage characteristic
+  parsing). Not implemented. Note: `is_recording`/`last_stop_reason` are a
+  small, notification-driven slice of what CLAUDE.md's planned
+  `CameraState` (design principle 4) would eventually cover — they live as
+  plain attributes on `CameraSession` for now rather than a separate
+  `state.py`/`CameraState` object, since recording is still the only
+  category implemented.
 - **GAP/device metadata passthrough** — `camera_controller.py` already
   exposes `read_gap_identity_metadata`/`read_device_information_metadata`;
   `CameraSession` doesn't wrap them yet.
@@ -169,6 +217,9 @@ byte gets fully decoded), the secondary check can be added here.
   no additional session-level retry/backoff logic.
 - **Any category other than recording** — `CameraSession` only has
   `record_start`/`record_stop` today.
+- **Attributing a specific cause to an unexpected stop** (e.g. "slow write
+  speed" vs. "card full") — not decodable from the wire yet, see
+  `docs/recording.md`.
 
 ---
 
@@ -176,17 +227,21 @@ byte gets fully decoded), the secondary check can be added here.
 
 `tests/unit/test_notification_router.py` covers `arm`/`wait_for` timing
 (match delivered before vs. after `wait_for` is called, timeout returns
-`None`, `arm` rejects a match already buffered before it was called) and
-that undecodable notifications are ignored, plus a regression test for the
-duplicate-retransmit race described above (a stale retransmit of the
-previous command's echo, delivered after `arm()`, must not satisfy
-`wait_for` — only a payload distinct from the last consumed one does).
+`None`, `arm` rejects a match already buffered before it was called), that
+undecodable notifications are ignored, a regression test for the
+duplicate-retransmit race described above (a stale retransmit already
+visible at `arm()` time must not satisfy `wait_for`), and a regression test
+for the arm-time-snapshot fix (a fresh echo must be accepted even if its
+value matches an older, unrelated, never-consumed delivery).
 `tests/unit/test_session.py` mocks `BMDCameraController` and
 `NotificationRouter` to cover: success on a matching echo, `BMDVerificationError`
 on timeout, `BMDVerificationError` on a mismatched confirmed state, missing
 profile command/values raising before any write is attempted, TIMECODE
 snapshot capture (including that a failed verification snapshots nothing,
-and that no TIMECODE reading yet yields `None`), and
-`last_clip_duration_seconds()`. No real BLE in either test file.
-`tests/unit/test_timecode.py` covers `decode_timecode`/`duration_seconds`
-directly — see `docs/timecode.md`.
+and that no TIMECODE reading yet yields `None`), `last_clip_duration_seconds()`,
+the post-connect settle wait, and camera-initiated stop detection
+(`_observe_recording_state` updating `is_recording` and flagging/not-flagging
+an unexpected stop depending on `_pending_command`, `wait_while_recording()`
+returning `True`/`False`, and `record_stop()`'s no-op guard). No real BLE in
+either test file. `tests/unit/test_timecode.py` covers
+`decode_timecode`/`duration_seconds` directly — see `docs/timecode.md`.

@@ -27,35 +27,42 @@ class NotificationRouter:
 
     Some commands (e.g. recording start/stop) share a (category, parameter)
     key across opposite states, and the camera has been observed
-    retransmitting an echo more than once for a single command. A plain
-    "clear then wait" design is vulnerable to two distinct races here:
+    retransmitting an echo more than once for a single command, and — on a
+    slow/failing SD card — sending an *unsolicited* echo reporting a state
+    change we never requested (see docs/recording.md). A plain "clear then
+    wait" design is vulnerable to two distinct races here:
 
     1. A delivery that arrived (and was buffered) *before* `arm()` is called
        could otherwise be mistaken for a fresh one. Guarded against with a
        per-key monotonic sequence number: `arm()` records the sequence
        number as of arm time, and `wait_for` only accepts a delivery whose
        sequence number is strictly greater.
-    2. A *duplicate retransmit* of the previous command's echo can arrive
-       chronologically after the next command's `arm()` but before that
-       next command's real echo. Its sequence number alone looks "fresh",
-       but its bytes are identical to the echo already returned for the
-       prior command. Since commands sharing a key always change the
-       payload (recording start/stop toggle between two distinct values),
-       `wait_for` also rejects a delivery whose payload matches the last
-       payload it itself returned for that key, and keeps waiting for a
-       genuinely different one.
+    2. A *duplicate retransmit* of an echo already visible at arm() time can
+       arrive chronologically after `arm()` but before the real new echo.
+       Its sequence number alone looks "fresh", but its bytes are identical
+       to what the stream already showed when we armed. `arm()` snapshots
+       whatever payload was most recently seen for the key (regardless of
+       whether anything ever consumed it) and `wait_for` rejects any
+       delivery whose payload matches that snapshot — a real state change
+       (which is what every legitimate echo for a newly issued command
+       represents, since these commands always toggle between two distinct
+       values) can never equal what the stream showed *before* the new
+       command was even sent. This is intentionally based on "what arm() saw
+       last", not "what wait_for last returned": a command whose own
+       previous echo timed out (never consumed) must not make the *next*
+       command's genuinely fresh, same-valued echo look like a duplicate.
 
     Both checks together mean `wait_for` only ever returns a delivery that
-    is both new-in-sequence and different in content from what the previous
-    call for that key consumed. See docs/session_and_verification.md.
+    is both new-in-sequence and different in content from what `arm()` had
+    already seen. See docs/session_and_verification.md.
     """
 
     def __init__(self) -> None:
         self._latest: dict[tuple[int, int], tuple[int, CommandHeader, bytes]] = {}
         self._seq: dict[tuple[int, int], int] = {}
         self._events: dict[tuple[int, int], asyncio.Event] = {}
-        self._last_consumed_payload: dict[tuple[int, int], bytes] = {}
         self._armed_baseline: dict[tuple[int, int], int] = {}
+        self._armed_snapshot_payload: dict[tuple[int, int], bytes | None] = {}
 
     def handle_incoming(self, _characteristic: Any, data: bytearray) -> None:
         """Bleak-style callback(characteristic, data). Never raises.
@@ -77,15 +84,17 @@ class NotificationRouter:
         self._events.setdefault(key, asyncio.Event()).set()
 
     def arm(self, category: int, parameter: int) -> None:
-        """Mark the current sequence number as the baseline for (category, parameter).
+        """Snapshot the current sequence number and payload for (category, parameter).
 
-        Call this immediately before writing a command, so a delivery
-        already buffered from an earlier action can't satisfy the upcoming
-        `wait_for` — see the class docstring for the full staleness story.
+        Call this immediately before writing a command, so `wait_for` can
+        tell a genuinely fresh delivery apart from a stale or duplicate one
+        — see the class docstring for the full staleness story.
         """
         key = (category, parameter)
         self._events.setdefault(key, asyncio.Event())
         self._armed_baseline[key] = self._seq.get(key, 0)
+        latest = self._latest.get(key)
+        self._armed_snapshot_payload[key] = latest[2] if latest is not None else None
 
     async def wait_for(
         self, category: int, parameter: int, timeout: float
@@ -93,7 +102,7 @@ class NotificationRouter:
         """Await a fresh (post-`arm()`, content-distinct) match. `None` on timeout."""
         key = (category, parameter)
         baseline = self._armed_baseline.get(key, 0)
-        last_consumed = self._last_consumed_payload.get(key)
+        snapshot = self._armed_snapshot_payload.get(key)
         loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout
 
@@ -110,8 +119,7 @@ class NotificationRouter:
 
             event.clear()
             seq, header, payload = self._latest[key]
-            if seq > baseline and payload != last_consumed:
-                self._last_consumed_payload[key] = payload
+            if seq > baseline and payload != snapshot:
                 return header, payload
-            # Stale delivery, or a retransmitted duplicate of the previously
-            # consumed echo for this key — keep waiting.
+            # Stale delivery, or a retransmitted duplicate of what arm()
+            # already saw — keep waiting.

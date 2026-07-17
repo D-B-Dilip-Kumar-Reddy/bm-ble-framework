@@ -115,6 +115,37 @@ class TestWaitFor:
         assert second is not None
         assert second[1] == bytes([0x00])
 
+    @pytest.mark.asyncio
+    async def test_fresh_echo_accepted_even_if_it_matches_an_older_unconsumed_value(self):
+        """Regression: if a command's wait_for times out without ever
+        consuming a fresh delivery (e.g. a redundant stop the camera
+        silently ignores because it already auto-stopped), the *next*
+        command's genuinely fresh echo must not be rejected just because its
+        value happens to match an older, unrelated consumption from before
+        the timeout. Dedup must compare against what arm() saw *at arm
+        time*, not against whatever was last successfully consumed — see
+        NotificationRouter's docstring and docs/recording.md."""
+        router = NotificationRouter()
+
+        router.arm(CATEGORY, PARAMETER)
+        router.handle_incoming(SimpleNamespace(), _packet(0x02))  # cycle 1 start echo
+        first = await router.wait_for(CATEGORY, PARAMETER, timeout=1.0)
+        assert first is not None and first[1] == bytes([0x02])
+
+        # Unsolicited notification (e.g. camera auto-stopped) — never consumed.
+        router.handle_incoming(SimpleNamespace(), _packet(0x00))
+
+        router.arm(CATEGORY, PARAMETER)  # cycle 1 stop: no fresh echo ever arrives
+        timed_out = await router.wait_for(CATEGORY, PARAMETER, timeout=0.05)
+        assert timed_out is None
+
+        router.arm(CATEGORY, PARAMETER)  # cycle 2 start
+        router.handle_incoming(SimpleNamespace(), _packet(0x02))  # genuine fresh echo
+        second = await router.wait_for(CATEGORY, PARAMETER, timeout=1.0)
+
+        assert second is not None
+        assert second[1] == bytes([0x02])
+
 
 def test_decode_packet_still_works_directly():
     """Sanity check the shared helper used to build test fixtures above."""
