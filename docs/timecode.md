@@ -98,18 +98,41 @@ shows a recording spans it).
 `CameraSession.__aenter__` subscribes `TIMECODE` (alongside the existing
 `INCOMING_CONTROL` subscribe) with a callback that decodes and stores the
 latest reading; decode failures are silently ignored there (`_handle_timecode`
-suppresses `ValueError`) since a callback must never raise.
-`record_start()`/`record_stop()` each snapshot that latest reading into
-`last_start_timecode`/`last_stop_timecode` **only after their echo has
-confirmed the state change** — a failed/unconfirmed write does not snapshot
-anything, keeping duration reporting tied to verified state transitions, not
-just "a write happened."
+suppresses `ValueError`) since a callback must never raise. In real captures
+TIMECODE notifications arrive frequently while recording — roughly every
+60-120ms, not once a second — and stop arriving once recording stops.
+
+`record_start()`/`record_stop()` snapshot into `last_start_timecode`/
+`last_stop_timecode` **only after their echo has confirmed the state
+change** — a failed/unconfirmed write does not snapshot anything, keeping
+duration reporting tied to verified state transitions, not just "a write
+happened."
+
+**`record_start()` sets `last_start_timecode` to a canonical
+`Timecode(0, 0, 0, 0)`, not whatever `_latest_timecode` currently holds.**
+This is deliberate: real captures on both `POCKET_6K_G2 v7.9` and
+`POCKET_6K_PRO v8.6` (and Blackmagic cameras generally, per direct hardware
+observation) confirm TIMECODE resets to `00:00:00:00` the instant recording
+starts. Snapshotting `_latest_timecode` at that point was a real bug — since
+TIMECODE stops ticking while not recording, no new notification necessarily
+arrives between the *previous* clip's stop and the *next* record_start's
+echo confirmation, so the snapshot would silently carry over the previous
+clip's stale end-of-clip reading as the new clip's "start," producing wrong
+(and sometimes negative, hence `None`-duration) results. Using the known
+reset behavior instead of racing to observe it sidesteps this entirely.
+
+`record_stop()` still snapshots `_latest_timecode` as-is: TIMECODE ticks
+continuously *during* the just-finished recording, so the last reading seen
+before the stop echo confirms is a genuinely fresh in-recording value, not a
+stale one — no equivalent bug here.
 
 `last_clip_duration_seconds() -> float | None` returns the elapsed time
-between the two snapshots, or `None` if either is missing (no TIMECODE
-notification had arrived yet at that moment — TIMECODE ticks roughly once a
-second, so a very fast start-then-stop could plausibly miss one) or if
-`stop` isn't after `start`.
+between the two snapshots, or `None` if `last_stop_timecode` is missing (no
+TIMECODE notification had arrived during the recording — very unlikely given
+the ~60-120ms cadence, but possible for an extremely short clip) or if
+`stop` isn't after `start`. Since `last_start_timecode` is always the
+canonical zero, this reduces to `last_stop_timecode`'s own hours/minutes/
+seconds total.
 
 `examples/record_start_stop.py` prints both raw timecode readings
 (`HH:MM:SS:frames`) and the computed duration per cycle.

@@ -150,16 +150,30 @@ class TestTimecodeCapture:
         return (MagicMock(category=0x0A, parameter=0x01), bytes([value]))
 
     @pytest.mark.asyncio
-    async def test_record_start_snapshots_latest_timecode(self):
+    async def test_record_start_sets_canonical_zero_timecode(self):
+        """TIMECODE resets to 00:00:00:00 on real hardware when recording
+        starts (confirmed on POCKET_6K_G2 v7.9 and POCKET_6K_PRO v8.6) — a
+        confirmed record_start must set this canonical zero regardless of
+        whatever `_latest_timecode` currently holds, since that could be a
+        stale leftover reading from the *previous* clip's end."""
         session = make_session(make_profile())
         session._router.wait_for.return_value = self._confirmed_echo(value=2)
-        tc = Timecode(hours=1, minutes=0, seconds=0, frames=0)
-        session._latest_timecode = tc
+        session._latest_timecode = Timecode(hours=1, minutes=0, seconds=0, frames=0)
 
         await session.record_start()
 
-        assert session.last_start_timecode == tc
+        assert session.last_start_timecode == Timecode(hours=0, minutes=0, seconds=0, frames=0)
         assert session.last_stop_timecode is None
+
+    @pytest.mark.asyncio
+    async def test_record_start_sets_canonical_zero_even_with_no_timecode_seen_yet(self):
+        session = make_session(make_profile())
+        session._router.wait_for.return_value = self._confirmed_echo(value=2)
+        # session._latest_timecode already None from make_session
+
+        await session.record_start()
+
+        assert session.last_start_timecode == Timecode(hours=0, minutes=0, seconds=0, frames=0)
 
     @pytest.mark.asyncio
     async def test_record_stop_snapshots_latest_timecode(self):
@@ -173,14 +187,14 @@ class TestTimecodeCapture:
         assert session.last_stop_timecode == tc
 
     @pytest.mark.asyncio
-    async def test_record_start_snapshots_none_when_no_timecode_seen_yet(self):
+    async def test_record_stop_snapshots_none_when_no_timecode_seen_yet(self):
         session = make_session(make_profile())
-        session._router.wait_for.return_value = self._confirmed_echo(value=2)
+        session._router.wait_for.return_value = self._confirmed_echo(value=0)
         # session._latest_timecode already None from make_session
 
-        await session.record_start()
+        await session.record_stop()
 
-        assert session.last_start_timecode is None
+        assert session.last_stop_timecode is None
 
     @pytest.mark.asyncio
     async def test_failed_verification_does_not_snapshot_timecode(self):

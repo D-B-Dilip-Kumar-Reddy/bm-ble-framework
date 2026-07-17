@@ -102,12 +102,19 @@ structure.
 
 `__aenter__` also subscribes `TIMECODE`, storing the latest decoded reading
 (`timecode.decode_timecode` — see `docs/timecode.md`) via a private callback.
-`record_start()`/`record_stop()` each snapshot that latest reading into
-`last_start_timecode`/`last_stop_timecode` immediately after their echo
-confirms the state change — a failed/unconfirmed write snapshots nothing.
+A confirmed `record_start()` sets `last_start_timecode` to a canonical
+`Timecode(0, 0, 0, 0)` rather than snapshotting the latest reading — real
+hardware confirms TIMECODE resets to zero when recording starts, and
+snapshotting `_latest_timecode` there was a real bug: TIMECODE stops ticking
+while not recording, so the "latest" reading at that moment was often a
+stale leftover from the *previous* clip's end, silently producing wrong
+clip durations. A confirmed `record_stop()` still snapshots the latest
+reading into `last_stop_timecode`, since TIMECODE ticks continuously during
+the just-finished recording and so is genuinely fresh at that point. A
+failed/unconfirmed write snapshots nothing either way.
 `last_clip_duration_seconds() -> float | None` returns the elapsed time
 between the two snapshots (hours/minutes/seconds precision only — see
-`docs/timecode.md` for why), or `None` if either snapshot is missing.
+`docs/timecode.md` for why), or `None` if `last_stop_timecode` is missing.
 
 TIMECODE notifications are a full wrapped BMD-style packet, not a bare BCD
 value — `decode_timecode` unwraps them via `protocol.codec.decode_packet`

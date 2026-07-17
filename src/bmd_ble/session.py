@@ -12,9 +12,12 @@ strategy calls for). Storage preconditions, GAP/device metadata, and
 reconnect wiring beyond what CameraController already provides are not
 implemented here yet.
 
-Also tracks the latest TIMECODE reading and snapshots it around
-record_start()/record_stop() so callers can read `last_clip_duration_seconds()`
-— see docs/timecode.md for why duration is hours/minutes/seconds-only today.
+Also tracks the latest TIMECODE reading. A confirmed record_start() snapshots
+a canonical 00:00:00:00 (TIMECODE is known to reset at recording start on
+real Blackmagic hardware — see docs/timecode.md); a confirmed record_stop()
+snapshots the latest TIMECODE reading seen. Callers read the elapsed time via
+`last_clip_duration_seconds()` — see docs/timecode.md for why duration is
+hours/minutes/seconds-only today.
 """
 
 from __future__ import annotations
@@ -118,6 +121,15 @@ class CameraSession:
             )
 
         if recording:
-            self.last_start_timecode = self._latest_timecode
+            # Confirmed on real hardware (POCKET_6K_G2 v7.9 and POCKET_6K_PRO
+            # v8.6): TIMECODE resets to 00:00:00:00 the moment recording
+            # starts — a documented behavior across Blackmagic cameras, not
+            # specific to these two. Snapshotting `_latest_timecode` here
+            # instead would often grab a STALE reading left over from the
+            # *previous* clip's end (no new TIMECODE notification necessarily
+            # arrives between the previous stop and this start's echo), which
+            # silently produced wrong/negative clip durations. See
+            # docs/timecode.md.
+            self.last_start_timecode = Timecode(hours=0, minutes=0, seconds=0, frames=0)
         else:
             self.last_stop_timecode = self._latest_timecode
