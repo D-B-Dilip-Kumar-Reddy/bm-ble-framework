@@ -202,7 +202,7 @@ payload order; all values little-endian.
 | 6 | Reference | — |
 | 7 | Configuration | — |
 | 8 | Color Correction | — |
-| 9 | (undocumented) | ambient ~1/s telemetry observed on G2 v7.9 [sniffer-verified], meaning unknown |
+| 9 | (undocumented) | mostly ambient ~1/s telemetry, meaning unknown [sniffer-verified] — except parameter 1, a CANDIDATE write-margin warning, see §9 below |
 | 10 | Media | `protocol/categories/recording.py` (10.1); future: photo (10.3), playback (10.2) |
 | 11 | PTZ Control | — |
 | 12 | Metadata | future: metadata reads; also ambient telemetry observed on G2 v7.9 (`0x0C`) [sniffer-verified] |
@@ -313,6 +313,15 @@ payload order; all values little-endian.
 | 8.5 | Luma mix | fixed16 | 0.0–1.0, default 1.0 |
 | 8.6 | Color Adjust | fixed16 ×2 | [0] hue (−1–1), [1] saturation (0–2) |
 | 8.7 | Correction Reset Default | void | reset all of the above |
+
+### Category 9 — (undocumented)
+
+Not in the official spec. Most parameters observed here are ambient
+telemetry (~1/s, category-wide, meaning unknown). One exception:
+
+| Param | Name | Type | Meaning |
+|---|---|---|---|
+| 9.1 | Write-margin warning | int8 (payload offset 1 of 3; offsets 0 and 2 constant/unexplained) | Not [spec] — no official documentation for this category exists. Wire bytes and values are [sniffer-verified]: `1` = nominal, `−2` = low_margin, observed to precede a camera-initiated recording stop by 0.1–1.4s on a known-slow SD card (6/6 occurrences, `POCKET_6K_G2 v7.9` + `POCKET_6K_PRO v8.6`); never `−2` in 7 unrelated normal sessions. The *semantic* attribution to "write speed" specifically is [hypothesis] — not yet isolated from other possible autostop causes (card full, card removed, power loss). Modeled in `payloads/models/*.json`'s `storage.write_margin_warning` (profile provenance status `CANDIDATE`), decoded via `protocol/categories/storage.py` — see `docs/recording.md`'s "Camera-initiated stop detection" section for the full evidence. |
 
 ### Category 10 — Media ← this project's home turf
 
