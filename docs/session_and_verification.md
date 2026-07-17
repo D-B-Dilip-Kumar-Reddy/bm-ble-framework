@@ -78,7 +78,24 @@ async with CameraSession("POCKET_6K_G2", "v7.9") as session:
 
 `__aenter__` loads the `CameraProfile`, scans, connects, and subscribes the
 router — in that order, so buffering is active before any command could ever
-be sent. `record_start`/`record_stop` build the command from the profile's
+be sent — then waits `connect_settle_s` (default `2.0`s) before returning.
+
+**Why the settle wait exists:** real-hardware logs (both `POCKET_6K_G2 v7.9`
+and `POCKET_6K_PRO v8.6`) showed a just-connected camera immediately floods
+the link with an initial info dump (lens data, media/storage status,
+battery, etc.). A command sent right after subscribing can queue behind that
+backlog and take several seconds to echo — one `POCKET_6K_PRO` capture saw
+the very first `record_start` after connecting echo back over 8 seconds
+late, well past `echo_timeout_s`, while every later command in the same
+session echoed back in well under a second. The failure was confined to the
+first command of a fresh connection in every capture that showed it, on
+both camera models, so the settle wait is unconditional — not gated by
+camera model — rather than trying to detect "is the camera still busy" from
+the notification stream. `connect_settle_s` is a first-pass, empirically
+chosen value; it may need tuning if a longer initial backlog is observed on
+other hardware.
+
+`record_start`/`record_stop` build the command from the profile's
 `commands.recording` block (`profile.require_command("recording", ("start",
 "stop"))` → a `CommandSpec`, encoded via
 `protocol.categories.recording.encode_record_start`/`encode_record_stop` —

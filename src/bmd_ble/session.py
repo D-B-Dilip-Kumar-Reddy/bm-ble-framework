@@ -18,10 +18,17 @@ real Blackmagic hardware — see docs/timecode.md); a confirmed record_stop()
 snapshots the latest TIMECODE reading seen. Callers read the elapsed time via
 `last_clip_duration_seconds()` — see docs/timecode.md for why duration is
 hours/minutes/seconds-only today.
+
+After connecting, __aenter__ waits `connect_settle_s` before returning — a
+just-connected camera floods the link with an initial info dump (lens,
+media, status), and a command sent immediately can queue behind it and take
+several seconds to echo, well past a normal command's echo_timeout_s. See
+docs/session_and_verification.md.
 """
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 from typing import Any
 
@@ -41,9 +48,17 @@ from .timecode import Timecode, decode_timecode, duration_seconds
 class CameraSession:
     """Async context manager: connect, verified operations, disconnect."""
 
-    def __init__(self, model_key: str, firmware: str, *, echo_timeout_s: float = 3.0) -> None:
+    def __init__(
+        self,
+        model_key: str,
+        firmware: str,
+        *,
+        echo_timeout_s: float = 3.0,
+        connect_settle_s: float = 2.0,
+    ) -> None:
         self.profile = CameraProfile.for_model(model_key=model_key, firmware=firmware)
         self.echo_timeout_s = echo_timeout_s
+        self.connect_settle_s = connect_settle_s
         self._router = NotificationRouter()
         self._controller: BMDCameraController | None = None
         self._latest_timecode: Timecode | None = None
@@ -57,6 +72,10 @@ class CameraSession:
         # Buffer before any write is possible — see NotificationRouter's docstring.
         await self._controller.subscribe_incoming(callback=self._router.handle_incoming)
         await self._controller.subscribe_timecode(callback=self._handle_timecode)
+        # Let the just-connected camera's initial info dump settle before any
+        # command can be sent — see module docstring and
+        # docs/session_and_verification.md for the real-hardware evidence.
+        await asyncio.sleep(self.connect_settle_s)
         return self
 
     async def __aexit__(self, *_exc: object) -> None:

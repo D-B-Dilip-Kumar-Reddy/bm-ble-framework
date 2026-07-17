@@ -6,10 +6,11 @@ test_camera_profile.py) so `require_command` behaves exactly as in
 production.
 """
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+import bmd_ble.session as session_module
 from bmd_ble.camera_profile import CameraProfile
 from bmd_ble.exceptions import BMDVerificationError
 from bmd_ble.protocol.codec import CommandHeader, Operation, encode_packet
@@ -249,3 +250,28 @@ class TestLastClipDurationSeconds:
         session.last_stop_timecode = Timecode(hours=0, minutes=0, seconds=5, frames=0)
 
         assert session.last_clip_duration_seconds() is None
+
+
+class TestAenter:
+    @pytest.mark.asyncio
+    async def test_settles_after_subscribing_before_returning(self):
+        """A just-connected camera floods the link with an initial info dump;
+        __aenter__ must wait connect_settle_s (after subscribing, before
+        returning) so the first command isn't sent into that backlog — see
+        real-hardware evidence in docs/session_and_verification.md."""
+        fake_controller = AsyncMock()
+        with (
+            patch.object(
+                session_module, "scan_for_camera", new=AsyncMock(return_value=MagicMock())
+            ),
+            patch.object(session_module, "BMDCameraController", return_value=fake_controller),
+            patch.object(session_module.asyncio, "sleep", new=AsyncMock()) as mock_sleep,
+        ):
+            session = CameraSession(MODEL_KEY, FIRMWARE, connect_settle_s=1.5)
+            result = await session.__aenter__()
+
+        assert result is session
+        fake_controller.connect.assert_awaited_once()
+        fake_controller.subscribe_incoming.assert_awaited_once()
+        fake_controller.subscribe_timecode.assert_awaited_once()
+        mock_sleep.assert_awaited_once_with(1.5)
