@@ -54,7 +54,7 @@ class CameraSession:
         firmware: str,
         *,
         echo_timeout_s: float = 3.0,
-        connect_settle_s: float = 2.0,
+        connect_settle_s: float = 6.0,
     ) -> None:
         self.profile = CameraProfile.for_model(model_key=model_key, firmware=firmware)
         self.echo_timeout_s = echo_timeout_s
