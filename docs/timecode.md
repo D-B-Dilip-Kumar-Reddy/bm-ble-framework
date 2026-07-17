@@ -40,11 +40,25 @@ readings: the first payload byte (BCD-decoded) cycles `0-23` and wraps, and
 the second payload byte increments by exactly 1 each time the first wraps —
 consistent with a 24-count frame counter carrying into seconds.
 
-**What's still unconfirmed:** whether the frame field's rollover point (24)
-is fixed or depends on the camera's configured frame rate — only a 24-ish
-fps recording has been observed carrying so far, and minutes/hours haven't
-been exercised in a capture. Treat `frames` as informational/display-only
-until a capture spans a different fps or a longer duration.
+**Frame rollover confirmed to track the configured recording frame rate.**
+Captures on `POCKET_6K_PRO v8.6` at three different frame rates all show
+`frames` rolling over at exactly the configured fps: max observed value 23
+before wrapping at the default (~24fps) rate, 29 at 30fps, and 59 at 60fps
+— i.e. `frames` counts `0` to `fps-1` and carries into `seconds` on wrap,
+exactly like standard SMPTE-style timecode. This resolves what was
+previously an open question (fixed-24 vs. fps-dependent): it's
+fps-dependent, and the count matches whatever frame rate the camera is
+actually recording at. Minutes/hours rollover still hasn't been exercised
+in a capture (all captures so far are well under a minute).
+
+**Why this doesn't change `duration_seconds` yet:** correctly carrying
+`frames` into sub-second precision requires knowing the *current* recording
+fps at the moment of each reading, and this framework doesn't track that —
+FPS is part of the planned `settings.py` category (see CLAUDE.md's package
+structure; not implemented). Once that exists, `duration_seconds` (or a new
+variant) could compute `frames / fps` and add it in. Until then, `frames`
+stays informational/display-only and duration remains hours/minutes/
+seconds-only.
 
 ---
 
@@ -141,8 +155,9 @@ seconds total.
 
 ## What's next
 
-Capture a longer recording (multiple minutes, and at a frame rate other than
-the ~24fps-shaped one observed so far) and check whether the `frames` field's
-rollover point changes with fps, and whether minutes/hours roll over
-correctly. Once confirmed to be reliable, `duration_seconds` can be extended
-to carry `frames` into sub-second precision.
+`frames`-rollover-tracks-fps is now confirmed (three frame rates captured).
+What's left: capture a longer recording (multiple minutes) to confirm
+minutes/hours roll over correctly, and — once `settings.py`/FPS tracking
+exists — extend `duration_seconds` (or add a variant) to fold `frames /
+fps` into sub-second precision using the profile's/session's known current
+frame rate.
