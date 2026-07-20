@@ -176,19 +176,29 @@ via one genuine cycle each, surfaced by `set_camera_format`'s proxy path
   combination is supported but its `dimension_enum` hasn't been
   reverse-engineered yet.
 
-`set_codec_quality` has a confirmed false-positive mode independent of the
+`set_codec_quality` had a confirmed false-positive mode independent of the
 bug above: real hardware showed the camera's `0x0A/0x00` report only fires
 on an *actual applied change* — a call requesting the (codec, variant) the
 camera is already at (easy to hit right after a `set_video_format` switch,
 since each codec family remembers its own last-set quality independently)
-produces no report and a `BMDVerificationError: no echo received`
-indistinguishable from a genuine failure. Mirrors `record_stop()`'s
-documented no-echo-on-redundant-command behavior (`docs/recording.md`) —
-but unlike `record_stop()`, `set_codec_quality` has no `is_recording`-style
-guard to skip a redundant write, since `CameraSession` doesn't track
-current codec/quality state (no `CameraState` yet, design principle 4);
-the error message names this possibility instead, and `set_camera_format`
-(below) doesn't mitigate it either. See `docs/settings.md` §8, §10.
+produces no report at all. This recurred predictably in
+`examples/change_codec.py` and is now fixed for real, not just
+documented: `CameraSession` tracks `last_known_codec_variant: tuple[int,
+int] | None`, updated only from a decoded `codec_quality`-category
+notification (design principle 4 — never set from "we sent a command")
+via a new `_observe_codec_quality` watcher wired into `_handle_incoming`
+exactly like `is_recording`'s tracker. `set_codec_quality` checks it
+first and returns immediately — no write, no wait — when the target
+`(codec_id, variant_id)` is already known, mirroring `record_stop()`'s
+`is_recording is False` early return precisely. The guard only fires once
+a prior notification (from any source: a body-initiated change, an
+earlier `set_codec_quality` echo, or `set_video_format`'s own confirmation
+landing on this channel) has proven the state; a session's first
+`set_codec_quality` call, before any such report has arrived, still
+writes and waits normally, and the original `BMDVerificationError`
+message remains for that case. `set_camera_format` inherits the
+mitigation automatically, with no changes needed there. See
+`docs/settings.md` §8, §10, §11.
 
 **`set_camera_format(codec, variant, resolution, fps)`** orchestrates the
 three methods above from one combination, so a caller doesn't need to know

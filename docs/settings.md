@@ -6,17 +6,23 @@ trips) and all 8 known `dimension_enum` values are confirmed by a clean,
 decoded echo (§7). `codec_quality` and `recording_format` followed via
 `set_camera_format` (§9), whose proxy path happened to produce the first
 *genuine* (non-redundant) write+echo cycle for each — 1/1 each, §10.
-That same run also found and fixed a real bug in `set_video_format`: a
+That round also found and fixed a real bug in `set_video_format` (§10): a
 codec-only switch (same resolution/fps) could spuriously fail because the
 mode-notify channel doesn't encode codec, so a genuinely fresh report
 looked like a stale duplicate — fixed by also watching the `codec_quality`
-channel, §10. 4K DCI/ProRes's `dimension_enum` remains unknown after an
-exhaustive `0x01`–`0x16` search (§7–§8), so `set_camera_format` (§9)
-reaches it with a two-step workaround (proxy through UHD, then
-`recording_format`'s raw width/height) instead of waiting on that gap to
-close. `_meta.status` stays `UNVERIFIED` overall per design principle 8 —
-plenty of the profile is still unpopulated (media, metadata, playback)
-even though every implemented settings family is now verified.
+channel. A follow-up run then hit the *next* layer of the same underlying
+issue: a redundant `set_codec_quality` call (requesting the value a
+`video_format` switch had just reset quality to) reliably produces no
+echo — now fixed for real via `last_known_codec_variant`, a
+notification-derived no-op guard mirroring `record_stop()`'s (§11), rather
+than just documented as a known risk. 4K DCI/ProRes's `dimension_enum`
+remains unknown after an exhaustive `0x01`–`0x16` search (§7–§8), so
+`set_camera_format` (§9) reaches it with a two-step workaround (proxy
+through UHD, then `recording_format`'s raw width/height) instead of
+waiting on that gap to close. `_meta.status` stays `UNVERIFIED` overall
+per design principle 8 — plenty of the profile is still unpopulated
+(media, metadata, playback) even though every implemented settings family
+is now verified.
 
 ## Provenance and evidence status
 
@@ -28,7 +34,7 @@ them, at the start, better than [spec] guesses but weaker than this repo's
 from a capture on that camera). They were therefore modeled with
 `provenance.status: "CANDIDATE"` at first — every command family listed in
 §1 has since been promoted to `VERIFIED` through this repo's own captures
-and `CameraSession` round trips (§5–§10); see the top status line for where
+and `CameraSession` round trips (§5–§11); see the top status line for where
 each stands today. The operator's own original summary was explicit that
 **not all packets are reverse-engineered** — known remaining gaps (chiefly
 4K DCI/ProRes's `dimension_enum`) are listed per section below.
@@ -774,11 +780,14 @@ all in the profile (nothing to proxy through).
 **Adds no verification of its own** — each step already raises
 `BMDVerificationError`/`BMDUnsupportedError`/`ValueError` independently,
 and a failure at any step stops the sequence (later steps don't run).
-Inherits the known `set_codec_quality` no-echo-on-redundant-write risk
-(below) unmitigated — step 1's `video_format` write can reset quality to
-a value step 2 then redundantly "sets" again, which the camera won't echo.
-`examples/change_codec.py` demonstrates both paths (a direct BRAW/4K DCI
-combination and the ProRes/4K DCI proxy case) in one run.
+Step 1's `video_format` write can reset quality to a value step 2 then
+"sets" again — a real redundant write that the camera won't echo — but as
+of §11, `set_codec_quality` recognizes this itself via
+`last_known_codec_variant` and no-ops instead of raising, so
+`set_camera_format` inherits that mitigation automatically; nothing
+special needed here. `examples/change_codec.py` demonstrates both paths (a
+direct BRAW/4K DCI combination and the ProRes/4K DCI proxy case) in one
+run.
 
 ## 10. Fifth round — first genuine codec_quality/recording_format confirmations, and a real video_format bug (2026-07-20)
 
@@ -868,7 +877,61 @@ should have covered from the start. See
 exists and isn't being weakened globally — this fix works around its one
 known blind spot for one specific channel, not around the filter itself.
 
-## 11. Code surface
+## 11. The redundant-write no-op fix (2026-07-20)
+
+§10's fix made `set_video_format` reliably confirm a codec-only switch.
+The very next `examples/change_codec.py` run (`set_camera_format("BRAW",
+"5:1", "4K DCI", "25")`, right after a ProRes/422 leg) hit a *different*
+failure at the *next* step — `set_codec_quality` — that looked identical
+from the outside:
+
+```
+=== set BRAW 5:1 4K DCI @ 25 ===
+TX (video_format): FF 09 00 01 01 00 01 00 19 00 08 00 00
+RX (10/0, confirms video_format via §10's fix): FF 06 00 00 0A 00 01 02 03 03   -> BRAW, 5:1
+TX (codec_quality): FF 06 00 00 0A 00 01 00 03 03   -> requests BRAW, 5:1 — ALREADY the state above
+(3s of only ambient ticks — no 0x0A/0x00 report)
+set BRAW 5:1 4K DCI @ 25 NOT confirmed: set_codec_quality(BRAW 5:1): no echo received ...
+```
+
+This is not a new bug — it's the *exact* documented false-positive from
+§8/§10 (a `video_format` switch resets the family's remembered quality,
+and requesting that same value again is a genuine no-op the camera never
+echoes), just triggered predictably this time: `examples/change_codec.py`
+always requests BRAW `5:1`, and `5:1` had become BRAW's remembered value
+across earlier test sessions. The user's own read of the log ("the
+settings is getting changed to BRAW 5:1 4K DCI @ 25, but the echo is
+failing") was exactly right — the end state was correct, only the
+verification was wrong.
+
+**Fixed properly this time, not just documented.** `CameraSession` now
+tracks `last_known_codec_variant: tuple[int, int] | None` — the
+`(codec_id, variant_id)` from the most recent `codec_quality`-category
+report, updated by a new `_observe_codec_quality` watcher wired into
+`_handle_incoming` exactly like `is_recording`'s tracker (notification-
+derived only, design principle 4 — never set from "we sent a command").
+`set_codec_quality` checks it first: if `last_known_codec_variant` already
+equals the requested `(codec_id, variant_id)`, the call returns
+immediately — no write, no wait, no exception — mirroring `record_stop()`'s
+`is_recording is False` early return (`docs/recording.md`) exactly.
+
+This is real, not a heuristic: the guard only fires when a *prior
+notification* (any of them — a body-initiated change, an earlier
+`set_codec_quality` echo, or, as in this exact scenario, `set_video_format`'s
+own confirmation landing on the `codec_quality` channel per §10's fix)
+already proved the camera is at that state. The very first
+`set_codec_quality` call in a fresh session, before any such report has
+arrived, still writes and waits normally — there's nothing to skip on
+yet.
+
+Re-running the failing scenario with the fix (verified by direct
+simulation, not yet re-run on hardware): given
+`last_known_codec_variant == (3, 3)` (from the `video_format` step's own
+confirmation), `set_camera_format("BRAW", "5:1", "4K DCI", "25")` now
+completes without ever writing the redundant `codec_quality` packet —
+matching what the camera was doing the whole time.
+
+## 12. Code surface
 
 | Piece | Where |
 |---|---|
@@ -878,9 +941,10 @@ known blind spot for one specific channel, not around the filter itself.
 | Profile blocks + tables | `payloads/models/POCKET_6K_G2_v7.9.json` `commands.codec_quality` / `commands.video_format` / `commands.recording_format`, `codecs`, `resolutions`, `fps_modes`; schema `$defs` `codecSpec`/`resolutionSpec`/`fpsModeSpec` |
 | Profile accessors | `camera_profile.py` `require_codec` / `require_resolution` / `require_fps_mode` (`CodecSpec`/`ResolutionSpec`/`FpsModeSpec`) |
 | Session methods | `session.py` `set_codec_quality` / `set_video_format` / `set_recording_format` (see `docs/session_and_verification.md` for the echo strategy), plus the `set_camera_format` orchestration (§9) and its `_closest_reachable_resolution` helper |
+| Notification-derived state | `session.py` `last_known_codec_variant` + `_observe_codec_quality` (§11) — feeds `set_codec_quality`'s no-op guard, same discipline as `is_recording` |
 | Tools | `tools/sniffers/sniffer_settings.py` (passive), `tools/control/send_settings_command.py` (active, typed-yes gated) |
 | Example | `examples/change_codec.py` |
-| Tests | `tests/unit/protocol/categories/test_settings.py`, plus settings cases in `test_codec.py`, `test_types.py`, `test_camera_profile.py`, `test_session.py` (`TestSetCameraFormat`, `TestClosestReachableResolution`) |
+| Tests | `tests/unit/protocol/categories/test_settings.py`, plus settings cases in `test_codec.py`, `test_types.py`, `test_camera_profile.py`, `test_session.py` (`TestSetCameraFormat`, `TestClosestReachableResolution`, `TestObserveCodecQuality`) |
 
 ### Session verification strategy for settings writes
 
@@ -906,13 +970,17 @@ a missing dimension_enum raises `ValueError` pointing at the capture
 workflow instead, since that's a profile gap, not a camera limitation.
 
 **`codec_quality`'s "no echo" failure mode, confirmed on real hardware
-(§8):** the camera's `0x0A/0x00` report only fires on an *actual applied
-change* — a `set_codec_quality` call requesting the (codec, variant) the
-camera is already at (which happens easily right after `set_video_format`,
-since a family remembers its own last-set quality independently of the
-other family) produces no report and thus a `BMDVerificationError`
-indistinguishable from a real failure. Mirrors `record_stop()`'s
-documented no-echo-on-redundant-command behavior (`docs/recording.md`) —
-`set_codec_quality` has no equivalent `is_recording`-style guard to skip
-the write, since `CameraSession` doesn't track current codec/quality state
-(no `CameraState` yet, design principle 4); the error message says so.
+(§8, §11):** the camera's `0x0A/0x00` report only fires on an *actual
+applied change* — a `set_codec_quality` call requesting the (codec,
+variant) the camera is already at (which happens easily right after
+`set_video_format`, since a family remembers its own last-set quality
+independently of the other family) produces no report at all. Originally
+this surfaced as a `BMDVerificationError` indistinguishable from a real
+failure; `set_codec_quality` now has an `is_recording`-style guard after
+all — `last_known_codec_variant`, notification-derived (design principle
+4) and updated from *any* codec_quality report regardless of source, lets
+it recognize the target state as already-satisfied and return without
+writing (§11). The guard only fires once a prior notification has proven
+the state; before that (a session's very first `set_codec_quality` call)
+it still writes and waits normally, and the original error message
+remains for the case where it genuinely doesn't know.

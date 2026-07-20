@@ -47,6 +47,16 @@ hardware — and surfaces it as `last_stop_signal` when it fires shortly
 before an unexpected stop. This is a narrow diagnostic annotation, not the
 CLAUDE.md-planned storage-monitoring subsystem (no card-ready checks, no
 capacity tracking) — see docs/recording.md.
+
+Similarly watches every INCOMING_CONTROL notification for a codec_quality
+report and remembers the last-seen (codec_id, variant_id) as
+`last_known_codec_variant` — notification-derived only, same discipline as
+`is_recording`. `set_codec_quality` uses it to skip a write that's already
+known to be a no-op (real-hardware evidence, docs/settings.md §11: a
+`video_format` switch resets the new family's quality to a per-family
+remembered value, and a caller-requested `set_codec_quality` for that same
+value never echoes — indistinguishable from a real failure without this
+check). Mirrors `record_stop()`'s `is_recording is False` early return.
 """
 
 from __future__ import annotations
@@ -73,6 +83,7 @@ from .protocol.categories.settings import (
     encode_codec_quality,
     encode_recording_format,
     encode_video_format,
+    is_settings_notification,
 )
 from .protocol.categories.storage import decode_write_margin, is_storage_notification
 from .protocol.codec import decode_packet
@@ -127,6 +138,13 @@ class CameraSession:
         self._last_low_margin_at: float | None = None
         self._unexpected_stop_event = asyncio.Event()
         self._pending_command = False
+        # Notification-derived only (design principle 4), like is_recording
+        # above — never set from "we sent a command". Updated from ANY
+        # decoded codec_quality-category report, whether it followed our own
+        # write, rode along on a video_format switch, or was body-initiated.
+        # None until the first such report arrives. See set_codec_quality's
+        # docstring for why this exists.
+        self.last_known_codec_variant: tuple[int, int] | None = None
 
     async def __aenter__(self) -> CameraSession:
         discovered = await scan_for_camera(self.profile.ble_name)
@@ -147,11 +165,32 @@ class CameraSession:
 
     def _handle_incoming(self, characteristic: Any, data: bytearray) -> None:
         """INCOMING_CONTROL callback: feeds the echo router, then watches for
-        an unsolicited recording-state change and the CANDIDATE write-margin
-        signal. Never raises."""
+        an unsolicited recording-state change, the CANDIDATE write-margin
+        signal, and the current codec/quality. Never raises."""
         self._router.handle_incoming(characteristic, data)
         self._observe_recording_state(data)
         self._observe_write_margin(data)
+        self._observe_codec_quality(data)
+
+    def _observe_codec_quality(self, data: bytearray) -> None:
+        """Update `last_known_codec_variant` from any codec_quality-category
+        report — see the module docstring and `set_codec_quality`. Never
+        raises: a profile without the codec_quality block, or a packet this
+        can't decode, is simply not this report."""
+        try:
+            spec = self.profile.require_command("codec_quality")
+        except ValueError:
+            return
+        try:
+            header, payload = decode_packet(bytes(data))
+        except ValueError:
+            return
+        if not is_settings_notification(header, category=spec.category, parameter=spec.parameter):
+            return
+        try:
+            self.last_known_codec_variant = decode_codec_quality(payload, spec.data_type)
+        except ValueError:
+            return
 
     def _observe_recording_state(self, data: bytearray) -> None:
         """Update `is_recording` from any recording-category notification,
@@ -341,18 +380,26 @@ class CameraSession:
         `set_video_format` for a codec-family switch, then this for the
         variant.
 
-        OBSERVED ON REAL HARDWARE (2026-07-20, docs/settings.md §8): the
+        OBSERVED ON REAL HARDWARE (2026-07-20, docs/settings.md §8, §11): the
         camera's 0x0A/0x00 report only fires on an actual applied change —
         requesting the (codec, variant) the camera is *already* at (e.g.
         right after `set_video_format` switches families, which resets the
         quality to a per-family remembered value) produces no report at
-        all, and this call raises `BMDVerificationError` for that reason,
-        not because the write failed. Mirrors `record_stop()`'s documented
-        no-echo-on-redundant-command behavior (docs/recording.md).
+        all, which used to surface as a `BMDVerificationError` indistinguishable
+        from a real failure. Mirrors `record_stop()`'s documented
+        no-echo-on-redundant-command behavior (docs/recording.md) — and now,
+        like `record_stop()`, this is a no-op when `last_known_codec_variant`
+        (notification-derived, never assumed) already confirms the target
+        state: nothing is sent, no exception is raised. That guard only
+        fires when a *prior* notification proved the state; the very first
+        call in a session (before any codec_quality report has arrived)
+        always writes and waits normally.
         """
         spec = self.profile.require_command("codec_quality")
         codec_spec = self.profile.require_codec(codec, variant)
         variant_id = codec_spec.variants[variant]
+        if self.last_known_codec_variant == (codec_spec.id, variant_id):
+            return
         command = encode_codec_quality(
             category=spec.category,
             parameter=spec.parameter,
@@ -371,8 +418,10 @@ class CameraSession:
             raise BMDVerificationError(
                 f"set_codec_quality({codec} {variant}): no echo received within "
                 f"{self.echo_timeout_s}s — either this family's echo behaviour is not "
-                f"captured yet, or the camera was already at ({codec}, {variant}) and simply "
-                f"didn't report a no-op (see docs/settings.md)"
+                f"captured yet, or the camera was already at ({codec}, {variant}) without this "
+                f"session having previously observed that (the known-redundant-write case is "
+                f"normally caught before any write — see last_known_codec_variant) — "
+                f"see docs/settings.md"
             )
         _header, payload = result
         reported = decode_codec_quality(payload, spec.data_type)

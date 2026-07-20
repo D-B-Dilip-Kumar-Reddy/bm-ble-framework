@@ -78,6 +78,22 @@ def _storage_packet(value: int, *, byte_offset: int = 1) -> bytearray:
     return bytearray(encode_packet(header, payload=bytes(payload)))
 
 
+def _codec_quality_packet(codec_id: int, variant_id: int) -> bytearray:
+    """A codec_quality-category CAMERA_REPORT, matching
+    `make_settings_profile`'s default block (category=0x0A/parameter=0x00/
+    INT8) — mirrors the real capture (e.g. `03 03` for BRAW 5:1)."""
+    header = CommandHeader(
+        destination=0xFF,
+        command_id=0x00,
+        reserved=0x00,
+        category=0x0A,
+        parameter=0x00,
+        data_type=DataType.INT8,
+        operation=Operation.CAMERA_REPORT,
+    )
+    return bytearray(encode_packet(header, payload=bytes([codec_id, variant_id])))
+
+
 def make_profile(
     recording_block: dict | str = "default", storage_block: dict | str = "default"
 ) -> CameraProfile:
@@ -130,6 +146,7 @@ def make_session(profile: CameraProfile) -> CameraSession:
     session._last_low_margin_at = None
     session._unexpected_stop_event = asyncio.Event()
     session._pending_command = False
+    session.last_known_codec_variant = None
     return session
 
 
@@ -621,6 +638,55 @@ def _recording_format_payload(fps: int, sensor_fps: int, width: int, height: int
     return struct.pack("<5h", fps, sensor_fps, width, height, flags)
 
 
+class TestObserveCodecQuality:
+    """`last_known_codec_variant` is notification-derived only (design
+    principle 4), like is_recording — never set from "we sent a command".
+    set_codec_quality's no-op guard depends on it being accurate."""
+
+    def test_updates_from_any_codec_quality_report(self):
+        session = make_session(make_settings_profile())
+
+        session._observe_codec_quality(_codec_quality_packet(3, 3))
+
+        assert session.last_known_codec_variant == (3, 3)
+
+    def test_later_report_overwrites_earlier_one(self):
+        session = make_session(make_settings_profile())
+        session._observe_codec_quality(_codec_quality_packet(3, 3))
+
+        session._observe_codec_quality(_codec_quality_packet(2, 0))
+
+        assert session.last_known_codec_variant == (2, 0)
+
+    def test_ignores_malformed_data(self):
+        session = make_session(make_settings_profile())
+
+        session._observe_codec_quality(bytearray([0x01, 0x02]))
+
+        assert session.last_known_codec_variant is None
+
+    def test_ignores_unrelated_notification(self):
+        session = make_session(make_settings_profile())
+
+        session._observe_codec_quality(_recording_packet(2))
+
+        assert session.last_known_codec_variant is None
+
+    def test_no_op_without_a_codec_quality_command_block(self):
+        session = make_session(make_profile())  # recording-only profile
+
+        session._observe_codec_quality(_codec_quality_packet(3, 3))
+
+        assert session.last_known_codec_variant is None
+
+    def test_wired_through_handle_incoming(self):
+        session = make_session(make_settings_profile())
+
+        session._handle_incoming(MagicMock(), _codec_quality_packet(2, 1))
+
+        assert session.last_known_codec_variant == (2, 1)
+
+
 class TestSetCodecQuality:
     @pytest.mark.asyncio
     async def test_succeeds_on_matching_echo(self):
@@ -663,6 +729,41 @@ class TestSetCodecQuality:
 
         with pytest.raises(BMDVerificationError, match="set_video_format"):
             await session.set_codec_quality("ProRes", "HQ")
+
+    @pytest.mark.asyncio
+    async def test_is_a_noop_when_already_at_the_target(self):
+        """Real-hardware regression (docs/settings.md §11): a video_format
+        switch resets the family's quality to a remembered value, and
+        requesting that same value again used to raise a spurious
+        BMDVerificationError. last_known_codec_variant (notification-
+        derived) lets this be recognized as already-satisfied instead."""
+        session = make_session(make_settings_profile())
+        session.last_known_codec_variant = (3, 3)  # BRAW, 5:1 — already known
+
+        await session.set_codec_quality("BRAW", "5:1")
+
+        session._controller.write_outgoing_control.assert_not_awaited()
+        session._router.arm.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_writes_normally_when_last_known_variant_differs(self):
+        session = make_session(make_settings_profile())
+        session.last_known_codec_variant = (2, 0)  # ProRes, HQ
+        session._router.wait_for.return_value = (MagicMock(), bytes([3, 3]))
+
+        await session.set_codec_quality("BRAW", "5:1")
+
+        session._controller.write_outgoing_control.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_writes_normally_when_nothing_known_yet(self):
+        session = make_session(make_settings_profile())
+        assert session.last_known_codec_variant is None
+        session._router.wait_for.return_value = (MagicMock(), bytes([3, 3]))
+
+        await session.set_codec_quality("BRAW", "5:1")
+
+        session._controller.write_outgoing_control.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_raises_before_writing_on_unknown_variant(self):
