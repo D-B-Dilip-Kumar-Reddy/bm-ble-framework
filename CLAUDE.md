@@ -236,9 +236,9 @@ Populate this table as categories are confirmed from sniffer sessions. Each cate
 | Category | Description | File |
 |---|---|---|
 | `0x0A` (param `0x01`) | Recording (record start/stop) | `protocol/categories/recording.py` |
-| `0x0A` (param `0x00`) | Codec + quality variant — CANDIDATE; does NOT switch BRAW↔ProRes (see `docs/settings.md`) | `protocol/categories/settings.py` |
-| `0x01` (param `0x00`) | Video format (FORMAT packet) — CANDIDATE; dimension_enum locks resolution + codec family, the actual BRAW↔ProRes switch | `protocol/categories/settings.py` |
-| `0x01` (param `0x09`) | Recording format (fps/sensor-fps/width/height/flags, int16 ×5) — CANDIDATE; data-type byte `0x82` | `protocol/categories/settings.py` |
+| `0x0A` (param `0x00`) | Codec + quality variant — report side sniffer-verified, write CANDIDATE; does NOT switch BRAW↔ProRes (see `docs/settings.md`) | `protocol/categories/settings.py` |
+| `0x01` (param `0x00`) | Video format (FORMAT packet) — CANDIDATE; dimension_enum locks resolution + codec family, the actual BRAW↔ProRes switch. Never appears in notifications — enums need active probing (`docs/settings.md` §5) | `protocol/categories/settings.py` |
+| `0x01` (param `0x09`) | Recording format (fps/sensor-fps/width/height/flags, int16 ×5) — report side sniffer-verified (data-type byte `0x02`), write CANDIDATE (claimed byte `0x82`) | `protocol/categories/settings.py` |
 | `0x09` (param `0x01`) | Storage write-margin signal — CANDIDATE, not confirmed causation, see `docs/recording.md` (category `0x09` is the same ambient-telemetry category `TIMECODE` param `0x04` already lives in) | `protocol/categories/storage.py` |
 
 ### Data types (`protocol/types.py`)
@@ -257,11 +257,14 @@ Information* document:
 | 128 | fixed16 | signed 5.11 fixed point: `encoded = round(real × 2048)` |
 | 130 (`0x82`) | int16 array | NOT official coding — CANDIDATE wire byte reported on the `POCKET_6K_G2 v7.9` recording-format packet (five LE int16 elements), see `docs/settings.md` §3 |
 
-Provenance: the only data-type byte sniffer-verified over BLE so far is `0x01`
-(int8) on the `POCKET_6K_G2 v7.9` recording command and echo. All other
-official codes come from the spec and have not yet been observed on real
-hardware — capture one before trusting a multi-byte decode. Full discussion:
-`docs/protocol.md` §3.
+Provenance: data-type bytes sniffer-verified over BLE so far (all on
+`POCKET_6K_G2 v7.9`): `0x01` (int8 — recording command/echo, codec reports),
+`0x02` (int16 — recording-format and category-9 reports; note the camera
+reports the recording-format parameter with `0x02` even though the claimed
+*write* byte is `0x82`), and `0x03` (int32 — a shutter-angle report). All
+other official codes come from the spec and have not yet been observed on
+real hardware — capture one before trusting a multi-byte decode. Full
+discussion: `docs/protocol.md` §3.
 
 ---
 

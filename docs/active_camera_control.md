@@ -114,6 +114,16 @@ promotes (or falsifies) the profile block's provenance — see
 that tests the "codec_quality doesn't switch codec families, video_format
 does" claim.
 
+`--dimension-enum 0x..` puts the video_format packet into **probe mode**:
+it sends a raw candidate enum instead of looking one up from the profile.
+This exists because the 2026-07-20 passive capture proved dimension enums
+never appear in notifications — the camera reports settings state on
+`0x01/0x09` and `0x0A/0x00`, never `0x01/0x00` — so a missing
+(resolution, codec) enum (e.g. 4K DCI ProRes) can only be mapped by
+actively sending candidates one at a time, with the operator noting what
+the camera switches to and the captured `0x01/0x09` report supplying the
+resulting width/height (`docs/settings.md` §4.1, §5).
+
 ---
 
 ## `tools/control/discover_command.py`

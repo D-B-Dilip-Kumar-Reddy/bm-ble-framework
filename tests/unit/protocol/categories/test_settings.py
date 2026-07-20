@@ -193,6 +193,45 @@ class TestDecoders:
         with pytest.raises(ValueError, match="Unsupported data type"):
             decode_recording_format(bytes(10), DataType.VOID)
 
+    def test_decodes_real_captured_recording_format_report(self):
+        """Regression net against real POCKET_6K_G2 v7.9 bytes (2026-07-20
+        passive capture): the camera's 1/9 report carries data-type byte
+        0x02 (INT16, not the claimed 0x82 write byte) and the exact
+        five-int16 element order — 50fps 4096x2160 flags 0x0010 here."""
+        raw = bytes.fromhex("FF 0E 00 00 01 09 02 02 32 00 32 00 00 10 70 08 10 00")
+
+        header, payload = decode_packet(raw)
+
+        assert (header.category, header.parameter) == (0x01, 0x09)
+        assert header.data_type is DataType.INT16
+        assert header.operation is Operation.CAMERA_REPORT
+        assert decode_recording_format(payload, header.data_type) == RecordingFormat(
+            fps_int=50, sensor_fps_int=50, width=4096, height=2160, frame_flags=0x0010
+        )
+
+    def test_decodes_real_captured_full_sensor_flags(self):
+        """Same capture, 6K 3:2 report — frame_flags 0x0000 at the same 50
+        fps that reports 0x0010 elsewhere (the resolution-dependent
+        'windowed' bit finding, docs/settings.md §5)."""
+        raw = bytes.fromhex("FF 0E 00 00 01 09 02 02 32 00 32 00 00 18 80 0D 00 00")
+
+        _header, payload = decode_packet(raw)
+
+        assert decode_recording_format(payload, DataType.INT16) == RecordingFormat(
+            fps_int=50, sensor_fps_int=50, width=6144, height=3456, frame_flags=0x0000
+        )
+
+    def test_decodes_real_captured_codec_report(self):
+        """Same capture: the camera's 10/0 codec report — ProRes (2) HQ (0)
+        after a body-initiated switch to ProRes."""
+        raw = bytes.fromhex("FF 06 00 00 0A 00 01 02 02 00")
+
+        header, payload = decode_packet(raw)
+
+        assert (header.category, header.parameter) == (0x0A, 0x00)
+        assert header.operation is Operation.CAMERA_REPORT
+        assert decode_codec_quality(payload, header.data_type) == (2, 0)
+
     def test_is_settings_notification_matches_on_category_and_parameter(self):
         header = CommandHeader(
             destination=0xFF,

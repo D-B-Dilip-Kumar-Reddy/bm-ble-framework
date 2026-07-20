@@ -530,14 +530,21 @@ def test_pocket_6k_g2_profile_resolves_settings_blocks():
     assert (codec_quality.category, codec_quality.parameter) == (10, 0)
     assert codec_quality.reserved == 0
     assert codec_quality.provenance.status == "CANDIDATE"
+    # Observed on the 2026-07-20 passive capture — camera reports use
+    # CAMERA_REPORT (0x02) on this family's coordinates.
+    assert codec_quality.echo_operation == 2
 
     video_format = profile.require_command("video_format")
     assert (video_format.category, video_format.parameter) == (1, 0)
     assert video_format.reserved == 1
+    # The camera never reports on 1/0 (2026-07-20 capture) — no
+    # echo_operation may be recorded until a write-side echo is observed.
+    assert video_format.echo_operation is None
 
     recording_format = profile.require_command("recording_format")
     assert (recording_format.category, recording_format.parameter) == (1, 9)
     assert recording_format.data_type is DataType.INT16_ARRAY
+    assert recording_format.echo_operation == 2
 
     assert profile.require_codec("BRAW", "5:1").id == 3
     assert profile.require_codec("ProRes", "HQ").id == 2

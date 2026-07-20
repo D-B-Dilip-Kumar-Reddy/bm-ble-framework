@@ -145,12 +145,21 @@ doc:
 | 128 | fixed16 (signed 5.11 fixed point) | 2 | `FIXED16` |
 | 130 (`0x82`) | int16 array (per-element width 2) | 2 × N | `INT16_ARRAY` — **not official coding**, see below |
 
-**Provenance:** the only data-type byte sniffer-verified over BLE so far is
-`0x01` on the recording command/echo — `INT8` under this coding, which agrees
-with the spec's transport-mode parameter (§5, 10.1) being int8. Every other
-code is [spec] only: before trusting any multi-byte parameter (white balance
-int16, shutter angle int32, any fixed16), capture one on real hardware and
-check byte 6 against this table.
+**Provenance:** data-type bytes sniffer-verified over BLE so far, all on
+`POCKET_6K_G2 v7.9`:
+
+- `0x01` (`INT8`) — the recording command/echo, agreeing with the spec's
+  transport-mode parameter (§5, 10.1) being int8; also the codec report
+  (10.0, 2026-07-20 settings capture).
+- `0x02` (`INT16`) — camera reports on 1.9 (recording format, five int16
+  elements decoding exactly per the spec layout) and on the category-9
+  ambient parameters (2026-07-20 settings capture).
+- `0x03` (`INT32`) — a 1.11 shutter-angle report (`18000` = 180.00°,
+  matching the spec's degrees × 100 exactly; 2026-07-20 settings capture).
+
+Every other code is [spec] only: before trusting any other multi-byte
+parameter (white balance int16, any fixed16), capture one on real hardware
+and check byte 6 against this table.
 
 **`0x82` (`INT16_ARRAY`)** is not in the official document at all. It was
 reported on `POCKET_6K_G2 v7.9`'s recording-format write packet (category
@@ -245,9 +254,9 @@ payload order; all values little-endian.
 | 1.6 | Exposure (ordinal) | int16 | steps through available exposures |
 | 1.7 | Dynamic Range Mode | int8 | 0 = film, 1 = video, 2 = extended video |
 | 1.8 | Sharpening level | int8 | 0 = off, 1 = low, 2 = medium, 3 = high |
-| 1.9 | Recording format | int16 ×5 | [0] file frame rate, [1] sensor frame rate, [2] frame width, [3] frame height, [4] flags (file-M-rate, sensor-M-rate, sensor off-speed, interlaced, windowed) — CANDIDATE external-RE evidence on G2 v7.9 matches this layout exactly, but with data-type byte `0x82` (not official coding) and only flags values `0x0010`/`0x0013` observed (`docs/settings.md` §1.3) |
+| 1.9 | Recording format | int16 ×5 | [0] file frame rate, [1] sensor frame rate, [2] frame width, [3] frame height, [4] flags (file-M-rate, sensor-M-rate, sensor off-speed, interlaced, windowed) — camera *reports* on this parameter are [sniffer-verified] on G2 v7.9 (2026-07-20): exact element order, data-type byte `0x02`, flags values `0x0000`/`0x0010`/`0x0013` decoding precisely as the spec bitfield (bit 4 = windowed, resolution-dependent). The *write* packet remains CANDIDATE external-RE evidence, claimed with data-type byte `0x82` (not official coding). See `docs/settings.md` §1.3, §5 |
 | 1.10 | Auto exposure mode | int8 | 0 = manual, 1 = iris, 2 = shutter, 3 = iris+shutter, 4 = shutter+iris |
-| 1.11 | Shutter angle | int32 | 100–36000 (degrees × 100) |
+| 1.11 | Shutter angle | int32 | 100–36000 (degrees × 100) — a camera report is [sniffer-verified] on G2 v7.9: int32 `18000` = 180.00° emitted right after an fps change (2026-07-20 settings capture) |
 | 1.12 | Shutter speed | int32 | 1–5000 (fraction of 1s: 50 → 1/50) |
 | 1.13 | Gain (dB) | int8 | −128–127 dB |
 | 1.14 | ISO | int32 | ISO value |
@@ -331,13 +340,15 @@ telemetry (~1/s, category-wide, meaning unknown). One exception:
 
 | Param | Name | Type | Meaning |
 |---|---|---|---|
+| 9.0 | (unknown, ambient ticker) | int16 ×3 (observed) | [sniffer-verified] wire shape only: fires ~1/s in every capture, payload e.g. `9x 2E 64 00 1F 00` — element 0 jitters around a slowly-moving value, elements 1–2 constant (`100`, `31`) within a session. Meaning unknown. |
 | 9.1 | Write-margin warning | int8 (payload offset 1 of 3; offsets 0 and 2 constant/unexplained) | Not [spec] — no official documentation for this category exists. Wire bytes and values are [sniffer-verified]: `1` = nominal, `−2` = low_margin, observed to precede a camera-initiated recording stop by 0.1–1.4s on a known-slow SD card (6/6 occurrences, `POCKET_6K_G2 v7.9` + `POCKET_6K_PRO v8.6`); never `−2` in 7 unrelated normal sessions. The *semantic* attribution to "write speed" specifically is [hypothesis] — not yet isolated from other possible autostop causes (card full, card removed, power loss). Modeled in `payloads/models/*.json`'s `storage.write_margin_warning` (profile provenance status `CANDIDATE`), decoded via `protocol/categories/storage.py` — see `docs/recording.md`'s "Camera-initiated stop detection" section for the full evidence. |
+| 9.2 | (unknown — remaining recording time?) | int16 at payload offset 2 of 8 (observed) | [sniffer-verified] wire shape only: fired once after *every* settings change in the 2026-07-20 G2 settings capture, other offsets constant `0x00`. The moving int16's values tracked the new settings in bitrate-consistent order (higher bitrate ⇒ smaller value), so "remaining recording time at current settings" is a live [hypothesis] — needs a varying-card-fill session before it can enter a profile. See `docs/settings.md` §5. |
 
 ### Category 10 — Media ← this project's home turf
 
 | Param | Name | Type | Elements / meaning |
 |---|---|---|---|
-| 10.0 | Codec | int8 ×2 | [0] basic codec, [1] variant. BRAW variants: 0 = Q0, 1 = Q5, 2 = 3:1, 3 = 5:1, 4 = 8:1, 5 = 12:1. CANDIDATE external-RE evidence on G2 v7.9 matches (codec ids: ProRes 2, BRAW 3) — with the crucial caveat that assigning it does NOT switch the codec family, only the variant; see `docs/settings.md` §1.1. Feeds the `codecs` profile table — sniff per camera |
+| 10.0 | Codec | int8 ×2 | [0] basic codec, [1] variant. BRAW variants: 0 = Q0, 1 = Q5, 2 = 3:1, 3 = 5:1, 4 = 8:1, 5 = 12:1. Camera *reports* on this parameter are [sniffer-verified] on G2 v7.9 (2026-07-20): int8 pair, codec ids ProRes 2 / BRAW 3, variants HQ 0 / 3:1 2 / 5:1 3 observed. The *write* stays CANDIDATE external-RE evidence — with the crucial caveat that assigning it does NOT switch the codec family, only the variant; see `docs/settings.md` §1.1, §5. Feeds the `codecs` profile table — sniff per camera |
 | 10.1 | Transport mode | int8 ×5+ | [0] mode: 0 = preview, 1 = play, 2 = record; [1] speed: signed, 0 = pause, +1 = 1× forward play, −1 = reverse; [2] flags bitfield: 1<<0 loop, 1<<1 play all, 1<<5 disk1 active, 1<<6 disk2 active, 1<<7 time-lapse recording; [3+] storage medium per slot: 0 = CFast, 1 = SD, 2 = SSD recorder, 3 = USB |
 | 10.2 | Playback Control | int8 | clip navigation: 0 = previous, 1 = next |
 | 10.3 | Still Capture | void | capture a photo |

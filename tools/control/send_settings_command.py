@@ -90,19 +90,31 @@ def build_command(profile: CameraProfile, args: argparse.Namespace) -> tuple[str
         )
 
     if args.packet == "video_format":
-        _require_flags(args, ("resolution", "codec", "fps"))
+        _require_flags(args, ("fps",))
         spec = profile.require_command("video_format")
-        resolution = profile.require_resolution(args.resolution)
-        profile.require_codec(args.codec)
         fps = profile.require_fps_mode(args.fps)
-        dimension_enum = resolution.dimension_enums.get(args.codec)
-        if dimension_enum is None:
-            raise SystemExit(
-                f"dimension_enum for '{args.resolution}' under '{args.codec}' is not in the "
-                f"profile — capture it first (tools/sniffers/sniffer_settings.py, see "
-                f"docs/settings.md)."
-            )
-        label = f"video_format {args.resolution} {args.codec} {args.fps}"
+        if args.dimension_enum is not None:
+            # Probe mode: send a candidate enum that is NOT in the profile
+            # yet. Dimension enums never appear in notifications (confirmed
+            # by the 2026-07-20 passive capture), so an active probe like
+            # this is the only way to map a missing (resolution, codec)
+            # enum — e.g. 4K DCI ProRes. The operator watches what the
+            # camera switches to; the 1/9 report in the capture shows the
+            # resulting width/height.
+            dimension_enum = args.dimension_enum
+            label = f"video_format probe enum=0x{dimension_enum:02X} {args.fps}"
+        else:
+            _require_flags(args, ("resolution", "codec"))
+            resolution = profile.require_resolution(args.resolution)
+            profile.require_codec(args.codec)
+            dimension_enum = resolution.dimension_enums.get(args.codec)
+            if dimension_enum is None:
+                raise SystemExit(
+                    f"dimension_enum for '{args.resolution}' under '{args.codec}' is not in "
+                    f"the profile — enums never appear in notifications, so probe candidates "
+                    f"actively with --dimension-enum (see docs/settings.md)."
+                )
+            label = f"video_format {args.resolution} {args.codec} {args.fps}"
         return label, encode_video_format(
             category=spec.category,
             parameter=spec.parameter,
@@ -204,6 +216,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--sensor-fps",
         help="Optional off-speed sensor FPS label (recording_format only). Defaults to --fps.",
+    )
+    parser.add_argument(
+        "--dimension-enum",
+        type=lambda s: int(s, 0),
+        default=None,
+        help=(
+            "video_format only: send this raw dimension_enum byte instead of looking one up "
+            "from the profile (accepts 0x.. hex). Discovery-grade: use it to map enums the "
+            "profile lacks (e.g. the 4K DCI ProRes enum) — enums never appear in "
+            "notifications, so an active probe is the only way. Watch the camera and note "
+            "what it switches to; then add the confirmed enum to the profile's resolutions "
+            "table."
+        ),
     )
     parser.add_argument(
         "--listen-seconds",

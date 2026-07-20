@@ -401,9 +401,10 @@ class CameraSession:
         if dimension_enum is None:
             raise ValueError(
                 f"dimension_enum for '{resolution}' under '{codec}' has not been captured "
-                f"on {self.profile.model_key} {self.profile.firmware} yet — reverse-engineer "
-                f"it with tools/sniffers/sniffer_settings.py (see docs/settings.md) before "
-                f"using this combination."
+                f"on {self.profile.model_key} {self.profile.firmware} yet — enums never "
+                f"appear in notifications, so probe candidates actively with "
+                f"tools/control/send_settings_command.py --dimension-enum (see "
+                f"docs/settings.md) before using this combination."
             )
 
         command = encode_video_format(

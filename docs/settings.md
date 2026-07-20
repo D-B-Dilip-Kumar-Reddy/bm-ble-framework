@@ -2,9 +2,11 @@
 
 **Status:** CANDIDATE — three packet families implemented end to end
 (`protocol/categories/settings.py`, profile blocks, `CameraSession` methods,
-capture tooling), but every protocol value comes from an **external
-reverse-engineering document**, not yet re-verified by this repo's own
-tooling. Nothing here is hardware-VERIFIED.
+capture tooling). The **report side** of `codec_quality` and
+`recording_format` is now sniffer-confirmed by this repo's own passive
+capture (§5, 2026-07-20); the **write side** of all three families — and
+every `dimension_enum` — still rests on the external reverse-engineering
+document only. Nothing is hardware-VERIFIED yet.
 
 ## Provenance and evidence status
 
@@ -163,9 +165,12 @@ Variant ids are **per-codec** (BRAW 0 = Q0, ProRes 0 = HQ). BRAW variant id
 Known gaps (from the source doc itself):
 
 - **4K DCI is the only resolution offered under both codecs, but only its
-  BRAW enum was captured.** The ProRes enum is a prime target for the first
-  sniffer session (§4) — until then, `set_video_format("4K DCI", "ProRes",
-  ...)` raises with a pointer here.
+  BRAW enum was captured.** The 2026-07-20 passive capture (§5) confirmed
+  the camera really does sit at 4096×2160 under ProRes — and also that
+  enums never appear in notifications, so the missing ProRes enum can only
+  be found by actively probing candidates
+  (`send_settings_command.py --dimension-enum`, §4.1). Until then,
+  `set_video_format("4K DCI", "ProRes", ...)` raises with a pointer here.
 - Two enums (`0x0F`/`0x10`) map to the same 3728×3104 dimensions; which one
   the camera itself reports is unresolved.
 - The enum space has holes (0x04, 0x05, 0x07, 0x09–0x0C, 0x11 unobserved)
@@ -187,6 +192,12 @@ Known gaps (from the source doc itself):
 The NTSC labels (23.98/29.97/59.94) share `fps_int` with their exact
 siblings and are distinguished only by `m_rate`/`frame_flags` — so a
 decoded report of `fps_int=24` alone cannot distinguish 23.98 from 24.
+
+**Caveat (from the 2026-07-20 capture, §5):** the `0x10` bit in
+`frame_flags` appears to be the spec's resolution-dependent *windowed*
+flag, not part of the fps encoding — the camera reported `0x0000` at
+6K 3:2 (full sensor) at the same 50 fps that reports `0x0010` elsewhere.
+The table's values hold as transcribed for windowed resolutions.
 
 ---
 
@@ -216,7 +227,7 @@ The point of this subsystem right now is to **turn CANDIDATE into VERIFIED
 bytes in the same uppercase-hex format as this doc, so captures diff
 directly against §1's layouts.
 
-### 4.1 Passive: confirm the families exist on the wire
+### 4.1 Passive: confirm the families exist on the wire — ✅ DONE 2026-07-20
 
 ```bash
 python tools/sniffers/sniffer_settings.py --model-key POCKET_6K_G2 --firmware v7.9
@@ -224,18 +235,30 @@ python tools/sniffers/sniffer_settings.py --model-key POCKET_6K_G2 --firmware v7
 
 Default windows: `codec_to_prores`, `codec_to_braw`,
 `quality_variant_change`, `resolution_change`, `fps_change` — the operator
-performs each change on the camera body. Expected (if the doc is right):
-reports on `0x0A/0x00`, `0x01/0x00` and/or `0x01/0x09` in exactly the
-windows where those settings changed. This also captures each family's
-**echo operation and payload shape**, which nothing has observed yet —
-update the profile blocks' `echo_operation` and provenance from it.
-
-To capture the missing 4K DCI ProRes enum (§2.2) or another model's tables,
-use one window per concrete setting:
+performs each change on the camera body. **Run on real hardware
+2026-07-20 — full results in §5.** Headline: `0x0A/0x00` and `0x01/0x09`
+reports confirmed (operation `0x02`, payload shapes exactly as modeled);
+`0x01/0x00` never reports, so **dimension enums cannot be captured
+passively** — probe them actively instead:
 
 ```bash
-python tools/sniffers/sniffer_settings.py --model-key POCKET_6K_G2 --firmware v7.9 \
-    --actions res_4K_DCI_prores,res_UHD_prores,res_4K_DCI_braw
+# e.g. hunting the 4K DCI ProRes enum in the unobserved gap around 0x07/0x09
+python tools/control/send_settings_command.py --model-key POCKET_6K_G2 --firmware v7.9 \
+    --packet video_format --fps 25 --dimension-enum 0x09
+```
+
+One candidate per run, operator watching the body; the `0x01/0x09` report
+in the saved capture shows the resulting width/height, which together with
+the on-screen codec identifies what the enum selects. Add confirmed enums
+to `resolutions.*.dimension_enums`.
+
+For another model's tables (width/height/fps encodings, codec/variant
+ids — the things the camera *does* report), use one sniffer window per
+concrete setting:
+
+```bash
+python tools/sniffers/sniffer_settings.py --model-key POCKET_6K_PRO --firmware v8.6 \
+    --actions res_HD,res_UHD,res_4K_DCI,codec_prores,codec_braw
 ```
 
 ### 4.2 Active: send each family and watch the camera
@@ -260,6 +283,17 @@ CANDIDATE commands — the same safety stance as
 because its family is VERIFIED). The operator's eyes on the camera are
 ground truth; the saved capture is the evidence.
 
+What to look for in each capture, now that §5 established the report
+channels: a fresh `0x01/0x09` report whose width/height/fps match the
+request, and (for codec changes) a `0x0A/0x00` report with the requested
+ids. Two open questions §4.2 settles beyond the central claim: whether a
+*written* `0x01/0x00` command gets a direct echo on its own coordinates
+(body changes don't produce one), and whether the recording_format write is
+accepted with data-type byte `0x82` (the camera's own reports use `0x02` —
+if `0x82` is rejected, try the write with `0x02` and update the profile's
+`data_type`). Also worth a run: `recording_format` targeting 6K 3:2 with
+the transcribed windowed-bit flags vs `0x0000` (§5's frame_flags finding).
+
 ### 4.3 End to end: the session path
 
 ```bash
@@ -267,11 +301,14 @@ python examples/change_codec.py
 ```
 
 Runs `set_video_format` + `set_codec_quality` round trips (ProRes and back
-to BRAW) through `CameraSession`'s echo verification. Because the echo
-behaviour is uncaptured, a clean `BMDVerificationError: no echo received`
-here with the camera *visibly changing* means the family works but echoes
-elsewhere (or not at all) — feed that back into the profile blocks and, if
-needed, the session verification strategy.
+to BRAW) through `CameraSession`'s echo verification. §5 established that
+body-initiated changes report on `0x01/0x09` and `0x0A/0x00` — both
+channels the session methods already await — so verification is *expected*
+to work; whether a written command triggers the same reports is exactly
+what this step tests. A `BMDVerificationError: no echo received` with the
+camera *visibly changing* would mean writes don't trigger the reports body
+changes do — feed that back into the profile blocks and, if needed, the
+session verification strategy.
 
 ### 4.4 Promote (or falsify) the values
 
@@ -295,7 +332,82 @@ scalar sweeps; multi-element candidates are sent with
 
 ---
 
-## 5. Code surface
+## 5. First passive capture — results (2026-07-20, POCKET_6K_G2 v7.9)
+
+Runbook §4.1, run by the operator on real hardware
+(`tools/captures/POCKET_6K_G2_v7.9/POCKET_6K_G2_v7.9_20260720T103044.json`,
+local/gitignored). Every window decoded cleanly. All claims below are
+[sniffer-verified] for the **report** direction only — no command was sent.
+
+### Confirmed
+
+- **`0x0A/0x00` codec reports** — exactly the modeled int8 pair, operation
+  `0x02`, data-type byte `0x01`, payload exactly 2 bytes:
+  `02 00` (ProRes HQ), `03 02` (BRAW 3:1), `03 03` (BRAW 5:1). Confirms
+  codec ids ProRes=2 / BRAW=3 and those three variant ids. The report fired
+  in the codec, quality, and fps windows (retransmitted with unchanged
+  values in the latter), but *not* in the resolution window.
+- **`0x01/0x09` recording-format reports** — exactly the modeled five-int16
+  element order, operation `0x02`, e.g.
+  `32 00 32 00 00 10 70 08 10 00` = 50 fps, sensor 50, 4096×2160, flags
+  `0x0010`, and `3C 00 3C 00 00 18 00 0A 13 00` = 60/59.94, 6144×2560,
+  flags `0x0013`. Fired in **every** window — this is the camera's
+  workhorse settings report.
+- **`echo_operation = 2`** recorded in the profile for both families.
+- **4K DCI under ProRes is real**: switching to ProRes on the body landed
+  on 4096×2160 (its enum is still unknown, see below).
+
+### Divergences from the transcribed model
+
+- **The `0x01/0x09` report's data-type byte is `0x02` (plain `INT16`), not
+  `0x82`.** `0x82` remains only the *claimed write* byte from the external
+  doc — unverified until §4.2 runs. Decode is unaffected (same 2-byte
+  element width); the profile block keeps `INT16_ARRAY` as the write byte
+  with the discrepancy recorded in provenance.
+- **`frame_flags` is not a pure fps encoding.** A third value, `0x0000`,
+  was reported at 6K 3:2 (full sensor) @ 50 fps — same fps that reported
+  `0x0010` at 4K DCI and 6K 2.4:1. The three observed values decode
+  exactly as the official spec's 1.9 flags bitfield: bit 0 file-M-rate,
+  bit 1 sensor-M-rate, bit 4 **windowed** (resolution-dependent — 6K 3:2
+  is the G2's only full-sensor mode). `fps_modes.frame_flags` keeps the
+  transcribed values (valid at windowed resolutions); a
+  `recording_format` *write* targeting 6K 3:2 may need `0x0000` — test in
+  §4.2 before trusting.
+
+### The key negative result
+
+**`0x01/0x00` (video_format/FORMAT) never reported — not even during
+body-initiated BRAW↔ProRes switches.** The camera announces settings state
+via `0x01/0x09` + `0x0A/0x00` only. Consequences, all folded into the code
+and profile:
+
+- Dimension enums are invisible to passive sniffing → the
+  `--dimension-enum` probe mode on `send_settings_command.py` is the way to
+  map missing enums (§4.1).
+- A `video_format` write's confirmation must be watched on the other
+  channels — validating `set_video_format`'s dual-channel arm (`1/0` is
+  still armed in case a direct echo exists for *written* commands; body
+  changes may simply not trigger it).
+
+### Bonus observations (not yet modeled)
+
+- **Shutter angle report [sniffer-verified]**: `FF 08 00 00 01 0B 03 02
+  50 46 00 00` — category 1 parameter 11, int32 `18000` = 180.00°, exactly
+  the spec's 1.11 (degrees × 100), emitted right after the fps change
+  (shutter angle tracking fps). First int32 — and first `0x03` data-type
+  byte — seen on the wire.
+- **Category 9 parameter 2** fired once after *every* settings change; its
+  int16 at payload offset 2 moved each time (2261 → 1852 → 3092 → 4156 →
+  3473) in an order consistent with **remaining recording time at the new
+  settings** (higher bitrate ⇒ smaller value: ProRes HQ 4K < BRAW 3:1 6K <
+  5:1 < 2.4:1; adding 59.94 fps lowered it again). [hypothesis] only —
+  needs a session with a different card fill level to confirm before it
+  can enter the profile's `storage` section, but it's a promising lead for
+  the planned storage-monitoring subsystem (remaining-time gating).
+- The known category 9 parameter 0 ambient ticker ran throughout
+  (`9x 2E 64 00 1F 00`, ~1/s), as in every other capture.
+
+## 6. Code surface
 
 | Piece | Where |
 |---|---|

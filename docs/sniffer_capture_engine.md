@@ -175,11 +175,14 @@ this way — with one addition: its window labels are overridable via
 `--actions`, because settings reverse engineering needs *value-mapping*
 sessions (one window per concrete resolution/codec/FPS so each captured
 packet is unambiguously attributable to one setting — e.g.
-`--actions res_HD,res_UHD,res_4K_DCI` to map another model's
-dimension enums), not just the fixed per-feature labels the recording
-sniffer uses. Default labels cover the five settings changes
-`docs/settings.md`'s CANDIDATE families describe (codec to
-ProRes/back, quality variant, resolution, FPS).
+`--actions res_HD,res_UHD,res_4K_DCI` to map another model's width/height
+and codec/variant encodings), not just the fixed per-feature labels the
+recording sniffer uses. Default labels cover the five settings changes
+`docs/settings.md`'s CANDIDATE families describe (codec to ProRes/back,
+quality variant, resolution, FPS). Known passive limit (confirmed on the
+2026-07-20 G2 run, `docs/settings.md` §5): video_format dimension enums
+never appear in notifications and need the active
+`send_settings_command.py --dimension-enum` probe instead.
 
 ---
 

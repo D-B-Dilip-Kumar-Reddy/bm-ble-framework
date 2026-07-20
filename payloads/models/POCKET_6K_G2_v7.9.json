@@ -42,10 +42,14 @@
       "parameter": 0,
       "data_type": "INT8",
       "reserved": 0,
+      "echo_operation": 2,
       "provenance": {
         "status": "CANDIDATE",
-        "method": "external reverse-engineering document (CODEC_RES_FPS_6K_G2.docx, 2026-07-20) — byte layout and codec/variant id tables transcribed; not yet re-verified by this repo's capture tooling",
-        "notes": "Payload is two int8 elements [codec_id, variant_id] from the top-level `codecs` table (10-byte packet, e.g. FF 06 00 00 0A 00 01 00 03 03 for BRAW 5:1). Matches the official spec's 10.0 Codec parameter coordinates, but the observed data-type byte is 0x01 (INT8), not an array marker. Reserved byte 0x00 — differs from recording and video_format (0x01). OBSERVED LIMITATION: changes the quality variant within the active codec family but does NOT switch BRAW <-> ProRes even though it carries a codec id — codec-family switches require the video_format packet's dimension_enum. Echo behaviour not yet captured — run tools/control/send_settings_command.py to capture it before trusting verification."
+        "method": "external reverse-engineering document (CODEC_RES_FPS_6K_G2.docx, 2026-07-20) — byte layout and codec/variant id tables transcribed; report side re-confirmed by this repo's passive capture (sniffer_settings.py, 2026-07-20); write side not yet sent by this repo's tooling",
+        "capture_refs": [
+          "tools/captures/POCKET_6K_G2_v7.9/POCKET_6K_G2_v7.9_20260720T103044.json (local, gitignored)"
+        ],
+        "notes": "Payload is two int8 elements [codec_id, variant_id] from the top-level `codecs` table (10-byte packet, e.g. FF 06 00 00 0A 00 01 00 03 03 for BRAW 5:1). Matches the official spec's 10.0 Codec parameter coordinates, but the observed data-type byte is 0x01 (INT8), not an array marker. Reserved byte 0x00 — differs from recording and video_format (0x01). OBSERVED LIMITATION: changes the quality variant within the active codec family but does NOT switch BRAW <-> ProRes even though it carries a codec id — codec-family switches require the video_format packet's dimension_enum. 2026-07-20 passive capture: camera-originated 0x0A/0x00 reports confirmed on the wire — operation 0x02, data-type byte 0x01, payload exactly 2 bytes; observed 02 00 (ProRes HQ), 03 02 (BRAW 3:1), 03 03 (BRAW 5:1), confirming both codec ids and those three variant ids. Write side (sending this packet) still unconfirmed — docs/settings.md runbook 4.2."
       }
     },
     "video_format": {
@@ -56,7 +60,10 @@
       "provenance": {
         "status": "CANDIDATE",
         "method": "external reverse-engineering document (CODEC_RES_FPS_6K_G2.docx, 2026-07-20) — byte layout, fps byte and dimension_enum tables transcribed; not yet re-verified by this repo's capture tooling",
-        "notes": "The FORMAT packet: five int8 elements [fps_int, m_rate, dimension_enum, 0, 0] (13-byte packet, e.g. FF 09 00 01 01 00 01 00 19 00 08 00 00 for 25 fps 4K DCI/BRAW). dimension_enum encodes resolution AND codec family together (see `resolutions.*.dimension_enums`) — this is the packet that actually switches BRAW <-> ProRes; codec_quality alone does not. Parameter is 0x00 (spec 1.0 Video Mode int8 x5), NOT 0x09. The two trailing zero elements are unexplained — hypothesis: the spec's interlaced and colorspace video-mode elements. Echo behaviour not yet captured; a report may arrive on the recording_format coordinates (1/9) instead."
+        "capture_refs": [
+          "tools/captures/POCKET_6K_G2_v7.9/POCKET_6K_G2_v7.9_20260720T103044.json (local, gitignored)"
+        ],
+        "notes": "The FORMAT packet: five int8 elements [fps_int, m_rate, dimension_enum, 0, 0] (13-byte packet, e.g. FF 09 00 01 01 00 01 00 19 00 08 00 00 for 25 fps 4K DCI/BRAW). dimension_enum encodes resolution AND codec family together (see `resolutions.*.dimension_enums`) — this is the packet that actually switches BRAW <-> ProRes; codec_quality alone does not. Parameter is 0x00 (spec 1.0 Video Mode int8 x5), NOT 0x09. The two trailing zero elements are unexplained — hypothesis: the spec's interlaced and colorspace video-mode elements. 2026-07-20 passive capture: NO report on 0x01/0x00 appeared in any window, INCLUDING body-initiated BRAW<->ProRes switches — the camera reports settings state via 0x01/0x09 and 0x0A/0x00 instead. Consequences: dimension_enum values cannot be sniffed passively (missing enums like 4K DCI ProRes need an active probe — send_settings_command.py --dimension-enum), and a 1/0 write's confirmation is expected on the 1/9 / 10/0 channels, which CameraSession.set_video_format already arms."
       }
     },
     "recording_format": {
@@ -64,10 +71,14 @@
       "parameter": 9,
       "data_type": "INT16_ARRAY",
       "reserved": 1,
+      "echo_operation": 2,
       "provenance": {
         "status": "CANDIDATE",
-        "method": "external reverse-engineering document (CODEC_RES_FPS_6K_G2.docx, 2026-07-20) — byte layout and fps/resolution encodings transcribed; not yet re-verified by this repo's capture tooling",
-        "notes": "Five little-endian int16 elements [fps_int, sensor_fps_int, width, height, frame_flags] (18-byte packet, e.g. FF 0E 00 01 01 09 82 00 19 00 19 00 00 10 70 08 10 00 for 25 fps 4096x2160 exact-rate). Coordinates and element order match the official spec's 1.9 Recording Format (int16 x5), but the reported data-type byte is 0x82 (INT16_ARRAY) — not in the official coding, carried as a CANDIDATE DataType. frame_flags observed values: 0x0010 exact rate, 0x0013 NTSC/drop (see `fps_modes`). sensor_fps_int defaults to fps_int (off-speed recording not yet explored). Echo behaviour not yet captured."
+        "method": "external reverse-engineering document (CODEC_RES_FPS_6K_G2.docx, 2026-07-20) — byte layout and fps/resolution encodings transcribed; report side re-confirmed by this repo's passive capture (sniffer_settings.py, 2026-07-20); write side not yet sent by this repo's tooling",
+        "capture_refs": [
+          "tools/captures/POCKET_6K_G2_v7.9/POCKET_6K_G2_v7.9_20260720T103044.json (local, gitignored)"
+        ],
+        "notes": "Five little-endian int16 elements [fps_int, sensor_fps_int, width, height, frame_flags] (18-byte packet, e.g. FF 0E 00 01 01 09 82 00 19 00 19 00 00 10 70 08 10 00 for 25 fps 4096x2160). data_type 0x82 (INT16_ARRAY) is the claimed WRITE byte, still unverified — the camera's own 0x01/0x09 reports carry data-type byte 0x02 (plain INT16) instead, sniffer-confirmed 2026-07-20 along with the exact element order (e.g. 32 00 32 00 00 10 70 08 10 00 = 50fps 4096x2160 flags 0x0010; 3C 00 3C 00 00 18 00 0A 13 00 = 59.94 6144x2560 flags 0x0013). NEW from that capture: flags 0x0000 reported at 6K 3:2 (full sensor) — so 0x0010 is NOT a plain 'exact rate' marker; the three observed values (0x0000/0x0010/0x0013) decode exactly as the official 1.9 flags bitfield (bit0 file-M-rate, bit1 sensor-M-rate, bit4 windowed), making the windowed bit resolution-dependent. `fps_modes.frame_flags` still stores the values as transcribed (valid for windowed resolutions); writing 6K 3:2 may need 0x0000 — confirm via runbook 4.2 before trusting a full-sensor write. sensor_fps_int defaults to fps_int (off-speed unexplored)."
       }
     }
   },
@@ -97,7 +108,7 @@
     }
   },
   "resolutions": {
-    "_comment": "CANDIDATE — transcribed from CODEC_RES_FPS_6K_G2.docx; provenance rides with commands.video_format / commands.recording_format. dimension_enums are keyed per codec because the enum locks resolution and codec family together. 4K DCI is the only resolution offered under both codecs, but only its BRAW enum has been captured — the ProRes one is still unknown, so it has no ProRes entry here. '3.7K Anamorphic alt' records a second enum (0x10) observed for the same 3728x3104 dimensions; which of 0x0F/0x10 the camera prefers is unresolved.",
+    "_comment": "CANDIDATE — transcribed from CODEC_RES_FPS_6K_G2.docx; provenance rides with commands.video_format / commands.recording_format. dimension_enums are keyed per codec because the enum locks resolution and codec family together. 4K DCI is the only resolution offered under both codecs, but only its BRAW enum has been captured — the ProRes one is still unknown, so it has no ProRes entry here (2026-07-20 passive capture confirmed 4096x2160 IS the active resolution after a body switch to ProRes, and that enums never appear in notifications — probe actively with send_settings_command.py --dimension-enum). '3.7K Anamorphic alt' records a second enum (0x10) observed for the same 3728x3104 dimensions; which of 0x0F/0x10 the camera prefers is unresolved. 2026-07-20 capture also showed frame_flags 0x0000 reported at 6K 3:2 vs 0x0010 at 4K DCI/6K 2.4:1 — the 0x10 bit looks like the spec's resolution-dependent 'windowed' flag, see commands.recording_format.provenance.",
     "6K 3:2": { "width": 6144, "height": 3456, "codecs": ["BRAW"], "dimension_enums": { "BRAW": 19 } },
     "6K 2.4:1": { "width": 6144, "height": 2560, "codecs": ["BRAW"], "dimension_enums": { "BRAW": 20 } },
     "5.7K 17:9": { "width": 5744, "height": 3024, "codecs": ["BRAW"], "dimension_enums": { "BRAW": 18 } },
@@ -109,7 +120,7 @@
     "HD": { "width": 1920, "height": 1080, "codecs": ["ProRes"], "dimension_enums": { "ProRes": 3 } }
   },
   "fps_modes": {
-    "_comment": "CANDIDATE — transcribed from CODEC_RES_FPS_6K_G2.docx; provenance rides with commands.video_format / commands.recording_format. fps_int is shared by both packet families; m_rate is video_format's flag (0 exact, 1 NTSC/drop); frame_flags is recording_format's int16 (0x0010 exact, 0x0013 NTSC/drop).",
+    "_comment": "CANDIDATE — transcribed from CODEC_RES_FPS_6K_G2.docx; provenance rides with commands.video_format / commands.recording_format. fps_int is shared by both packet families; m_rate is video_format's flag (0 exact, 1 NTSC/drop); frame_flags is recording_format's int16 as transcribed (0x0010 'exact', 0x0013 'NTSC/drop'). CAVEAT (2026-07-20 capture): the 0x10 bit appears to be the spec's resolution-dependent 'windowed' flag, not part of the fps encoding — the camera reported 0x0000 at 6K 3:2; these values hold as-written for windowed resolutions only. See commands.recording_format.provenance.",
     "23.98": { "fps_int": 24, "m_rate": 1, "frame_flags": 19 },
     "24": { "fps_int": 24, "m_rate": 0, "frame_flags": 16 },
     "25": { "fps_int": 25, "m_rate": 0, "frame_flags": 16 },

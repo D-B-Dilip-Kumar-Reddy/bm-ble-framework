@@ -21,7 +21,7 @@ Two ways to use it:
 
 2. Reverse-engineer another model's value tables with custom labels — one
    window per concrete setting so each capture is unambiguously attributable,
-   e.g. mapping every resolution's dimension_enum:
+   e.g. mapping every resolution's width/height and codec/variant ids:
 
        python tools/sniffers/sniffer_settings.py \\
            --model-key POCKET_6K_PRO --firmware v8.6 \\
@@ -31,6 +31,13 @@ Two ways to use it:
    (--from-capture) or is transcribed directly into the profile's
    commands/codecs/resolutions/fps_modes sections — see docs/settings.md's
    runbook.
+
+   Passive limits (confirmed on the 2026-07-20 G2 capture): the camera
+   reports settings state on 0x0A/0x00 (codec id + variant id) and
+   0x01/0x09 (fps/sensor-fps/width/height/flags) — it never reports on
+   0x01/0x00, so video_format dimension_enum values CANNOT be captured
+   passively. Probe those actively with
+   tools/control/send_settings_command.py --dimension-enum.
 
 This tool only listens — it never writes to OUTGOING_CONTROL. For a tool
 that actively sends the settings commands already in a profile and captures
