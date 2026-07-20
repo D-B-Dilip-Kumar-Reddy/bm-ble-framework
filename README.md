@@ -32,7 +32,7 @@ the documentation map below.
 ## Target operations
 
 - Record start / stop *(implemented — echo-verified on real hardware)*
-- Settings changes: codec, quality, resolution, FPS *(planned)*
+- Settings changes: codec, quality, resolution, FPS *(implemented — CANDIDATE values from an external reverse-engineering doc, pending re-verification on real hardware; see [`docs/settings.md`](docs/settings.md))*
 - Photo capture *(planned)*
 - Video playback / gallery browsing *(planned)*
 - Video and photo metadata capture *(planned)*
@@ -78,6 +78,7 @@ camera — use deliberately.
 | [`docs/payload_profiles.md`](docs/payload_profiles.md) | Per-camera profile JSONs, schema validation, provenance |
 | [`docs/session_and_verification.md`](docs/session_and_verification.md) | `CameraSession`, echo-based write verification |
 | [`docs/recording.md`](docs/recording.md) | The record start/stop command family |
+| [`docs/settings.md`](docs/settings.md) | Codec/quality/resolution/FPS families, the BRAW↔ProRes switch, and their verification runbook |
 | [`docs/winrt_ble_connection_hardening.md`](docs/winrt_ble_connection_hardening.md) | Connection management on Windows/WinRT: reconnect loop, liveness detection, known limitations |
 | [`docs/event_subscription_and_logging.md`](docs/event_subscription_and_logging.md) | Notification subscriptions and per-session file logging |
 | [`docs/sniffer_capture_engine.md`](docs/sniffer_capture_engine.md) | Reusable BLE capture engine behind the reverse-engineering tools |

@@ -161,15 +161,25 @@ per-session, per-hardware raw dumps consumed manually to populate
 
 ## Adding a new sniffer script
 
-A future `sniffer_settings.py` (or `sniffer_media.py`, `sniffer_metadata.py`)
-needs only:
+A new sniffer (`sniffer_media.py`, `sniffer_metadata.py`, ...) needs only:
 
-1. Its own `ACTION_LABELS` list (e.g. `["change_codec_braw", "change_codec_prores"]`).
+1. Its own `ACTION_LABELS` list (e.g. `["photo_capture"]`).
 2. The same connect → `run_capture_windows` → `print_window_summary` per
    window → `save_capture` sequence already used in `sniffer_recording.py`.
 
 No part of the interactive loop, decode function, or dedup logic needs to be
 copied or modified.
+
+`tools/sniffers/sniffer_settings.py` is the second consumer, built exactly
+this way — with one addition: its window labels are overridable via
+`--actions`, because settings reverse engineering needs *value-mapping*
+sessions (one window per concrete resolution/codec/FPS so each captured
+packet is unambiguously attributable to one setting — e.g.
+`--actions res_HD,res_UHD,res_4K_DCI` to map another model's
+dimension enums), not just the fixed per-feature labels the recording
+sniffer uses. Default labels cover the five settings changes
+`docs/settings.md`'s CANDIDATE families describe (codec to
+ProRes/back, quality variant, resolution, FPS).
 
 ---
 

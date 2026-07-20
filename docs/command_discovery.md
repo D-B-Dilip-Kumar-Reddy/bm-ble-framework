@@ -32,6 +32,15 @@ It is model- and command-agnostic: nothing recording-specific is hardcoded.
 results — the same tool sweeps recording on a Pocket 6K Pro today and, say,
 still-capture on an URSA later.
 
+**Known limitation — scalar payloads only.** The sweep generates
+single-value ASSIGN payloads (`encode_assign`), so it cannot probe the
+multi-element settings families (codec_quality's id pair, video_format's
+five int8 elements, recording_format's five int16s — `docs/settings.md`).
+For those, seed the coordinates and value tables from a
+`tools/sniffers/sniffer_settings.py` capture, transcribe them into the
+profile as CANDIDATE, and confirm by sending the fully-formed packet with
+`tools/control/send_settings_command.py` instead.
+
 ---
 
 ## Module split: pure logic vs interactive driver

@@ -1,0 +1,206 @@
+"""Unit tests for :mod:`bmd_ble.protocol.categories.settings`.
+
+The byte-exact expectations mirror the reverse-engineered POCKET_6K_G2 v7.9
+packet layouts recorded in docs/settings.md (external RE doc, CANDIDATE):
+
+- codec_quality:      FF 06 00 00 0A 00 01 00 <codec_id> <variant_id>
+- video_format:       FF 09 00 01 01 00 01 00 <fps> <m_rate> <dim_enum> 00 00
+- recording_format:   FF 0E 00 01 01 09 82 00 <5 x int16 LE>
+"""
+
+import pytest
+
+from bmd_ble.protocol.categories.settings import (
+    RecordingFormat,
+    VideoFormat,
+    decode_codec_quality,
+    decode_recording_format,
+    decode_video_format,
+    encode_codec_quality,
+    encode_recording_format,
+    encode_video_format,
+    is_settings_notification,
+)
+from bmd_ble.protocol.codec import CommandHeader, Operation, decode_packet
+from bmd_ble.protocol.types import DataType
+
+
+def _hex(data: bytes) -> str:
+    return " ".join(f"{b:02X}" for b in data)
+
+
+class TestEncodeCodecQuality:
+    def test_braw_5_1_matches_documented_packet(self):
+        # BRAW (codec_id 3), 5:1 (variant_id 3), reserved 0x00.
+        packet = encode_codec_quality(
+            category=0x0A,
+            parameter=0x00,
+            data_type=DataType.INT8,
+            codec_id=3,
+            variant_id=3,
+            reserved=0x00,
+        )
+        assert _hex(packet) == "FF 06 00 00 0A 00 01 00 03 03"
+
+    def test_prores_hq_matches_documented_packet(self):
+        packet = encode_codec_quality(
+            category=0x0A,
+            parameter=0x00,
+            data_type=DataType.INT8,
+            codec_id=2,
+            variant_id=0,
+            reserved=0x00,
+        )
+        assert _hex(packet) == "FF 06 00 00 0A 00 01 00 02 00"
+
+    def test_round_trips_through_decode_packet(self):
+        packet = encode_codec_quality(
+            category=0x0A,
+            parameter=0x00,
+            data_type=DataType.INT8,
+            codec_id=3,
+            variant_id=4,
+            reserved=0x00,
+        )
+        header, payload = decode_packet(packet)
+        assert header.category == 0x0A
+        assert header.parameter == 0x00
+        assert header.operation is Operation.ASSIGN
+        assert decode_codec_quality(payload, DataType.INT8) == (3, 4)
+
+
+class TestEncodeVideoFormat:
+    def test_25fps_4k_dci_braw_matches_documented_packet(self):
+        # 25 fps (0x19), exact rate, 4K DCI/BRAW dimension enum 0x08,
+        # reserved 0x01, two trailing zero elements.
+        packet = encode_video_format(
+            category=0x01,
+            parameter=0x00,
+            data_type=DataType.INT8,
+            fps_int=25,
+            m_rate=0,
+            dimension_enum=0x08,
+            reserved=0x01,
+        )
+        assert _hex(packet) == "FF 09 00 01 01 00 01 00 19 00 08 00 00"
+
+    def test_2398fps_hd_prores_matches_documented_packet(self):
+        # 23.98 -> fps byte 0x18 with NTSC/drop m_rate 0x01; HD/ProRes enum 0x03.
+        packet = encode_video_format(
+            category=0x01,
+            parameter=0x00,
+            data_type=DataType.INT8,
+            fps_int=24,
+            m_rate=1,
+            dimension_enum=0x03,
+            reserved=0x01,
+        )
+        assert _hex(packet) == "FF 09 00 01 01 00 01 00 18 01 03 00 00"
+
+    def test_round_trips_through_decode_packet(self):
+        packet = encode_video_format(
+            category=0x01,
+            parameter=0x00,
+            data_type=DataType.INT8,
+            fps_int=60,
+            m_rate=1,
+            dimension_enum=0x13,
+            reserved=0x01,
+        )
+        header, payload = decode_packet(packet)
+        assert header.category == 0x01
+        assert decode_video_format(payload, DataType.INT8) == VideoFormat(
+            fps_int=60, m_rate=1, dimension_enum=0x13
+        )
+
+
+class TestEncodeRecordingFormat:
+    def test_25fps_4k_dci_matches_documented_packet(self):
+        # 25 fps file + sensor, 4096x2160, exact-rate flags 0x0010; the
+        # data-type byte is the CANDIDATE 0x82 (INT16_ARRAY), reserved 0x01.
+        packet = encode_recording_format(
+            category=0x01,
+            parameter=0x09,
+            data_type=DataType.INT16_ARRAY,
+            fps_int=25,
+            sensor_fps_int=25,
+            width=4096,
+            height=2160,
+            frame_flags=0x0010,
+            reserved=0x01,
+        )
+        assert _hex(packet) == "FF 0E 00 01 01 09 82 00 19 00 19 00 00 10 70 08 10 00"
+
+    def test_ntsc_flags_encode_little_endian(self):
+        packet = encode_recording_format(
+            category=0x01,
+            parameter=0x09,
+            data_type=DataType.INT16_ARRAY,
+            fps_int=30,
+            sensor_fps_int=30,
+            width=6144,
+            height=3456,
+            frame_flags=0x0013,
+            reserved=0x01,
+        )
+        # 6144 = 0x1800 -> 00 18; 3456 = 0x0D80 -> 80 0D; 0x0013 -> 13 00.
+        assert _hex(packet) == "FF 0E 00 01 01 09 82 00 1E 00 1E 00 00 18 80 0D 13 00"
+
+    def test_round_trips_through_decode_packet(self):
+        packet = encode_recording_format(
+            category=0x01,
+            parameter=0x09,
+            data_type=DataType.INT16_ARRAY,
+            fps_int=50,
+            sensor_fps_int=50,
+            width=1920,
+            height=1080,
+            frame_flags=0x0010,
+            reserved=0x01,
+        )
+        header, payload = decode_packet(packet)
+        assert header.data_type is DataType.INT16_ARRAY
+        assert decode_recording_format(payload, DataType.INT16_ARRAY) == RecordingFormat(
+            fps_int=50, sensor_fps_int=50, width=1920, height=1080, frame_flags=0x0010
+        )
+
+
+class TestDecoders:
+    def test_decode_codec_quality_ignores_trailing_bytes(self):
+        assert decode_codec_quality(bytes([2, 1, 0xAA, 0xBB]), DataType.INT8) == (2, 1)
+
+    def test_decode_video_format_ignores_trailing_bytes(self):
+        payload = bytes([25, 0, 0x08, 0, 0, 0xEE])
+        assert decode_video_format(payload, DataType.INT8) == VideoFormat(
+            fps_int=25, m_rate=0, dimension_enum=0x08
+        )
+
+    def test_decode_codec_quality_rejects_short_payload(self):
+        with pytest.raises(ValueError, match="at least 2-byte payload"):
+            decode_codec_quality(bytes([2]), DataType.INT8)
+
+    def test_decode_video_format_rejects_short_payload(self):
+        with pytest.raises(ValueError, match="at least 5-byte payload"):
+            decode_video_format(bytes([25, 0, 8]), DataType.INT8)
+
+    def test_decode_recording_format_rejects_short_payload(self):
+        with pytest.raises(ValueError, match="at least 10-byte payload"):
+            decode_recording_format(bytes(8), DataType.INT16_ARRAY)
+
+    def test_decoders_reject_unsupported_data_type(self):
+        with pytest.raises(ValueError, match="Unsupported data type"):
+            decode_codec_quality(bytes(2), DataType.STRING)
+        with pytest.raises(ValueError, match="Unsupported data type"):
+            decode_recording_format(bytes(10), DataType.VOID)
+
+    def test_is_settings_notification_matches_on_category_and_parameter(self):
+        header = CommandHeader(
+            destination=0xFF,
+            command_id=0x00,
+            category=0x01,
+            parameter=0x09,
+            data_type=DataType.INT16_ARRAY,
+            operation=Operation.CAMERA_REPORT,
+        )
+        assert is_settings_notification(header, category=0x01, parameter=0x09)
+        assert not is_settings_notification(header, category=0x01, parameter=0x00)

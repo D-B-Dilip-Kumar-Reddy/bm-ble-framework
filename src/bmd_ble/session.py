@@ -5,12 +5,17 @@ CameraSession — the only surface user scripts touch (CLAUDE.md design
 principle 5). Composes CameraController (BLE transport) and NotificationRouter
 (echo buffering) to provide verified camera operations.
 
-STATUS: minimal. Only record start/stop are implemented, with echo-only
-verification (see docs/session_and_verification.md for why CAMERA_STATUS
-can't yet serve as the secondary cross-check CLAUDE.md's verification
-strategy calls for). Storage preconditions, GAP/device metadata, and
-reconnect wiring beyond what CameraController already provides are not
-implemented here yet.
+STATUS: record start/stop are implemented with echo-only verification (see
+docs/session_and_verification.md for why CAMERA_STATUS can't yet serve as
+the secondary cross-check CLAUDE.md's verification strategy calls for).
+Settings writes (set_codec_quality / set_video_format /
+set_recording_format) are implemented against the CANDIDATE
+POCKET_6K_G2 v7.9 packet families in docs/settings.md — their echo
+behaviour has not been captured yet, so a timeout there may mean "the
+camera doesn't echo this family" rather than "the write failed"; run the
+tools/ settings capture workflow before trusting them. Storage
+preconditions, GAP/device metadata, and reconnect wiring beyond what
+CameraController already provides are not implemented here yet.
 
 Also tracks the latest TIMECODE reading. A confirmed record_start() snapshots
 a canonical 00:00:00:00 (TIMECODE is known to reset at recording start on
@@ -49,13 +54,21 @@ from typing import Any
 
 from .camera_controller import BMDCameraController
 from .camera_profile import CameraProfile
-from .exceptions import BMDVerificationError
+from .exceptions import BMDUnsupportedError, BMDVerificationError
 from .notification_router import NotificationRouter
 from .protocol.categories.recording import (
     decode_recording_state,
     encode_record_start,
     encode_record_stop,
     is_recording_state_echo,
+)
+from .protocol.categories.settings import (
+    decode_codec_quality,
+    decode_recording_format,
+    decode_video_format,
+    encode_codec_quality,
+    encode_recording_format,
+    encode_video_format,
 )
 from .protocol.categories.storage import decode_write_margin, is_storage_notification
 from .protocol.codec import decode_packet
@@ -311,3 +324,219 @@ class CameraSession:
         else:
             self.last_stop_timecode = self._latest_timecode
             self.last_stop_reason = "requested"
+
+    # ── Settings writes (CANDIDATE packet families — see docs/settings.md) ──
+
+    async def set_codec_quality(self, codec: str, variant: str) -> None:
+        """Set the recording codec's quality variant, raising
+        BMDVerificationError unless confirmed by echo.
+
+        OBSERVED LIMITATION (see docs/settings.md): this packet changes the
+        quality variant within the *active* codec family but does NOT switch
+        BRAW <-> ProRes, even though it carries a codec id — use
+        `set_video_format` for a codec-family switch, then this for the
+        variant.
+        """
+        spec = self.profile.require_command("codec_quality")
+        codec_spec = self.profile.require_codec(codec, variant)
+        variant_id = codec_spec.variants[variant]
+        command = encode_codec_quality(
+            category=spec.category,
+            parameter=spec.parameter,
+            data_type=spec.data_type,
+            codec_id=codec_spec.id,
+            variant_id=variant_id,
+            reserved=spec.reserved,
+        )
+
+        self._router.arm(spec.category, spec.parameter)
+        await self._controller.write_outgoing_control(command)
+        result = await self._router.wait_for(
+            spec.category, spec.parameter, timeout=self.echo_timeout_s
+        )
+        if result is None:
+            raise BMDVerificationError(
+                f"set_codec_quality({codec} {variant}): no echo received within "
+                f"{self.echo_timeout_s}s (this family's echo behaviour is not yet "
+                f"captured — see docs/settings.md)"
+            )
+        _header, payload = result
+        reported = decode_codec_quality(payload, spec.data_type)
+        if reported != (codec_spec.id, variant_id):
+            raise BMDVerificationError(
+                f"set_codec_quality({codec} {variant}): echo reported "
+                f"(codec_id, variant_id)={reported}, expected {(codec_spec.id, variant_id)} — "
+                f"a codec-family mismatch here is the documented codec_quality limitation; "
+                f"switch families with set_video_format first"
+            )
+
+    async def set_video_format(self, resolution: str, codec: str, fps: str) -> None:
+        """Set resolution, codec family, and frame rate via the FORMAT
+        packet, raising BMDVerificationError unless confirmed by echo.
+
+        This is the packet whose dimension_enum locks resolution AND codec
+        family together — the only known way to switch BRAW <-> ProRes (see
+        docs/settings.md). Raises BMDUnsupportedError when the profile says
+        the camera doesn't offer `codec` at `resolution`, and ValueError
+        when the combination is supported but its dimension_enum hasn't
+        been captured yet.
+
+        The echo channel for this family is unconfirmed: the camera may
+        report on the command's own (category, parameter) or on the
+        recording_format coordinates ("mode-notify"), so both are armed and
+        the first matching report is used for verification.
+        """
+        spec = self.profile.require_command("video_format")
+        resolution_spec = self.profile.require_resolution(resolution)
+        self.profile.require_codec(codec)
+        fps_spec = self.profile.require_fps_mode(fps)
+
+        if resolution_spec.codecs and codec not in resolution_spec.codecs:
+            raise BMDUnsupportedError(
+                f"{self.profile.model_key} {self.profile.firmware} does not offer codec "
+                f"'{codec}' at '{resolution}' — supported there: "
+                f"{', '.join(resolution_spec.codecs)}"
+            )
+        dimension_enum = resolution_spec.dimension_enums.get(codec)
+        if dimension_enum is None:
+            raise ValueError(
+                f"dimension_enum for '{resolution}' under '{codec}' has not been captured "
+                f"on {self.profile.model_key} {self.profile.firmware} yet — reverse-engineer "
+                f"it with tools/sniffers/sniffer_settings.py (see docs/settings.md) before "
+                f"using this combination."
+            )
+
+        command = encode_video_format(
+            category=spec.category,
+            parameter=spec.parameter,
+            data_type=spec.data_type,
+            fps_int=fps_spec.fps_int,
+            m_rate=fps_spec.m_rate,
+            dimension_enum=dimension_enum,
+            reserved=spec.reserved,
+        )
+
+        keys = [(spec.category, spec.parameter)]
+        notify_spec = self.profile.command("recording_format")
+        if notify_spec is not None:
+            keys.append((notify_spec.category, notify_spec.parameter))
+        for category, parameter in keys:
+            self._router.arm(category, parameter)
+
+        await self._controller.write_outgoing_control(command)
+        hit = await self._wait_first_echo(keys, timeout=self.echo_timeout_s)
+        if hit is None:
+            raise BMDVerificationError(
+                f"set_video_format({resolution} {codec} {fps}): no echo received on any of "
+                f"{keys} within {self.echo_timeout_s}s (this family's echo behaviour is not "
+                f"yet captured — see docs/settings.md)"
+            )
+
+        key, (_header, payload) = hit
+        if key == (spec.category, spec.parameter):
+            reported = decode_video_format(payload, spec.data_type)
+            expected = (fps_spec.fps_int, fps_spec.m_rate, dimension_enum)
+            observed = (reported.fps_int, reported.m_rate, reported.dimension_enum)
+            if observed != expected:
+                raise BMDVerificationError(
+                    f"set_video_format({resolution} {codec} {fps}): echo reported "
+                    f"(fps_int, m_rate, dimension_enum)={observed}, expected {expected}"
+                )
+        else:
+            reported_format = decode_recording_format(payload, notify_spec.data_type)
+            expected = (fps_spec.fps_int, resolution_spec.width, resolution_spec.height)
+            observed = (
+                reported_format.fps_int,
+                reported_format.width,
+                reported_format.height,
+            )
+            if observed != expected:
+                raise BMDVerificationError(
+                    f"set_video_format({resolution} {codec} {fps}): mode-notify reported "
+                    f"(fps_int, width, height)={observed}, expected {expected}"
+                )
+
+    async def set_recording_format(
+        self, resolution: str, fps: str, *, sensor_fps: str | None = None
+    ) -> None:
+        """Set resolution and frame rate via the recording-format packet
+        (five int16 elements), raising BMDVerificationError unless confirmed
+        by echo.
+
+        `sensor_fps` defaults to `fps` (off-speed recording untested). This
+        packet does not carry a codec — the camera applies the dimensions
+        under its active codec family; use `set_video_format` to switch
+        families. Verification compares the echoed fps_int/width/height;
+        sensor fps and frame_flags are not compared, since the camera's own
+        report of those elements hasn't been characterised yet (see
+        docs/settings.md).
+        """
+        spec = self.profile.require_command("recording_format")
+        resolution_spec = self.profile.require_resolution(resolution)
+        fps_spec = self.profile.require_fps_mode(fps)
+        sensor_spec = self.profile.require_fps_mode(sensor_fps) if sensor_fps else fps_spec
+
+        command = encode_recording_format(
+            category=spec.category,
+            parameter=spec.parameter,
+            data_type=spec.data_type,
+            fps_int=fps_spec.fps_int,
+            sensor_fps_int=sensor_spec.fps_int,
+            width=resolution_spec.width,
+            height=resolution_spec.height,
+            frame_flags=fps_spec.frame_flags,
+            reserved=spec.reserved,
+        )
+
+        self._router.arm(spec.category, spec.parameter)
+        await self._controller.write_outgoing_control(command)
+        result = await self._router.wait_for(
+            spec.category, spec.parameter, timeout=self.echo_timeout_s
+        )
+        if result is None:
+            raise BMDVerificationError(
+                f"set_recording_format({resolution} {fps}): no echo received within "
+                f"{self.echo_timeout_s}s (this family's echo behaviour is not yet "
+                f"captured — see docs/settings.md)"
+            )
+        _header, payload = result
+        reported = decode_recording_format(payload, spec.data_type)
+        expected = (fps_spec.fps_int, resolution_spec.width, resolution_spec.height)
+        observed = (reported.fps_int, reported.width, reported.height)
+        if observed != expected:
+            raise BMDVerificationError(
+                f"set_recording_format({resolution} {fps}): echo reported "
+                f"(fps_int, width, height)={observed}, expected {expected}"
+            )
+
+    async def _wait_first_echo(
+        self, keys: list[tuple[int, int]], *, timeout: float
+    ) -> tuple[tuple[int, int], tuple[Any, bytes]] | None:
+        """Await the first fresh router delivery on any of `keys`.
+
+        Returns ((category, parameter), (header, payload)) for the first key
+        that yields a fresh echo, or None when every key times out. Every
+        key must already be armed. Used where a command's echo channel is
+        not yet confirmed and more than one (category, parameter) may carry
+        the camera's report — see set_video_format.
+        """
+        tasks = {
+            asyncio.create_task(self._router.wait_for(category, parameter, timeout=timeout)): (
+                category,
+                parameter,
+            )
+            for category, parameter in keys
+        }
+        try:
+            pending: set[asyncio.Task] = set(tasks)
+            while pending:
+                done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+                for task in done:
+                    result = task.result()
+                    if result is not None:
+                        return tasks[task], result
+            return None
+        finally:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)

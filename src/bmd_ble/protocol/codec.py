@@ -29,6 +29,7 @@ protocol/categories/<category>.py once confirmed by a sniffer capture.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import IntEnum
 
@@ -122,6 +123,47 @@ def encode_assign(
     )
     width = DATA_TYPE_BYTE_WIDTHS[data_type]
     payload = value.to_bytes(width, byteorder="little", signed=value < 0)
+    return encode_packet(header, payload)
+
+
+def encode_assign_elements(
+    *,
+    category: int,
+    parameter: int,
+    data_type: DataType,
+    values: Sequence[int],
+    reserved: int = RESERVED_BYTE,
+    command_id: int = 0x00,
+) -> bytes:
+    """Encode an ASSIGN command whose payload is several same-typed elements.
+
+    The multi-element sibling of `encode_assign`, for parameters whose
+    payload is a fixed sequence of values (e.g. a codec/variant id pair, or
+    the five-int16 recording-format struct). Each element is packed at the
+    data type's per-element width, little-endian, in the order given.
+
+    Semantics-free like the rest of this module: element meaning, count, and
+    every value come from a `CameraProfile` command block plus its lookup
+    tables — never hardcoded here.
+    """
+    if data_type not in DATA_TYPE_STRUCT_FORMATS:
+        raise ValueError(f"Unsupported data type for assign payload: {data_type!r}")
+    if not values:
+        raise ValueError("encode_assign_elements needs at least one element value")
+
+    header = CommandHeader(
+        destination=DESTINATION_CAMERA,
+        command_id=command_id,
+        category=category,
+        parameter=parameter,
+        data_type=data_type,
+        operation=Operation.ASSIGN,
+        reserved=reserved,
+    )
+    width = DATA_TYPE_BYTE_WIDTHS[data_type]
+    payload = b"".join(
+        value.to_bytes(width, byteorder="little", signed=value < 0) for value in values
+    )
     return encode_packet(header, payload)
 
 

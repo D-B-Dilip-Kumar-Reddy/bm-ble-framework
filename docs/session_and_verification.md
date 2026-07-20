@@ -131,6 +131,35 @@ attempting to build or send a command — used by
 on an unpopulated profile. See `docs/payload_profiles.md` for the profile
 structure.
 
+### Settings writes (`set_codec_quality` / `set_video_format` / `set_recording_format`)
+
+The three settings methods follow the same profile-driven
+arm-write-await-echo pattern as recording, against the CANDIDATE packet
+families in `docs/settings.md` (which also tabulates exactly which decoded
+payload elements each method compares, and which it deliberately doesn't).
+Two deviations from the recording flow:
+
+- **`set_video_format` arms two echo channels.** The FORMAT packet's echo
+  behaviour is uncaptured, and a mode change plausibly reports as the
+  recording-format struct on `0x01/0x09` ("mode-notify") rather than on the
+  command's own `0x01/0x00`. A `_wait_first_echo` helper runs one
+  `NotificationRouter.wait_for` task per armed key concurrently and takes
+  the first fresh delivery from either, cancelling the rest; each channel's
+  payload is decoded per its own family. Both keys are armed *before* the
+  write, per the router's usual staleness contract.
+- **Precondition failures raise before any write.** `BMDUnsupportedError`
+  (its first use in the repo — CLAUDE.md design principle 7) when the
+  profile says the camera doesn't offer the requested codec at that
+  resolution; `ValueError` pointing at the capture workflow when the
+  combination is supported but its `dimension_enum` hasn't been
+  reverse-engineered yet.
+
+Because the echo behaviour for all three families is unconfirmed, a
+`BMDVerificationError: no echo received` from these methods can mean "the
+camera doesn't echo this family" rather than "the write failed" — the
+error text says so, and `docs/settings.md`'s runbook is the path to
+resolving it.
+
 ### Timecode tracking and clip duration
 
 `__aenter__` also subscribes `TIMECODE`, storing the latest decoded reading

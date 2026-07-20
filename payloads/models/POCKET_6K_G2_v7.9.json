@@ -36,7 +36,88 @@
         "verified_on": "2026-06-19",
         "notes": "3/3 start/stop cycles echo-verified on real hardware via examples/record_start_stop.py. echo_operation is the operation byte the camera itself uses when reporting this category/parameter (distinct from ASSIGN used by the controller's command). Echo payload trailing bytes 00 40 00 01 03 not yet understood — hypothesis: SDI Cat 10 Param 1 transport-mode struct, see docs/protocol.md. 2026-07-09: data_type relabelled BOOL -> INT8 when DataType was remapped to the official spec coding; the captured wire byte (0x01) is unchanged."
       }
+    },
+    "codec_quality": {
+      "category": 10,
+      "parameter": 0,
+      "data_type": "INT8",
+      "reserved": 0,
+      "provenance": {
+        "status": "CANDIDATE",
+        "method": "external reverse-engineering document (CODEC_RES_FPS_6K_G2.docx, 2026-07-20) — byte layout and codec/variant id tables transcribed; not yet re-verified by this repo's capture tooling",
+        "notes": "Payload is two int8 elements [codec_id, variant_id] from the top-level `codecs` table (10-byte packet, e.g. FF 06 00 00 0A 00 01 00 03 03 for BRAW 5:1). Matches the official spec's 10.0 Codec parameter coordinates, but the observed data-type byte is 0x01 (INT8), not an array marker. Reserved byte 0x00 — differs from recording and video_format (0x01). OBSERVED LIMITATION: changes the quality variant within the active codec family but does NOT switch BRAW <-> ProRes even though it carries a codec id — codec-family switches require the video_format packet's dimension_enum. Echo behaviour not yet captured — run tools/control/send_settings_command.py to capture it before trusting verification."
+      }
+    },
+    "video_format": {
+      "category": 1,
+      "parameter": 0,
+      "data_type": "INT8",
+      "reserved": 1,
+      "provenance": {
+        "status": "CANDIDATE",
+        "method": "external reverse-engineering document (CODEC_RES_FPS_6K_G2.docx, 2026-07-20) — byte layout, fps byte and dimension_enum tables transcribed; not yet re-verified by this repo's capture tooling",
+        "notes": "The FORMAT packet: five int8 elements [fps_int, m_rate, dimension_enum, 0, 0] (13-byte packet, e.g. FF 09 00 01 01 00 01 00 19 00 08 00 00 for 25 fps 4K DCI/BRAW). dimension_enum encodes resolution AND codec family together (see `resolutions.*.dimension_enums`) — this is the packet that actually switches BRAW <-> ProRes; codec_quality alone does not. Parameter is 0x00 (spec 1.0 Video Mode int8 x5), NOT 0x09. The two trailing zero elements are unexplained — hypothesis: the spec's interlaced and colorspace video-mode elements. Echo behaviour not yet captured; a report may arrive on the recording_format coordinates (1/9) instead."
+      }
+    },
+    "recording_format": {
+      "category": 1,
+      "parameter": 9,
+      "data_type": "INT16_ARRAY",
+      "reserved": 1,
+      "provenance": {
+        "status": "CANDIDATE",
+        "method": "external reverse-engineering document (CODEC_RES_FPS_6K_G2.docx, 2026-07-20) — byte layout and fps/resolution encodings transcribed; not yet re-verified by this repo's capture tooling",
+        "notes": "Five little-endian int16 elements [fps_int, sensor_fps_int, width, height, frame_flags] (18-byte packet, e.g. FF 0E 00 01 01 09 82 00 19 00 19 00 00 10 70 08 10 00 for 25 fps 4096x2160 exact-rate). Coordinates and element order match the official spec's 1.9 Recording Format (int16 x5), but the reported data-type byte is 0x82 (INT16_ARRAY) — not in the official coding, carried as a CANDIDATE DataType. frame_flags observed values: 0x0010 exact rate, 0x0013 NTSC/drop (see `fps_modes`). sensor_fps_int defaults to fps_int (off-speed recording not yet explored). Echo behaviour not yet captured."
+      }
     }
+  },
+  "codecs": {
+    "_comment": "CANDIDATE — transcribed from CODEC_RES_FPS_6K_G2.docx; provenance rides with commands.codec_quality. Variant ids are per-codec. BRAW variant id 6 is unobserved (gap between 12:1 at 5 and Q1 at 7) — do not invent it.",
+    "BRAW": {
+      "id": 3,
+      "variants": {
+        "Q0": 0,
+        "Q5": 1,
+        "3:1": 2,
+        "5:1": 3,
+        "8:1": 4,
+        "12:1": 5,
+        "Q1": 7,
+        "Q3": 8
+      }
+    },
+    "ProRes": {
+      "id": 2,
+      "variants": {
+        "HQ": 0,
+        "422": 1,
+        "LT": 2,
+        "Proxy": 3
+      }
+    }
+  },
+  "resolutions": {
+    "_comment": "CANDIDATE — transcribed from CODEC_RES_FPS_6K_G2.docx; provenance rides with commands.video_format / commands.recording_format. dimension_enums are keyed per codec because the enum locks resolution and codec family together. 4K DCI is the only resolution offered under both codecs, but only its BRAW enum has been captured — the ProRes one is still unknown, so it has no ProRes entry here. '3.7K Anamorphic alt' records a second enum (0x10) observed for the same 3728x3104 dimensions; which of 0x0F/0x10 the camera prefers is unresolved.",
+    "6K 3:2": { "width": 6144, "height": 3456, "codecs": ["BRAW"], "dimension_enums": { "BRAW": 19 } },
+    "6K 2.4:1": { "width": 6144, "height": 2560, "codecs": ["BRAW"], "dimension_enums": { "BRAW": 20 } },
+    "5.7K 17:9": { "width": 5744, "height": 3024, "codecs": ["BRAW"], "dimension_enums": { "BRAW": 18 } },
+    "4K DCI": { "width": 4096, "height": 2160, "codecs": ["BRAW", "ProRes"], "dimension_enums": { "BRAW": 8 } },
+    "3.7K Anamorphic": { "width": 3728, "height": 3104, "codecs": ["BRAW"], "dimension_enums": { "BRAW": 15 } },
+    "3.7K Anamorphic alt": { "width": 3728, "height": 3104, "codecs": ["BRAW"], "dimension_enums": { "BRAW": 16 } },
+    "2.8K 17:9": { "width": 2868, "height": 1512, "codecs": ["BRAW"], "dimension_enums": { "BRAW": 13 } },
+    "UHD": { "width": 3840, "height": 2160, "codecs": ["ProRes"], "dimension_enums": { "ProRes": 6 } },
+    "HD": { "width": 1920, "height": 1080, "codecs": ["ProRes"], "dimension_enums": { "ProRes": 3 } }
+  },
+  "fps_modes": {
+    "_comment": "CANDIDATE — transcribed from CODEC_RES_FPS_6K_G2.docx; provenance rides with commands.video_format / commands.recording_format. fps_int is shared by both packet families; m_rate is video_format's flag (0 exact, 1 NTSC/drop); frame_flags is recording_format's int16 (0x0010 exact, 0x0013 NTSC/drop).",
+    "23.98": { "fps_int": 24, "m_rate": 1, "frame_flags": 19 },
+    "24": { "fps_int": 24, "m_rate": 0, "frame_flags": 16 },
+    "25": { "fps_int": 25, "m_rate": 0, "frame_flags": 16 },
+    "29.97": { "fps_int": 30, "m_rate": 1, "frame_flags": 19 },
+    "30": { "fps_int": 30, "m_rate": 0, "frame_flags": 16 },
+    "50": { "fps_int": 50, "m_rate": 0, "frame_flags": 16 },
+    "59.94": { "fps_int": 60, "m_rate": 1, "frame_flags": 19 },
+    "60": { "fps_int": 60, "m_rate": 0, "frame_flags": 16 }
   },
   "storage": {
     "write_margin_warning": {

@@ -98,11 +98,13 @@ future subsystems. Everything else is implemented and on disk today.
 ```
 src/bmd_ble/
   __init__.py               # Public API surface — exports CameraSession, CameraProfile,
-                            # get_profile, KNOWN_PROFILES, BMDVerificationError
+                            # get_profile, KNOWN_PROFILES, BMDVerificationError,
+                            # BMDUnsupportedError
   constants.py              # BLE UUIDs and timing constants (fixed by spec)
   exceptions.py             # BMDConnectionError, BMDTimeoutError, BMDCommandError,
                             # BMDVerificationError, BMDUnsupportedError, BMDStorageError
-                            # (only BMDVerificationError is raised today; the rest are
+                            # (BMDVerificationError and BMDUnsupportedError are raised
+                            # today — the latter by the settings writes; the rest are
                             # reserved for the planned subsystems that will use them)
   scanner.py                # BLE discovery by advertisement name
   camera_profile.py         # Load, validate, and cache model/firmware profiles
@@ -123,7 +125,9 @@ src/bmd_ble/
       recording.py          # Record start / stop
       storage.py            # Passive decode of storage-monitoring
                             # notifications (CANDIDATE write-margin signal)
-      settings.py           # (planned) Codec, quality, resolution, FPS
+      settings.py           # Codec/quality, video format (codec-family switch),
+                            # recording format (resolution + FPS) — CANDIDATE
+                            # values from external RE doc, see docs/settings.md
       media.py              # (planned) Photo capture, playback controls
       metadata.py           # (planned) Video / photo metadata reads
 
@@ -151,7 +155,8 @@ examples/
   connect_to_camera.py      # Connect-only smoke test (connect, hold, disconnect)
   monitor_incoming.py       # Stream raw INCOMING_CONTROL notifications
   record_start_stop.py      # Echo-verified record start/stop via CameraSession
-  change_codec.py           # (planned)
+  change_codec.py           # BRAW <-> ProRes round trip via set_video_format +
+                            # set_codec_quality (CANDIDATE families, docs/settings.md)
   capture_photo.py          # (planned)
   playback.py               # (planned)
 
@@ -191,6 +196,7 @@ added, a new `docs/<feature>.md` must be created alongside the code change.
 | `docs/payload_profiles.md` | Profile JSON structure (`commands` map, `values`, `provenance`), `payloads/schema.json` load-time validation, `CommandSpec` API |
 | `docs/command_discovery.md` | Guided command discovery (`tools/control/discover_command.py`) — candidate sweep, operator confirmation, emitted profile blocks |
 | `docs/timecode.md` | `TIMECODE` wire format (wrapped BMD packet, confirmed by real capture), BCD decode, clip-duration math (`timecode.py`), and why the `frames` field isn't used in duration yet |
+| `docs/settings.md` | Settings families (codec/quality, video format, recording format) — CANDIDATE byte layouts and value tables from an external RE doc, why `codec_quality` can't switch BRAW↔ProRes but `video_format` can, the `0x82` data type, and the verification runbook (`sniffer_settings.py`, `send_settings_command.py`, `change_codec.py`) |
 
 ---
 
@@ -229,7 +235,10 @@ Populate this table as categories are confirmed from sniffer sessions. Each cate
 
 | Category | Description | File |
 |---|---|---|
-| `0x0A` | Recording (record start/stop) | `protocol/categories/recording.py` |
+| `0x0A` (param `0x01`) | Recording (record start/stop) | `protocol/categories/recording.py` |
+| `0x0A` (param `0x00`) | Codec + quality variant — CANDIDATE; does NOT switch BRAW↔ProRes (see `docs/settings.md`) | `protocol/categories/settings.py` |
+| `0x01` (param `0x00`) | Video format (FORMAT packet) — CANDIDATE; dimension_enum locks resolution + codec family, the actual BRAW↔ProRes switch | `protocol/categories/settings.py` |
+| `0x01` (param `0x09`) | Recording format (fps/sensor-fps/width/height/flags, int16 ×5) — CANDIDATE; data-type byte `0x82` | `protocol/categories/settings.py` |
 | `0x09` (param `0x01`) | Storage write-margin signal — CANDIDATE, not confirmed causation, see `docs/recording.md` (category `0x09` is the same ambient-telemetry category `TIMECODE` param `0x04` already lives in) | `protocol/categories/storage.py` |
 
 ### Data types (`protocol/types.py`)
@@ -246,11 +255,12 @@ Information* document:
 | 4 | int64 | |
 | 5 | string | UTF-8 |
 | 128 | fixed16 | signed 5.11 fixed point: `encoded = round(real × 2048)` |
+| 130 (`0x82`) | int16 array | NOT official coding — CANDIDATE wire byte reported on the `POCKET_6K_G2 v7.9` recording-format packet (five LE int16 elements), see `docs/settings.md` §3 |
 
 Provenance: the only data-type byte sniffer-verified over BLE so far is `0x01`
-(int8) on the `POCKET_6K_G2 v7.9` recording command and echo. All other codes
-come from the official spec and have not yet been observed on real hardware —
-capture one before trusting a multi-byte decode. Full discussion:
+(int8) on the `POCKET_6K_G2 v7.9` recording command and echo. All other
+official codes come from the spec and have not yet been observed on real
+hardware — capture one before trusting a multi-byte decode. Full discussion:
 `docs/protocol.md` §3.
 
 ---
@@ -292,14 +302,15 @@ capture one before trusting a multi-byte decode. Full discussion:
     }
   },
   "capabilities":   { "supports_raw": true, "supports_photo": true, "supports_playback": true },
-  "codec_ids":      { "BRAW": 3, "H265": 2 },
-  "quality_ids":    { "5:1": 3, "8:1": 2 },
-  "resolution_ids": { "6144x3456": 0 },
-  "fps_encodings":  { "23.98": [24, 2048], "25": [25, 0] }
+  "codecs":         { "BRAW": { "id": 3, "variants": { "Q0": 0, "5:1": 3 } } },
+  "resolutions":    { "4K DCI": { "width": 4096, "height": 2160,
+                                  "codecs": ["BRAW", "ProRes"],
+                                  "dimension_enums": { "BRAW": 8 } } },
+  "fps_modes":      { "23.98": { "fps_int": 24, "m_rate": 1, "frame_flags": 19 } }
 }
 ```
 
-Every sniffer-confirmed command family gets one block under `commands`, all the same shape: protocol coordinates, a named `values` map, the observed `echo_operation`, and structured `provenance` (per-command verification state — `_meta.status` still describes the profile as a whole). `capabilities` and the lookup-table sections are reserved in the schema but only populated once sniffed on that camera. Code reads commands via `profile.require_command(name, value_names)` → `CommandSpec`.
+Every sniffer-confirmed command family gets one block under `commands`, all the same shape: protocol coordinates, a named `values` map, the observed `echo_operation`, and structured `provenance` (per-command verification state — `_meta.status` still describes the profile as a whole). `values` is optional for multi-element families (codec_quality, video_format, recording_format) whose payloads are composed from the `codecs`/`resolutions`/`fps_modes` lookup tables instead — those tables' provenance rides with the command blocks that consume them (see `docs/settings.md` and `docs/payload_profiles.md`). `capabilities` is reserved in the schema but only populated once sniffed on that camera. Code reads commands via `profile.require_command(name, value_names)` → `CommandSpec`, and the tables via `require_codec` / `require_resolution` / `require_fps_mode`.
 
 All protocol values come from sniffer captures. `status` is set to `"VERIFIED"` only after testing on real hardware.
 

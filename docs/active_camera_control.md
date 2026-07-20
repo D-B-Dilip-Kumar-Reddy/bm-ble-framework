@@ -14,10 +14,12 @@ then listens for a fixed duration).
 
 Use these deliberately. There is no confirmation prompt before the write —
 running a `tools/control/*.py` script against a real camera performs the
-action. The one deliberate exception is
-`tools/control/discover_command.py`, which sends *unverified candidate*
-commands and therefore gates the sweep behind a typed `yes` plus
-per-candidate operator confirmation — see `docs/command_discovery.md`.
+action. Two deliberate exceptions gate their writes behind a typed `yes`,
+because what they send is not a VERIFIED profile command:
+`tools/control/discover_command.py` (sends *unverified candidate* commands,
+plus per-candidate operator confirmation — see `docs/command_discovery.md`)
+and `tools/control/send_settings_command.py` (sends CANDIDATE-provenance
+settings commands — see below and `docs/settings.md`).
 
 ---
 
@@ -88,6 +90,29 @@ Requires the profile's `commands.recording` block to be fully populated
 (`profile.require_command("recording", ("start", "stop"))`) — raises a clear
 `ValueError` naming the missing block or value names otherwise, rather than
 sending a malformed command.
+
+---
+
+## `tools/control/send_settings_command.py`
+
+Sends one of the three CANDIDATE settings families (`codec_quality`,
+`video_format`, `recording_format` — byte layouts and value tables in
+`docs/settings.md`) built entirely from the profile's command blocks plus
+its `codecs`/`resolutions`/`fps_modes` lookup tables, then captures the
+response via `run_send_and_capture`.
+
+Unlike `send_record_command.py` — and like `discover_command.py` — it
+**gates the write behind a typed `yes`** after printing the exact TX bytes:
+these families are CANDIDATE (transcribed from an external
+reverse-engineering document, never confirmed by this repo's tooling on any
+camera), so sending one carries discovery-grade risk, not replay-grade
+risk. It also requires explicit `--model-key`/`--firmware` with no
+defaults, for the same reason. The operator watching the camera body is
+ground truth for what changed; the saved capture is the evidence that
+promotes (or falsifies) the profile block's provenance — see
+`docs/settings.md`'s verification runbook, including the two-run experiment
+that tests the "codec_quality doesn't switch codec families, video_format
+does" claim.
 
 ---
 

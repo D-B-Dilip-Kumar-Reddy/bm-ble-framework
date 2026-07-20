@@ -1,6 +1,6 @@
 # Payload Profiles — structure, schema, and provenance
 
-**Status:** implemented — schema-validated profiles + `CommandSpec` are live; capability/lookup sections are reserved, not yet populated. `storage` has its first entry (a CANDIDATE signal, `StorageSignalSpec`) but is otherwise still reserved.
+**Status:** implemented — schema-validated profiles + `CommandSpec` are live. `storage` has its first entry (a CANDIDATE signal, `StorageSignalSpec`); the settings lookup tables (`codecs`/`resolutions`/`fps_modes`) have their first population on `POCKET_6K_G2 v7.9` (CANDIDATE — see `docs/settings.md`); `capabilities` remains reserved and unpopulated.
 
 ## Overview
 
@@ -41,12 +41,38 @@ each payload integer, the observed `echo_operation`, and structured
 tool emits blocks directly; JSON Schema can validate every block with one
 `$defs` entry.
 
-Lookup tables (`codec_ids`, `quality_ids`, `resolution_ids`,
-`fps_encodings`) and `capabilities` are *not* commands — they are data
-tables consumed by future settings code — so they stay separate top-level
-sections. They remain defined in the schema but deliberately absent from
-the profiles until sniffed on each camera (principle 6: never invent values
-ahead of captures).
+Lookup tables and `capabilities` are *not* commands — they are data tables
+consumed by settings code — so they stay separate top-level sections,
+absent from a profile until sniffed on that camera (principle 6: never
+invent values ahead of captures).
+
+The lookup tables were originally reserved as four flat maps (`codec_ids`,
+`quality_ids`, `resolution_ids`, `fps_encodings`). When the first real
+settings values arrived (the `POCKET_6K_G2 v7.9` external-RE transcription,
+`docs/settings.md`), flat maps turned out to misrepresent the data in three
+ways: quality-variant ids are **per-codec** (BRAW's 0 = Q0, ProRes's 0 =
+HQ — one flat `quality_ids` map cannot hold both), the video_format
+dimension enum is keyed by **(resolution, codec)** — not resolution alone —
+because it encodes the codec family too, and an FPS mode needs **three**
+values (`fps_int`, `m_rate`, `frame_flags`), not a two-int tuple. Since
+nothing had ever populated the old sections, they were replaced (not
+deprecated) with three structured sections:
+
+- **`codecs`** — codec name → `{id, variants: {name: id}}` (`CodecSpec`)
+- **`resolutions`** — label → `{width, height, codecs: [...],
+  dimension_enums: {codec: enum}}` (`ResolutionSpec`); a codec listed in
+  `codecs` but missing from `dimension_enums` means "supported, enum not
+  captured yet"
+- **`fps_modes`** — label → `{fps_int, m_rate, frame_flags}` (`FpsModeSpec`)
+
+The tables carry no `provenance` block of their own: their provenance rides
+with the command blocks that consume them (`codec_quality`,
+`video_format`, `recording_format`), whose notes name the source captures
+or documents. Relatedly, a command block's `values` map is now **optional**:
+those three multi-element families compose their payloads from the lookup
+tables, so a named-scalar `values` map has nothing to say for them
+(`CommandSpec.values` defaults to `{}`; `require_command` with
+`value_names` still fails loudly on a family that *should* have values).
 
 `storage` is no longer purely reserved: the first CANDIDATE storage signal
 (a write-margin warning correlated with camera-initiated recording stops on
@@ -107,9 +133,10 @@ mirroring `$defs/command`.
   `{"play": 1, "pause": 0, "next": 2}`.
 - **`data_type` is a symbolic string** matching `protocol/types.py`
   `DataType` names (official spec coding — see `docs/protocol.md` §3) —
-  human-readable in captures and diffs, and validated by the schema's enum.
-  `"BOOL"` is accepted as an alias of wire code 0 (`VOID`, the spec's
-  "void/boolean").
+  human-readable in captures and diffs, and validated by the schema's
+  shared `$defs/dataType` enum. `"BOOL"` is accepted as an alias of wire
+  code 0 (`VOID`, the spec's "void/boolean"); `"INT16_ARRAY"` is the one
+  non-official name (CANDIDATE wire byte `0x82`, `docs/settings.md` §3).
 - **`echo_operation` is a raw integer** (0–255), not a symbolic `Operation`
   name: it is copied verbatim from captures, and a future camera may report
   an operation byte not yet in the enum — an int survives that.
@@ -194,6 +221,15 @@ Loading an `UNVERIFIED` profile logs a prominent warning (design principle
 ```python
 profile = CameraProfile.for_model("POCKET_6K_G2", "v7.9")   # validated
 spec = profile.require_command("recording", ("start", "stop"))  # CommandSpec
+
+codec = profile.require_codec("BRAW", "5:1")     # CodecSpec
+codec.id                          # 3
+codec.variants["5:1"]             # 3
+resolution = profile.require_resolution("4K DCI")  # ResolutionSpec
+resolution.width                  # 4096
+resolution.dimension_enums        # {"BRAW": 8} — ProRes enum not captured yet
+fps = profile.require_fps_mode("23.98")            # FpsModeSpec
+(fps.fps_int, fps.m_rate, fps.frame_flags)         # (24, 1, 19)
 spec.category            # 10
 spec.data_type           # DataType.INT8
 spec.values["start"]     # 2
@@ -224,8 +260,17 @@ storage_spec.provenance.status   # "CANDIDATE"
   `command`/`require_command` exactly, pointing at `storage.<name>` in the
   profile JSON path.
 
+- `require_codec(name, variant=None)` / `require_resolution(name)` /
+  `require_fps_mode(name)` mirror `require_command`'s fail-loud contract
+  for the settings lookup tables, additionally listing the names the
+  profile *does* know — an operator typo ("5.7K" vs "5.7K 17:9") surfaces
+  the valid labels immediately.
+
 Consumers: `session.py` (`record_start`/`record_stop`,
-`_observe_write_margin`), `tools/control/send_record_command.py`, and
+`_observe_write_margin`, and the settings writes `set_codec_quality`/
+`set_video_format`/`set_recording_format`),
+`tools/control/send_record_command.py`,
+`tools/control/send_settings_command.py`, and
 `tools/control/discover_command.py` (emits new `commands` blocks in exactly
 this shape — see `docs/command_discovery.md`).
 

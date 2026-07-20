@@ -14,6 +14,7 @@ from bmd_ble.protocol.codec import (
     Operation,
     decode_packet,
     encode_assign,
+    encode_assign_elements,
     encode_packet,
 )
 from bmd_ble.protocol.types import DataType
@@ -238,3 +239,56 @@ class TestEncodeAssign:
     def test_unsupported_data_type_raises(self):
         with pytest.raises(ValueError, match="Unsupported data type"):
             encode_assign(category=0x0A, parameter=0x01, data_type=DataType.STRING, value=1)
+
+
+class TestEncodeAssignElements:
+    """Tests for the multi-element ``encode_assign_elements``."""
+
+    def test_int8_elements_pack_one_byte_each(self):
+        packet = encode_assign_elements(
+            category=0x0A, parameter=0x00, data_type=DataType.INT8, values=[3, 3], reserved=0x00
+        )
+
+        assert packet == bytes([0xFF, 0x06, 0x00, 0x00, 0x0A, 0x00, 0x01, 0x00, 0x03, 0x03])
+
+    def test_int16_array_elements_pack_little_endian(self):
+        packet = encode_assign_elements(
+            category=0x01,
+            parameter=0x09,
+            data_type=DataType.INT16_ARRAY,
+            values=[25, 25, 4096, 2160, 0x0010],
+            reserved=0x01,
+        )
+
+        assert packet[1] == 0x0E  # length: 4 header-counted bytes + 10 payload
+        assert packet[6] == 0x82
+        assert packet[8:] == bytes([0x19, 0x00, 0x19, 0x00, 0x00, 0x10, 0x70, 0x08, 0x10, 0x00])
+
+    def test_negative_element_encodes_twos_complement(self):
+        packet = encode_assign_elements(
+            category=0x09, parameter=0x01, data_type=DataType.INT8, values=[0, -2, 0]
+        )
+
+        assert packet[8:] == bytes([0x00, 0xFE, 0x00])
+
+    def test_single_element_matches_encode_assign(self):
+        scalar = encode_assign(
+            category=0x0A, parameter=0x01, data_type=DataType.INT8, value=2, reserved=0x01
+        )
+        elements = encode_assign_elements(
+            category=0x0A, parameter=0x01, data_type=DataType.INT8, values=[2], reserved=0x01
+        )
+
+        assert elements == scalar
+
+    def test_empty_values_raise(self):
+        with pytest.raises(ValueError, match="at least one element"):
+            encode_assign_elements(
+                category=0x01, parameter=0x00, data_type=DataType.INT8, values=[]
+            )
+
+    def test_unsupported_data_type_raises(self):
+        with pytest.raises(ValueError, match="Unsupported data type"):
+            encode_assign_elements(
+                category=0x01, parameter=0x00, data_type=DataType.VOID, values=[1]
+            )

@@ -75,6 +75,14 @@ value is caller-supplied, from a `CameraProfile` command block or from
 `tools/control/discover_command.py`'s candidate sweep.
 `protocol/categories/recording.py`'s encoder delegates to it.
 
+`encode_assign_elements(*, category, parameter, data_type, values,
+reserved=RESERVED_BYTE, command_id=0x00)` is its multi-element sibling for
+parameters whose payload is a fixed sequence of same-typed values (a
+codec/variant id pair, the five-int16 recording-format struct, ...): each
+element is packed at the data type's per-element width, little-endian, in
+the order given. Same zero-semantics stance; consumed by
+`protocol/categories/settings.py` (see `docs/settings.md`).
+
 ### `Operation`
 
 ```python
@@ -110,7 +118,16 @@ class DataType(IntEnum):
     INT64 = 4
     STRING = 5
     FIXED16 = 128
+    INT16_ARRAY = 130  # 0x82 — NOT official coding; CANDIDATE, see below
 ```
+
+`INT16_ARRAY` (`0x82`) is the one member outside the official coding: a
+CANDIDATE wire byte reported on `POCKET_6K_G2 v7.9`'s recording-format
+packet (five little-endian int16 elements — see `docs/settings.md` §3),
+carried on the same "observed on the wire, absent from the public spec"
+precedent as `Operation.CAMERA_REPORT`. Its width/format entries describe
+one *element*; the element count is per-parameter and supplied by the
+caller.
 
 `DATA_TYPE_BYTE_WIDTHS` gives the on-the-wire byte width for each type
 (`VOID` is 0 for the trigger reading of code 0; `STRING` is intentionally
@@ -136,7 +153,7 @@ in this repo yet, so it is intentionally left as a TODO rather than assumed.
 | Packet header structure (prefix byte, reserved byte, operation codes, length-field offset) | `DESTINATION_CAMERA`, `LENGTH_FIELD_OFFSET`, `Operation` | `protocol/codec.py` |
 | Payload data types | `DataType` | `protocol/types.py` |
 | Category ID + parameter IDs for one command family | `CATEGORY_ID` in a category file | `protocol/categories/<category>.py` — added only after a sniffer capture confirms them on real hardware |
-| Codec IDs, quality/resolution/FPS encodings, capability flags, storage UUIDs | `codec_ids`, `fps_encodings`, `supports_raw` | `payloads/models/<MODEL>_<FW>.json`, via `CameraProfile` |
+| Codec IDs, quality/resolution/FPS encodings, capability flags, storage UUIDs | `codecs`, `resolutions`, `fps_modes`, `supports_raw` | `payloads/models/<MODEL>_<FW>.json`, via `CameraProfile` |
 
 **Rule of thumb:** if a value is fixed by the Bluetooth or BMD spec and
 applies to every camera regardless of model/firmware, it's a constant in

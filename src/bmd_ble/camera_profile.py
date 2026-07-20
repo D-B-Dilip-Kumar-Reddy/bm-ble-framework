@@ -95,18 +95,70 @@ class CommandSpec:
     """One sniffer-confirmed command family from a profile's ``commands`` map.
 
     ``values`` maps outcome names to the sniffer-captured payload integers,
-    e.g. ``{"start": 2, "stop": 0}`` for recording.
+    e.g. ``{"start": 2, "stop": 0}`` for recording. It is empty for
+    multi-element families (codec_quality, video_format, recording_format)
+    whose payloads are composed from the profile's lookup tables
+    (``codecs``/``resolutions``/``fps_modes``) instead.
     """
 
     name: str
     category: int
     parameter: int
     data_type: DataType
-    values: dict[str, int]
+    values: dict[str, int] = field(default_factory=dict)
     reserved: int = 0x00
     operation: int | None = None
     echo_operation: int | None = None
     provenance: CommandProvenance | None = None
+
+
+@dataclass(frozen=True)
+class CodecSpec:
+    """One codec family from a profile's ``codecs`` table.
+
+    ``id`` is the codec_quality payload's first element; ``variants`` maps
+    quality-variant names to its second element. Variant ids are per-codec —
+    BRAW's ``0`` (Q0) and ProRes's ``0`` (HQ) are unrelated values.
+    """
+
+    name: str
+    id: int
+    variants: dict[str, int]
+
+
+@dataclass(frozen=True)
+class ResolutionSpec:
+    """One resolution from a profile's ``resolutions`` table.
+
+    ``width``/``height`` feed the recording_format payload; ``codecs`` names
+    the codec families the camera offers at this resolution;
+    ``dimension_enums`` maps a codec name to the video_format
+    dimension_enum byte (the enum encodes resolution AND codec family
+    together). A codec present in ``codecs`` but absent from
+    ``dimension_enums`` is supported by the camera but its enum has not
+    been captured yet.
+    """
+
+    name: str
+    width: int
+    height: int
+    codecs: tuple[str, ...] = ()
+    dimension_enums: dict[str, int] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class FpsModeSpec:
+    """One frame-rate mode from a profile's ``fps_modes`` table.
+
+    ``fps_int`` is the integer frame rate shared by the video_format and
+    recording_format payloads; ``m_rate`` is video_format's flag (0 exact,
+    1 NTSC/drop); ``frame_flags`` is recording_format's int16 flags value.
+    """
+
+    name: str
+    fps_int: int
+    m_rate: int
+    frame_flags: int
 
 
 @dataclass(frozen=True)
@@ -174,6 +226,14 @@ class CameraProfile:
     # Never sent — see StorageSignalSpec's docstring.
     storage: dict[str, StorageSignalSpec] = field(default_factory=dict)
 
+    # Settings lookup tables consumed by the codec_quality / video_format /
+    # recording_format command families (docs/settings.md). Empty until
+    # sniffed on the camera — their provenance rides with the command
+    # blocks that consume them.
+    codecs: dict[str, CodecSpec] = field(default_factory=dict)
+    resolutions: dict[str, ResolutionSpec] = field(default_factory=dict)
+    fps_modes: dict[str, FpsModeSpec] = field(default_factory=dict)
+
     # Raw JSON for reference
     _raw: dict = field(default_factory=dict, repr=False, compare=False)
 
@@ -225,6 +285,56 @@ class CameraProfile:
             raise ValueError(
                 f"Profile {self.model_key}_{self.firmware} storage signal '{name}' is missing "
                 f"values: {', '.join(missing)} — populate storage.{name}.values in {json_path}."
+            )
+        return spec
+
+    # ── Settings lookup-table access ────────────────────────────────────────
+
+    def _json_path(self) -> str:
+        return f"payloads/models/{self.model_key}_{self.firmware}.json"
+
+    def require_codec(self, name: str, variant: str | None = None) -> CodecSpec:
+        """Return the named codec table entry, raising ValueError when the
+        codec (or the requested ``variant``) is missing from the profile JSON."""
+        spec = self.codecs.get(name)
+        if spec is None:
+            known = ", ".join(sorted(self.codecs)) or "(none)"
+            raise ValueError(
+                f"Profile {self.model_key}_{self.firmware} has no codec '{name}' "
+                f"(known: {known}) — populate {self._json_path()}'s codecs table from a capture."
+            )
+        if variant is not None and variant not in spec.variants:
+            known = ", ".join(sorted(spec.variants)) or "(none)"
+            raise ValueError(
+                f"Profile {self.model_key}_{self.firmware} codec '{name}' has no variant "
+                f"'{variant}' (known: {known}) — populate codecs.{name}.variants in "
+                f"{self._json_path()}."
+            )
+        return spec
+
+    def require_resolution(self, name: str) -> ResolutionSpec:
+        """Return the named resolution table entry, raising ValueError when
+        it is missing from the profile JSON."""
+        spec = self.resolutions.get(name)
+        if spec is None:
+            known = ", ".join(sorted(self.resolutions)) or "(none)"
+            raise ValueError(
+                f"Profile {self.model_key}_{self.firmware} has no resolution '{name}' "
+                f"(known: {known}) — populate {self._json_path()}'s resolutions table "
+                f"from a capture."
+            )
+        return spec
+
+    def require_fps_mode(self, name: str) -> FpsModeSpec:
+        """Return the named fps-mode table entry, raising ValueError when it
+        is missing from the profile JSON."""
+        spec = self.fps_modes.get(name)
+        if spec is None:
+            known = ", ".join(sorted(self.fps_modes)) or "(none)"
+            raise ValueError(
+                f"Profile {self.model_key}_{self.firmware} has no fps mode '{name}' "
+                f"(known: {known}) — populate {self._json_path()}'s fps_modes table "
+                f"from a capture."
             )
         return spec
 
@@ -304,7 +414,9 @@ class CameraProfile:
                 parameter=block["parameter"],
                 data_type=DataType[block["data_type"]],
                 values={
-                    key: value for key, value in block["values"].items() if not key.startswith("_")
+                    key: value
+                    for key, value in block.get("values", {}).items()
+                    if not key.startswith("_")
                 },
                 reserved=block.get("reserved", 0x00),
                 operation=block.get("operation"),
@@ -328,6 +440,47 @@ class CameraProfile:
                 provenance=_parse_provenance(block),
             )
 
+        codecs: dict[str, CodecSpec] = {}
+        for name, block in raw.get("codecs", {}).items():
+            if name.startswith("_"):
+                continue
+            codecs[name] = CodecSpec(
+                name=name,
+                id=block["id"],
+                variants={
+                    key: value
+                    for key, value in block["variants"].items()
+                    if not key.startswith("_")
+                },
+            )
+
+        resolutions: dict[str, ResolutionSpec] = {}
+        for name, block in raw.get("resolutions", {}).items():
+            if name.startswith("_"):
+                continue
+            resolutions[name] = ResolutionSpec(
+                name=name,
+                width=block["width"],
+                height=block["height"],
+                codecs=tuple(block.get("codecs", ())),
+                dimension_enums={
+                    key: value
+                    for key, value in block.get("dimension_enums", {}).items()
+                    if not key.startswith("_")
+                },
+            )
+
+        fps_modes: dict[str, FpsModeSpec] = {}
+        for name, block in raw.get("fps_modes", {}).items():
+            if name.startswith("_"):
+                continue
+            fps_modes[name] = FpsModeSpec(
+                name=name,
+                fps_int=block["fps_int"],
+                m_rate=block["m_rate"],
+                frame_flags=block["frame_flags"],
+            )
+
         return cls(
             model_key=model_key,
             model_name=meta.get("model", model_key),
@@ -339,6 +492,9 @@ class CameraProfile:
             device_info_metadata_readable=device_info_meta_data.get("readable", False),
             commands=commands,
             storage=storage,
+            codecs=codecs,
+            resolutions=resolutions,
+            fps_modes=fps_modes,
             _raw=raw,
         )
 
