@@ -124,6 +124,19 @@ actively sending candidates one at a time, with the operator noting what
 the camera switches to and the captured `0x01/0x09` report supplying the
 resulting width/height (`docs/settings.md` §4.1, §5).
 
+**`--connect-settle-seconds` (default `6.0`s).** Added 2026-07-20 after this
+tool's first three real-hardware runs each captured the camera's
+post-connect initial-payload burst instead of a response to the write — the
+same race `CameraSession.__aenter__`'s `connect_settle_s` wait exists to
+prevent (`docs/session_and_verification.md`), which this standalone tool
+had never applied since it doesn't go through `CameraSession`. `run()` now
+waits this long after `cam.connect()`, before `run_send_and_capture` opens
+its window, so the burst fully drains first. Full writeup of the three
+confounded captures and what they still established (via operator
+confirmation, independent of the bad capture) is in `docs/settings.md` §6.
+`tools/control/discover_command.py` has the same latent risk on its first
+candidate only — see `docs/command_discovery.md`'s safety model.
+
 ---
 
 ## `tools/control/discover_command.py`

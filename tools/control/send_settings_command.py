@@ -32,6 +32,18 @@ provenance) or falsifies it. Two runs make the doc's central claim testable:
 Watch the camera body after each send — the operator's eyes, not the echo,
 are ground truth for what changed (same stance as docs/command_discovery.md).
 
+CONNECT SETTLE (added 2026-07-20, see docs/settings.md §6): a just-connected
+camera floods INCOMING_CONTROL with an initial info dump (recording state,
+media/scene metadata, lens data, ISO, ...) that can take several seconds to
+drain — the exact hazard `CameraSession.__aenter__` waits `connect_settle_s`
+for (docs/session_and_verification.md). This tool did not wait, so its
+first three real-hardware runs (2026-07-20) captured that burst instead of
+a response to the write: none of the three showed the target
+category/parameter, only unrelated initial-payload packets. Fixed by
+waiting `--connect-settle-seconds` (default 6.0s, matching
+`CameraSession`'s default) after connecting and before the send-and-capture
+window opens.
+
 Usage:
     python tools/control/send_settings_command.py --model-key POCKET_6K_G2 --firmware v7.9 \\
         --packet recording_format --resolution "4K DCI" --fps 25
@@ -173,6 +185,12 @@ async def run(args: argparse.Namespace) -> int:
 
     await cam.connect()
     try:
+        # See the module docstring's "CONNECT SETTLE" note: let the
+        # post-connect initial-payload burst fully drain before opening the
+        # capture window, so it isn't mistaken for a response to this write.
+        print(f"Waiting {args.connect_settle_seconds}s for the initial payload burst to settle…")
+        await asyncio.sleep(args.connect_settle_seconds)
+
         session = await run_send_and_capture(
             cam, [(label, command)], listen_seconds=args.listen_seconds
         )
@@ -235,6 +253,17 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=3.0,
         help="Seconds to listen for a response after the command. Default: 3.0",
+    )
+    parser.add_argument(
+        "--connect-settle-seconds",
+        type=float,
+        default=6.0,
+        help=(
+            "Seconds to wait after connecting, before sending, for the camera's "
+            "post-connect initial-payload burst to drain (matches CameraSession's "
+            "connect_settle_s default) — see the module docstring's CONNECT SETTLE note. "
+            "Default: 6.0"
+        ),
     )
     parser.add_argument(
         "--timeout", type=float, default=15.0, help="BLE scan timeout in seconds. Default: 15.0"

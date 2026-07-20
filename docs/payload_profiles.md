@@ -153,6 +153,16 @@ mirroring `$defs/command`.
   command family individually (`VERIFIED` / `CANDIDATE` / `UNVERIFIED`).
   This replaces the free-text `_comment` history with structured data:
   method, capture file references, verification date, notes.
+  `provenance.notes` is append-only across capture rounds rather than
+  overwritten — a family can accumulate report-side sniffer confirmation,
+  then operator-confirmed write-side behavior, then a decoded echo, each
+  appended with its own date, before `status` finally moves past
+  `CANDIDATE`. The three settings families
+  (`POCKET_6K_G2_v7.9.json`'s `commands.codec_quality` /
+  `video_format` / `recording_format`) are the worked example: each
+  block's notes now record the original external-document transcription,
+  a 2026-07-20 passive-capture confirmation, and a 2026-07-20 active-send
+  operator confirmation, in that order — see `docs/settings.md` §5–§6.
 - **`_comment` keys are allowed anywhere** (schema `patternProperties:
   "^_"`) and skipped by the loader.
 

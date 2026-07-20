@@ -254,6 +254,20 @@ card-ready check, no remaining-capacity tracking, no `BMDStorageError`. See
 "Remaining work" below for the real-hardware follow-up that could resolve
 this.
 
+**A one-off sighting outside this context (2026-07-20, not treated as
+evidence):** a `send_settings_command.py --packet recording_format`
+capture (`docs/settings.md` §6) contained one `category=0x09 parameter=0x01`
+report reading `-2`/`low_margin`, with no recording in progress. This is
+*not* added to the correlation above: that capture window is confounded —
+it was taken before a connect-settle fix, so it's largely the camera's
+post-connect initial-payload burst rather than a response to anything
+this repo's tooling did, and the burst appears to include a full sweep of
+ambient state (this signal among many others) regardless of context. Worth
+re-checking if the signal turns up again in a clean (post-settle) capture,
+but a single contaminated-window sighting is not enough to broaden the
+"precedes a camera-initiated stop" correlation to "precedes any settings
+change."
+
 ---
 
 ## Remaining work

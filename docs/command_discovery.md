@@ -121,6 +121,21 @@ unknown operation/data-type bytes; the capture still records the raw hex
 with a `decode_error`). A confirmed outcome without a decodable echo simply
 emits a block without `echo_operation` — the schema permits that.
 
+**Known latent risk — connect-settle race.** This tool writes the first
+candidate immediately after connecting, with no wait for the camera's
+post-connect initial-payload burst to drain (the same hazard
+`CameraSession.connect_settle_s` exists for — see
+`docs/session_and_verification.md`). `tools/control/send_settings_command.py`
+hit exactly this on real hardware 2026-07-20 (`docs/settings.md` §6): its
+first three captures showed the initial burst instead of a response to the
+write, and it was fixed there with a `--connect-settle-seconds` wait. This
+tool has not needed the same fix yet — every candidate after the first
+naturally waits out `--listen-seconds` plus operator think-time before the
+next write, so only the very first candidate is at risk, and the operator's
+own eyes (not the echo) are ground truth anyway. Worth the same fix if a
+future sweep's first-candidate echo looks suspiciously like unrelated
+camera state.
+
 ---
 
 ## Worked example: recording on POCKET_6K_PRO v8.6

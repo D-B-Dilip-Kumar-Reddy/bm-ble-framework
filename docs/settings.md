@@ -3,10 +3,15 @@
 **Status:** CANDIDATE — three packet families implemented end to end
 (`protocol/categories/settings.py`, profile blocks, `CameraSession` methods,
 capture tooling). The **report side** of `codec_quality` and
-`recording_format` is now sniffer-confirmed by this repo's own passive
-capture (§5, 2026-07-20); the **write side** of all three families — and
-every `dimension_enum` — still rests on the external reverse-engineering
-document only. Nothing is hardware-VERIFIED yet.
+`recording_format` is sniffer-confirmed by this repo's own passive capture
+(§5, 2026-07-20). The **write side** of all three families is now
+operator-confirmed on real hardware too (§6, 2026-07-20 active sends) —
+including the doc's two central claims (`codec_quality` alone can't switch
+codec families; `video_format` can) — but not yet by a clean, decoded echo
+(the active-send captures were confounded by a tooling bug, now fixed).
+Every `dimension_enum` besides 4K DCI/BRAW still rests on the external
+document only. Nothing is hardware-VERIFIED yet — see §6 for exactly what's
+still missing before promotion.
 
 ## Provenance and evidence status
 
@@ -261,7 +266,7 @@ python tools/sniffers/sniffer_settings.py --model-key POCKET_6K_PRO --firmware v
     --actions res_HD,res_UHD,res_4K_DCI,codec_prores,codec_braw
 ```
 
-### 4.2 Active: send each family and watch the camera
+### 4.2 Active: send each family and watch the camera — ✅ RUN 2026-07-20, results in §6
 
 ```bash
 # The doc's central claim, run 1: codec_quality alone must NOT switch family
@@ -293,6 +298,14 @@ accepted with data-type byte `0x82` (the camera's own reports use `0x02` —
 if `0x82` is rejected, try the write with `0x02` and update the profile's
 `data_type`). Also worth a run: `recording_format` targeting 6K 3:2 with
 the transcribed windowed-bit flags vs `0x0000` (§5's frame_flags finding).
+
+**Run this with a settled connection.** The first three real-hardware runs
+(2026-07-20, §6) predate a fix: the tool wrote immediately after
+connecting, with no wait for the camera's post-connect initial-payload
+burst to drain, so all three captured that burst instead of a response to
+the write. `--connect-settle-seconds` (default `6.0`s, added same date) now
+waits it out first — every command above already benefits from it without
+changing the command line.
 
 ### 4.3 End to end: the session path
 
@@ -407,7 +420,90 @@ and profile:
 - The known category 9 parameter 0 ambient ticker ran throughout
   (`9x 2E 64 00 1F 00`, ~1/s), as in every other capture.
 
-## 6. Code surface
+## 6. Second capture — active sends (2026-07-20, POCKET_6K_G2 v7.9)
+
+Runbook §4.2, all three commands run by the operator on real hardware
+(`tools/captures/POCKET_6K_G2_v7.9/POCKET_6K_G2_v7.9_20260720T150325.json`,
+`..._20260720T150610.json`, `..._20260720T150742.json`, local/gitignored).
+Unlike §5's passive run, these predate the `--connect-settle-seconds` fix
+(below) — so this section splits cleanly into what the runs *did* confirm
+(operator eyes, ground truth per the tool's own design stance) and what
+they could *not* confirm (a clean echo, because the captured windows turned
+out to be something else entirely).
+
+### Operator-confirmed outcomes (real-hardware ground truth)
+
+| Run | Command sent | TX bytes | Operator observation |
+|---|---|---|---|
+| 1 | `codec_quality` ProRes HQ (camera on BRAW) | `FF 06 00 00 0A 00 01 00 02 00` | **Codec did NOT change** |
+| 2 | `video_format` UHD ProRes 25fps | `FF 09 00 01 01 00 01 00 19 00 06 00 00` | **Camera switched to ProRes @ UHD** |
+| 3 | `recording_format` 4K DCI 25fps | `FF 0E 00 01 01 09 82 00 19 00 19 00 00 10 70 08 10 00` | **Resolution and frame rate both changed** |
+
+This directly confirms, on real hardware, both of §1's central claims from
+the external RE document: `codec_quality` alone cannot switch codec
+families (run 1 — a ProRes id/variant sent while on BRAW did nothing), and
+`video_format`'s `dimension_enum` is the packet that does (run 2). Run 3 is
+the first positive evidence the `recording_format` write is accepted with
+the claimed `0x82` (`INT16_ARRAY`) data-type byte specifically — the camera
+didn't reject the packet, and both requested values took effect.
+
+### The discovery: a tooling bug, not a protocol finding
+
+None of the three captured response windows contain a report on the target
+coordinates (`0x0A/0x00`, `0x01/0x00`/`0x01/0x09`, `0x01/0x09`
+respectively). Instead each shows a burst of *unrelated* state — and a
+different slice of it each time:
+
+- Run 1: recording-state echo (`0x0A/0x01`), overlay enables (`0x03/0x00`),
+  and category `0x0C` metadata (reel, scene tags, scene, take, good take,
+  camera id, camera operator).
+- Run 2: category `0x0C` lens metadata (lens type, iris, focal length,
+  distance, filter, slate mode, an undocumented param `0x0F` reading
+  `"Next Clip"`) and a `1/14` (ISO) report of `400`.
+- Run 3: category `0` (Lens: aperture, zoom, AF trigger), `1/8`
+  (sharpening), `1/2` (white balance), `3/3` (overlays), two undocumented
+  category-9 ambient params, and one `9/1` (write-margin) report reading
+  `low_margin` — see the caveat below.
+
+This is exactly CLAUDE.md's documented "initial payload burst" — the flood
+of state packets a just-connected camera sends before settling
+(`docs/session_and_verification.md`'s `connect_settle_s`, chosen because
+one prior capture saw it take **over 8 seconds** to fully drain). Each run
+here reconnected and wrote within roughly a second of subscribing, with no
+wait — so the tool's 3-second listen window sampled a different slice of
+that multi-second burst each time, never long enough to also catch the
+genuine response to the write. `send_settings_command.py` was the only
+active-write tool in this repo missing the settle wait `CameraSession`
+already has (see `docs/session_and_verification.md`); it's now fixed with
+a `--connect-settle-seconds` flag (default `6.0`s, matching
+`CameraSession`'s default) that waits after connecting, before the
+send-and-capture window opens. `tools/control/discover_command.py` has the
+same latent risk on its *first* candidate only — noted in
+`docs/command_discovery.md`'s safety model, not yet fixed there since every
+subsequent candidate is naturally protected by the prior candidate's
+listen window.
+
+**Net effect on provenance:** all three families stay `CANDIDATE` — the
+operator-confirmed behavior is real evidence and is now recorded in each
+block's `provenance.notes`, but the rigor bar this repo holds recording to
+(a clean, decoded echo, repeated across cycles) hasn't been met for the
+*write* side of any of the three yet. Re-run §4.2 with the fix, or run
+§4.3 (`examples/change_codec.py`), which already goes through
+`CameraSession.connect_settle_s` and was never affected by this bug.
+
+### A one-off sighting, explicitly not treated as evidence
+
+Run 3's window included a `write-margin warning` report
+(`FF 07 00 00 09 01 01 02 00 FE 00`, `low_margin`/`-2`) — the same
+CANDIDATE signal `docs/recording.md` correlates with a camera-initiated
+recording stop on a slow SD card. Recording wasn't active here. Because
+this run's whole window is the confounded initial burst rather than a
+response to the resolution change, this single sighting is **not** used to
+broaden that correlation to "precedes any settings change" — see
+`docs/recording.md`'s write-margin section for the full reasoning. Worth
+re-checking only if it recurs in a clean, post-settle capture.
+
+## 7. Code surface
 
 | Piece | Where |
 |---|---|
