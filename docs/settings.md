@@ -4,14 +4,15 @@
 (`protocol/categories/settings.py`, profile blocks, `CameraSession` methods,
 capture tooling). The **report side** of `codec_quality` and
 `recording_format` is sniffer-confirmed by this repo's own passive capture
-(§5, 2026-07-20). The **write side** of all three families is now
-operator-confirmed on real hardware too (§6, 2026-07-20 active sends) —
+(§5, 2026-07-20). The **write side** of all three families is
+operator-confirmed on real hardware (§6, 2026-07-20 active sends) —
 including the doc's two central claims (`codec_quality` alone can't switch
-codec families; `video_format` can) — but not yet by a clean, decoded echo
-(the active-send captures were confounded by a tooling bug, now fixed).
-Every `dimension_enum` besides 4K DCI/BRAW still rests on the external
-document only. Nothing is hardware-VERIFIED yet — see §6 for exactly what's
-still missing before promotion.
+codec families; `video_format` can). All 8 known `dimension_enum` values
+are now confirmed by a clean, decoded echo too (§7, 2026-07-20 probe
+sweep, run after a tooling fix) — only 4K DCI/ProRes's enum remains
+unknown. Nothing is hardware-`VERIFIED` yet: every family still needs a
+round trip through `CameraSession` itself (not just the raw send tool)
+before promotion — see §6/§7 for exactly what's missing.
 
 ## Provenance and evidence status
 
@@ -155,31 +156,41 @@ Variant ids are **per-codec** (BRAW 0 = Q0, ProRes 0 = HQ). BRAW variant id
 
 ### 2.2 Resolutions and dimension enums (`resolutions`)
 
+Every row below is now **CONFIRMED**, not just transcribed: the 2026-07-20
+`--dimension-enum` probe sweep (§7) sent each enum and decoded a clean
+`0x01/0x09` report whose width/height matches exactly, plus a `0x0A/0x00`
+report confirming the codec family.
+
 | Label | Width × Height | Codecs offered | `dimension_enum` |
 |---|---|---|---|
-| HD | 1920 × 1080 | ProRes | ProRes: `0x03` |
-| UHD | 3840 × 2160 | ProRes | ProRes: `0x06` |
-| 4K DCI | 4096 × 2160 | BRAW, ProRes | BRAW: `0x08`; **ProRes: unknown** |
-| 2.8K 17:9 | 2868 × 1512 | BRAW | BRAW: `0x0D` |
-| 3.7K Anamorphic | 3728 × 3104 | BRAW | BRAW: `0x0F` |
-| 3.7K Anamorphic alt | 3728 × 3104 | BRAW | BRAW: `0x10` |
-| 5.7K 17:9 | 5744 × 3024 | BRAW | BRAW: `0x12` |
-| 6K 3:2 | 6144 × 3456 | BRAW | BRAW: `0x13` |
-| 6K 2.4:1 | 6144 × 2560 | BRAW | BRAW: `0x14` |
+| HD | 1920 × 1080 | ProRes | ProRes: `0x03` ✅ |
+| UHD | 3840 × 2160 | ProRes | ProRes: `0x06` ✅ |
+| 4K DCI | 4096 × 2160 | BRAW, ProRes | BRAW: `0x08` ✅; **ProRes: still unknown** |
+| 2.8K 17:9 | 2868 × 1512 | BRAW | BRAW: `0x0D` ✅ |
+| 3.7K Anamorphic | 3728 × 3104 | BRAW | BRAW: `0x0F` ✅ |
+| 5.7K 17:9 | 5744 × 3024 | BRAW | BRAW: `0x12` ✅ |
+| 6K 3:2 | 6144 × 3456 | BRAW | BRAW: `0x13` ✅ |
+| 6K 2.4:1 | 6144 × 2560 | BRAW | BRAW: `0x14` ✅ |
 
-Known gaps (from the source doc itself):
+**Confirmed non-functional** (probed 2026-07-20, produced no state change —
+see §7): `0x01`, `0x02`, `0x04`, `0x05`, `0x07`, `0x09`, `0x10`, `0x11`.
+`0x10` in particular *disproves* an earlier hypothesis, below.
 
-- **4K DCI is the only resolution offered under both codecs, but only its
-  BRAW enum was captured.** The 2026-07-20 passive capture (§5) confirmed
-  the camera really does sit at 4096×2160 under ProRes — and also that
-  enums never appear in notifications, so the missing ProRes enum can only
-  be found by actively probing candidates
-  (`send_settings_command.py --dimension-enum`, §4.1). Until then,
+Known gaps:
+
+- **4K DCI under ProRes remains unknown.** Every value in `0x01`–`0x14` was
+  tried (§7); none produced it. Either its enum is in the untried range
+  (`0x0A`, `0x0B`, `0x0C`, or anything `≥ 0x15`) or 4K DCI isn't reachable
+  under ProRes via a single `dimension_enum` at all. Until found,
   `set_video_format("4K DCI", "ProRes", ...)` raises with a pointer here.
-- Two enums (`0x0F`/`0x10`) map to the same 3728×3104 dimensions; which one
-  the camera itself reports is unresolved.
-- The enum space has holes (0x04, 0x05, 0x07, 0x09–0x0C, 0x11 unobserved)
-  — more windowed/anamorphic modes likely live there.
+- ~~Two enums (`0x0F`/`0x10`) map to the same 3728×3104 dimensions~~
+  **RESOLVED 2026-07-20, refuted**: `0x10` was probed directly and produced
+  *no* change at all — it is not a second enum for this resolution, just an
+  invalid value. The `resolutions` table's `"3.7K Anamorphic alt"` entry
+  has been removed; `0x0F` is the only confirmed enum for 3728×3104.
+- The enum space still has three untried values below `0x15` (`0x0A`,
+  `0x0B`, `0x0C`) and nothing above `0x14` has been tried at all — more
+  windowed/anamorphic/higher-resolution modes may live there.
 
 ### 2.3 FPS modes (`fps_modes`)
 
@@ -503,7 +514,97 @@ broaden that correlation to "precedes any settings change" — see
 `docs/recording.md`'s write-margin section for the full reasoning. Worth
 re-checking only if it recurs in a clean, post-settle capture.
 
-## 7. Code surface
+## 7. Third capture — dimension_enum probe sweep (2026-07-20, POCKET_6K_G2 v7.9)
+
+The runbook's answer to §2.2's biggest open question, run by the operator
+with `send_settings_command.py --dimension-enum`
+(`tools/captures/POCKET_6K_G2_v7.9/POCKET_6K_G2_v7.9_20260720T15{27,28,29,30,32,33,34,35,36,37,38,39,40}*.json`,
+16 runs, local/gitignored). Unlike §6, these all ran **after** the
+`--connect-settle-seconds` fix — every capture here is a clean response to
+the write, not burst noise.
+
+### Every existing table entry is now confirmed by a decoded echo
+
+All 8 enums already in the `resolutions` table
+(`0x03, 0x06, 0x08, 0x0D, 0x0F, 0x12, 0x13, 0x14`) were sent again here and
+each produced a `0x01/0x09` report whose decoded width/height matches the
+table exactly, plus a `0x0A/0x00` report confirming the codec family
+(`02 00`/ProRes for the two ProRes enums, `03 03`/BRAW-5:1 for the six BRAW
+ones — the quality variant carrying over from whatever `codec_quality` last
+set, exactly as §6 established it should). Example — enum `0x13` (6K 3:2):
+
+```
+TX: FF 09 00 01 01 00 01 00 19 00 13 00 00
+RX (0x01/0x09): 19 00 19 00 00 18 80 0D 00 00
+    -> fps=25, sensor_fps=25, width=6144, height=3456, flags=0x0000
+```
+
+`6144×3456` matches `resolutions."6K 3:2"` exactly. The `flags=0x0000`
+here — at 25fps, in a completely separate session from §6's 50fps sighting
+— **independently reconfirms** §6's "windowed bit" finding: 6K 3:2 (the
+G2's only full-sensor mode) reports `0x0000` regardless of frame rate,
+while every other resolution here reports `0x0010`.
+
+This is the strongest evidence any settings value has received: a decoded,
+byte-exact echo *and* (per the operator's own summary of this round) a
+confirmed physical camera change, for 8 independent resolution/codec
+combinations in one sweep. It also settles the open question from §6:
+**`0x01/0x00` still never echoes** — every one of these 16 sends confirmed
+on `0x01/0x09` (and, for codec, `0x0A/0x00`) — the same channels
+`CameraSession.set_video_format` was already arming.
+
+### A mechanistic insight: the report isn't an ack, it's a state reflection
+
+Eight further enums were tried and produced **no camera change** — the
+`0x01/0x09` report in each of those captures decoded to whatever resolution
+was already active (carried over from the previous successful send), not
+an error or a distinct "rejected" signal:
+
+| Enum tried | Result |
+|---|---|
+| `0x01`, `0x02`, `0x04`, `0x05`, `0x07`, `0x09`, `0x11` | No change — camera stayed on its prior resolution |
+| `0x10` | No change — **refutes** the earlier "second enum for 3728×3104" hypothesis (§2.2) |
+
+The camera evidently emits a `0x01/0x09` status reflection after **any**
+`video_format` write, valid or not — reporting whatever the current state
+actually is, not acknowledging the specific value it just received. A
+sweep operator watching only the echo (not the physical camera) could be
+fooled into thinking an invalid enum "did nothing but at least didn't
+error" — which is true, but the report is not evidence the value was
+understood, just that *something* is always reported back.
+
+### Still open
+
+4K DCI under ProRes remains unfound — every value `0x01`–`0x14` was tried
+(§2.2's table plus this sweep) and none produced it. `0x0A`, `0x0B`,
+`0x0C`, and everything `≥ 0x15` are still untried; one of those, or a
+value this repo hasn't considered, is the next thing to probe.
+
+### What this does — and doesn't — promote
+
+`commands.video_format`'s `resolutions.*.dimension_enums` data now carries
+this evidence in its `_comment`/`provenance.notes` (this round is data
+confirmation, the same kind of update §5's passive capture made — not a
+`provenance.status` promotion by itself). `commands.video_format.provenance.status`
+stays `CANDIDATE`: this sweep used the raw `send_settings_command.py` tool,
+not `CameraSession.set_video_format`'s own verification path — run
+`examples/change_codec.py` for that before promoting to `VERIFIED`.
+
+### A side finding for the write-margin signal
+
+The write-margin warning (`storage.write_margin_warning`,
+`docs/recording.md`) read `low_margin`/`-2` in essentially every one of
+this sweep's ~18 connect cycles over roughly 15 minutes, with no recording
+ever active. That's a much longer, more mundane persistence than the
+signal's original evidence (a brief pre-stop warning). It doesn't disprove
+the original correlation, but it does weaken "low_margin predicts an
+imminent autostop" as a *general* reading — it may instead reflect a
+per-(card, resolution/bitrate) threshold this specific SD card sits below
+at the BRAW resolutions used here, unrelated to recording at all. Recorded
+in the profile's provenance notes; no change to the signal's `values` or
+`CameraSession`'s behavior.
+
+## 8. Code surface
 
 | Piece | Where |
 |---|---|

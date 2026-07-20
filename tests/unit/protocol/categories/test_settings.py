@@ -232,6 +232,61 @@ class TestDecoders:
         assert header.operation is Operation.CAMERA_REPORT
         assert decode_codec_quality(payload, header.data_type) == (2, 0)
 
+    def test_decodes_real_captured_dimension_enum_probe_reports(self):
+        """Regression net against the 2026-07-20 --dimension-enum probe
+        sweep (docs/settings.md §7): each of these is the 0x01/0x09 report
+        following a video_format write with the given enum, decoding to
+        exactly the width/height already in the resolutions table — byte-
+        exact confirmation for every known dimension_enum, all at 25fps."""
+        cases = {
+            "0x03 HD/ProRes": (
+                "FF 0E 00 00 01 09 02 02 19 00 19 00 80 07 38 04 10 00",
+                RecordingFormat(
+                    fps_int=25, sensor_fps_int=25, width=1920, height=1080, frame_flags=0x0010
+                ),
+            ),
+            "0x06 UHD/ProRes": (
+                "FF 0E 00 00 01 09 02 02 19 00 19 00 00 0F 70 08 10 00",
+                RecordingFormat(
+                    fps_int=25, sensor_fps_int=25, width=3840, height=2160, frame_flags=0x0010
+                ),
+            ),
+            "0x0D 2.8K/BRAW": (
+                "FF 0E 00 00 01 09 02 02 19 00 19 00 34 0B E8 05 10 00",
+                RecordingFormat(
+                    fps_int=25, sensor_fps_int=25, width=2868, height=1512, frame_flags=0x0010
+                ),
+            ),
+            "0x12 5.7K/BRAW": (
+                "FF 0E 00 00 01 09 02 02 19 00 19 00 70 16 D0 0B 10 00",
+                RecordingFormat(
+                    fps_int=25, sensor_fps_int=25, width=5744, height=3024, frame_flags=0x0010
+                ),
+            ),
+            "0x14 6K 2.4:1/BRAW": (
+                "FF 0E 00 00 01 09 02 02 19 00 19 00 00 18 00 0A 10 00",
+                RecordingFormat(
+                    fps_int=25, sensor_fps_int=25, width=6144, height=2560, frame_flags=0x0010
+                ),
+            ),
+        }
+        for label, (hex_bytes, expected) in cases.items():
+            header, payload = decode_packet(bytes.fromhex(hex_bytes))
+            assert (header.category, header.parameter) == (0x01, 0x09), label
+            assert decode_recording_format(payload, header.data_type) == expected, label
+
+    def test_dimension_enum_0x10_report_is_indistinguishable_from_unchanged_state(self):
+        """0x10 was probed 2026-07-20 (docs/settings.md §7) and refuted the
+        earlier '3.7K Anamorphic alt' hypothesis: the resulting 0x01/0x09
+        report is byte-identical to the prior (unrelated) 6K 2.4:1 report
+        — i.e. the camera left the resolution unchanged rather than
+        accepting 0x10 as a second enum for 3728x3104."""
+        unchanged_after_0x10 = bytes.fromhex(
+            "FF 0E 00 00 01 09 02 02 19 00 19 00 00 18 00 0A 10 00"
+        )
+        prior_6k_24_report = bytes.fromhex("FF 0E 00 00 01 09 02 02 19 00 19 00 00 18 00 0A 10 00")
+        assert unchanged_after_0x10 == prior_6k_24_report
+
     def test_is_settings_notification_matches_on_category_and_parameter(self):
         header = CommandHeader(
             destination=0xFF,

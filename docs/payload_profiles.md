@@ -161,8 +161,21 @@ mirroring `$defs/command`.
   (`POCKET_6K_G2_v7.9.json`'s `commands.codec_quality` /
   `video_format` / `recording_format`) are the worked example: each
   block's notes now record the original external-document transcription,
-  a 2026-07-20 passive-capture confirmation, and a 2026-07-20 active-send
-  operator confirmation, in that order — see `docs/settings.md` §5–§6.
+  a 2026-07-20 passive-capture confirmation, a 2026-07-20 operator-confirmed
+  active-send round, and (for `video_format`) a 2026-07-20 probe sweep
+  whose decoded echoes confirmed every known `dimension_enum` value — in
+  that order, each dated — see `docs/settings.md` §5–§7.
+- **A lookup-table entry can be *removed*, not just added, as evidence
+  accumulates** — this isn't only an additive process. `resolutions`'
+  `"3.7K Anamorphic alt"` entry (a second `dimension_enum` guessed for the
+  same width/height) was deleted once an active probe showed that enum
+  produces no state change at all: false table entries get corrected the
+  same way false command values would, not left in place with a caveat.
+  The correction itself — what was removed and why — lives in the
+  surviving sibling entries' `_comment` and in the consuming command
+  block's `provenance.notes`, since `$defs/resolutionSpec` has no
+  provenance field of its own (see "A `storage` entry" above for the same
+  reasoning applied to `storage`).
 - **`_comment` keys are allowed anywhere** (schema `patternProperties:
   "^_"`) and skipped by the loader.
 
