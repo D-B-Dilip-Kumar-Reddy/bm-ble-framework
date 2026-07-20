@@ -159,17 +159,23 @@ mirroring `$defs/command`.
   appended with its own date, before `status` finally moves past
   `CANDIDATE`. The three settings families
   (`POCKET_6K_G2_v7.9.json`'s `commands.codec_quality` /
-  `video_format` / `recording_format`) are the worked example — and
-  `video_format` is the completed one: its notes record the original
-  external-document transcription, a 2026-07-20 passive-capture
-  confirmation, an operator-confirmed active-send round, a probe sweep
-  whose decoded echoes confirmed every known `dimension_enum` value, and
-  finally a real `CameraSession.set_video_format()` round trip (2/2,
-  echo-verified) — five rounds, each dated, before `status` actually
-  moved from `CANDIDATE` to `VERIFIED`. `codec_quality` and
-  `recording_format` are still mid-sequence, stalled at the
-  operator-confirmed-but-no-clean-echo stage. See `docs/settings.md`
-  §5–§8.
+  `video_format` / `recording_format`) are the worked example, and all
+  three are now `VERIFIED` — though by different-length paths.
+  `video_format`'s notes record five dated rounds: the original
+  external-document transcription, a passive-capture confirmation, an
+  operator-confirmed active-send round, a probe sweep whose decoded echoes
+  confirmed every known `dimension_enum` value, and finally a real
+  `CameraSession.set_video_format()` round trip (2/2, echo-verified).
+  `codec_quality` and `recording_format` stalled for a while at
+  "operator-confirmed but every echo attempt was a coincidental no-op" —
+  every earlier write happened to request a value the camera was already
+  at — until a single `set_camera_format()` call's proxy step (§9)
+  incidentally set up a *genuine* change for both in the same run,
+  producing their first-ever clean echo and promoting both to `VERIFIED`
+  off one real cycle each. Same destination status, very different
+  evidence trails — both legitimate, and both fully recorded rather than
+  compressed into "eventually became VERIFIED." See `docs/settings.md`
+  §5–§10.
 - **A lookup-table entry can be *removed*, not just added, as evidence
   accumulates** — this isn't only an additive process. `resolutions`'
   `"3.7K Anamorphic alt"` entry (a second `dimension_enum` guessed for the

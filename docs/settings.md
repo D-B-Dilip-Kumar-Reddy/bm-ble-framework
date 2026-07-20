@@ -1,38 +1,37 @@
 # Settings — codec, quality, resolution, FPS
 
-**Status:** `video_format` is `VERIFIED` (2026-07-20) — the only settings
-family to cross that bar so far. `codec_quality` and `recording_format`
-stay `CANDIDATE`: their report-side coordinates are sniffer-confirmed by
-this repo's own passive capture (§5), and the doc's central
-`codec_quality`-can't/`video_format`-can codec-switch claims are both
-operator-confirmed on real hardware (§6), but neither has yet produced a
-genuine write+echo confirmation through `CameraSession` itself — §8
-explains why the one attempt at `codec_quality` didn't count (a
-methodological no-op, not a protocol failure) and what a real test needs.
-All 8 known `video_format` `dimension_enum` values are confirmed by a
-clean, decoded echo (§7), and the write mechanism, echo channel, and
-`CameraSession.set_video_format()`'s own verification logic are confirmed
-by a real 2/2 round trip (§8) — the missing piece every earlier round
-pointed at. 4K DCI/ProRes's `dimension_enum` remains unknown after an
-exhaustive `0x01`–`0x16` search (§7–§8), so `CameraSession.set_camera_format`
-(§9) reaches it with a two-step workaround (proxy through UHD, then
+**Status:** all three settings families are `VERIFIED` (2026-07-20).
+`video_format` was promoted first (§8: 2/2 real `CameraSession` round
+trips) and all 8 known `dimension_enum` values are confirmed by a clean,
+decoded echo (§7). `codec_quality` and `recording_format` followed via
+`set_camera_format` (§9), whose proxy path happened to produce the first
+*genuine* (non-redundant) write+echo cycle for each — 1/1 each, §10.
+That same run also found and fixed a real bug in `set_video_format`: a
+codec-only switch (same resolution/fps) could spuriously fail because the
+mode-notify channel doesn't encode codec, so a genuinely fresh report
+looked like a stale duplicate — fixed by also watching the `codec_quality`
+channel, §10. 4K DCI/ProRes's `dimension_enum` remains unknown after an
+exhaustive `0x01`–`0x16` search (§7–§8), so `set_camera_format` (§9)
+reaches it with a two-step workaround (proxy through UHD, then
 `recording_format`'s raw width/height) instead of waiting on that gap to
 close. `_meta.status` stays `UNVERIFIED` overall per design principle 8 —
 plenty of the profile is still unpopulated (media, metadata, playback)
-even though this one family is fully verified.
+even though every implemented settings family is now verified.
 
 ## Provenance and evidence status
 
-The byte layouts and value tables below were transcribed from
+The byte layouts and value tables below were originally transcribed from
 `CODEC_RES_FPS_6K_G2.docx` (operator-supplied, 2026-07-20) — the write-up of
-a reverse-engineering effort against a real `POCKET_6K_G2 v7.9`. That makes
-them better than [spec] guesses but weaker than this repo's
+a reverse-engineering effort against a real `POCKET_6K_G2 v7.9`. That made
+them, at the start, better than [spec] guesses but weaker than this repo's
 [sniffer-verified] bar (CLAUDE.md design principle 6: values must originate
-from a capture on that camera — this repo has not seen these packets on a
-wire it captured itself). They are therefore modeled with
-`provenance.status: "CANDIDATE"` in `payloads/models/POCKET_6K_G2_v7.9.json`,
-and the operator's own summary was explicit that **not all packets are
-reverse-engineered** — known gaps are listed per section below.
+from a capture on that camera). They were therefore modeled with
+`provenance.status: "CANDIDATE"` at first — every command family listed in
+§1 has since been promoted to `VERIFIED` through this repo's own captures
+and `CameraSession` round trips (§5–§10); see the top status line for where
+each stands today. The operator's own original summary was explicit that
+**not all packets are reverse-engineered** — known remaining gaps (chiefly
+4K DCI/ProRes's `dimension_enum`) are listed per section below.
 
 Key operator-reported findings this doc preserves:
 
@@ -144,7 +143,7 @@ in the source material.
 
 ---
 
-## 2. Value tables (`POCKET_6K_G2 v7.9` — CANDIDATE)
+## 2. Value tables (`POCKET_6K_G2 v7.9` — now VERIFIED via the command blocks that consume them)
 
 Stored in `payloads/models/POCKET_6K_G2_v7.9.json` under `codecs`,
 `resolutions`, and `fps_modes` (see `docs/payload_profiles.md` for the
@@ -781,7 +780,95 @@ a value step 2 then redundantly "sets" again, which the camera won't echo.
 `examples/change_codec.py` demonstrates both paths (a direct BRAW/4K DCI
 combination and the ProRes/4K DCI proxy case) in one run.
 
-## 10. Code surface
+## 10. Fifth round — first genuine codec_quality/recording_format confirmations, and a real video_format bug (2026-07-20)
+
+The rewritten `examples/change_codec.py` (§9) run against real
+`POCKET_6K_G2 v7.9` hardware, calling
+`set_camera_format("ProRes", "422", "4K DCI", "25")` then
+`set_camera_format("BRAW", "5:1", "4K DCI", "25")`. The first call
+succeeded outright; the second exposed a real bug in `set_video_format`.
+Between them, this run promoted `codec_quality` and `recording_format` to
+`VERIFIED`, joining `video_format` — every settings family this repo has
+implemented so far is now hardware-verified.
+
+### `codec_quality`: the first genuine write+echo cycle
+
+`set_camera_format`'s proxy step had just switched to UHD/ProRes, which
+reset the camera's remembered ProRes quality to `HQ` — and the very next
+step asked for `422`, a **real** change for the first time in this doc's
+history (every earlier attempt happened to request the value already
+active). Result:
+
+```
+TX: FF 06 00 00 0A 00 01 00 02 01   (codec_id=2/ProRes, variant_id=1/422)
+RX: FF 06 00 00 0A 00 01 02 02 01   (same pair, operation CAMERA_REPORT, ~200ms later)
+```
+
+Exact match. This is the confirmation every earlier round was missing —
+`commands.codec_quality` moves to `VERIFIED`. Only one cycle so far
+(`video_format` had two); a repeat isn't required to promote, matching how
+`video_format` itself was promoted on real unambiguous evidence rather
+than a fixed count, but would strengthen the record further.
+
+### `recording_format`: the first genuine write with the real `0x82` byte
+
+The same call's closing step sent `set_recording_format("4K DCI", "25")`
+— the actual `0x82` (`INT16_ARRAY`) write byte, for the first time via
+`CameraSession` itself (earlier "confirmations" were either operator-eyes
+only on a burst-noise-confounded capture, §6, or the *result* of a
+`video_format` write riding on this family's report channel, never a
+`recording_format` write's own echo):
+
+```
+TX: FF 0E 00 01 01 09 82 00 19 00 19 00 00 10 70 08 10 00
+RX: FF 0E 00 00 01 09 02 02 19 00 19 00 00 10 70 08 10 00   (~120ms later)
+```
+
+Both decode to `(fps=25, width=4096, height=2160, flags=0x0010)` — 4K DCI,
+exact match, and the `0x82` byte was accepted without error.
+`commands.recording_format` moves to `VERIFIED`.
+
+### `video_format`: a real bug, found and fixed
+
+The second `set_camera_format` call — same resolution and fps, only the
+codec family changing (4K DCI/ProRes → 4K DCI/BRAW) — failed:
+
+```
+TX: FF 09 00 01 01 00 01 00 19 00 08 00 00
+RX (1/9): FF 0E 00 00 01 09 02 02 19 00 19 00 00 10 70 08 10 00   <- REJECTED as a stale duplicate
+RX (10/0, arrived 478ms after TX, well inside the timeout):
+    FF 06 00 00 0A 00 01 02 03 03   <- BRAW, 5:1 — genuine confirmation, never even looked at
+set BRAW 5:1 4K DCI @ 25 NOT confirmed: ... no echo received on any of [(1, 0), (1, 9)] ...
+```
+
+Root cause: the `0x01/0x09` mode-notify payload encodes fps/width/height
+only, **never codec** — so when only the codec family changes, that
+payload is byte-identical to what `NotificationRouter` already saw before
+the write, and its stale-duplicate filter (correctly protecting other
+families from real retransmit duplicates — see
+`docs/session_and_verification.md`) discards the genuinely fresh report.
+The camera's `0x0A/0x00` report (which the earlier §8 round already
+observed follows *every* `video_format` write, not just ones paired with
+an explicit `set_codec_quality` call) carried the real confirmation the
+whole time — `set_video_format` just never watched that channel.
+
+**Fixed**: `set_video_format` now arms and watches `codec_quality`'s
+coordinates too (when the profile has that block), as a third
+confirmation channel alongside its own `0x01/0x00` and the `0x01/0x09`
+mode-notify. A codec-only switch always changes what that channel reports
+even when it can't change `0x01/0x09`'s content. Verification there
+compares only the reported `codec_id` (this method takes no `variant`
+argument to compare against). This is a real correctness fix — the earlier
+`video_format` `VERIFIED` promotion (§8) still stands (both of §8's runs
+happened to also change resolution/fps, so `0x01/0x09` genuinely differed
+and the bug never triggered there), but the fix closes a gap `VERIFIED`
+should have covered from the start. See
+`CameraSession.set_video_format`'s docstring for the full mechanism, and
+`docs/session_and_verification.md` for why the router's duplicate filter
+exists and isn't being weakened globally — this fix works around its one
+known blind spot for one specific channel, not around the filter itself.
+
+## 11. Code surface
 
 | Piece | Where |
 |---|---|

@@ -698,7 +698,7 @@ class TestSetVideoFormat:
         await session.set_video_format("4K DCI", "BRAW", "25")
 
         armed = {call.args for call in session._router.arm.call_args_list}
-        assert armed == {(0x01, 0x00), (0x01, 0x09)}
+        assert armed == {(0x01, 0x00), (0x01, 0x09), (0x0A, 0x00)}
         (sent,) = session._controller.write_outgoing_control.await_args.args
         assert sent == bytes(
             [0xFF, 0x09, 0x00, 0x01, 0x01, 0x00, 0x01, 0x00, 0x19, 0x00, 0x08, 0x00, 0x00]
@@ -721,6 +721,60 @@ class TestSetVideoFormat:
         session._router.wait_for = AsyncMock(side_effect=wait_for)
 
         await session.set_video_format("4K DCI", "BRAW", "25")
+
+    @pytest.mark.asyncio
+    async def test_succeeds_on_codec_quality_channel_echo(self):
+        """Real-hardware regression (docs/settings.md §10): a codec-only
+        switch (same resolution/fps, different family) leaves the
+        mode-notify payload byte-identical to what NotificationRouter
+        already saw, so it gets filtered as a stale duplicate — the
+        codec_quality channel (10/0) is what actually confirms the write
+        in that case."""
+        session = make_session(make_settings_profile())
+
+        async def wait_for(category, parameter, timeout):
+            if (category, parameter) == (0x0A, 0x00):
+                return MagicMock(category=0x0A, parameter=0x00), bytes([3, 3])  # BRAW, 5:1
+            return None
+
+        session._router.wait_for = AsyncMock(side_effect=wait_for)
+
+        await session.set_video_format("4K DCI", "BRAW", "25")
+
+    @pytest.mark.asyncio
+    async def test_raises_when_codec_quality_channel_reports_wrong_codec(self):
+        session = make_session(make_settings_profile())
+
+        async def wait_for(category, parameter, timeout):
+            if (category, parameter) == (0x0A, 0x00):
+                return MagicMock(category=0x0A, parameter=0x00), bytes([2, 0])  # ProRes, HQ
+            return None
+
+        session._router.wait_for = AsyncMock(side_effect=wait_for)
+
+        with pytest.raises(BMDVerificationError, match="codec_quality-channel reported"):
+            await session.set_video_format("4K DCI", "BRAW", "25")
+
+    @pytest.mark.asyncio
+    async def test_does_not_arm_codec_quality_channel_when_profile_lacks_it(self):
+        profile = make_settings_profile()
+        profile.commands.pop("codec_quality")
+        session = make_session(profile)
+
+        async def wait_for(category, parameter, timeout):
+            if (category, parameter) == (0x01, 0x09):
+                return (
+                    MagicMock(category=0x01, parameter=0x09),
+                    _recording_format_payload(25, 25, 4096, 2160, 16),
+                )
+            return None
+
+        session._router.wait_for = AsyncMock(side_effect=wait_for)
+
+        await session.set_video_format("4K DCI", "BRAW", "25")
+
+        armed = {call.args for call in session._router.arm.call_args_list}
+        assert armed == {(0x01, 0x00), (0x01, 0x09)}
 
     @pytest.mark.asyncio
     async def test_raises_when_no_channel_echoes(self):

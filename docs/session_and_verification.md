@@ -136,22 +136,39 @@ structure.
 The three settings methods follow the same profile-driven
 arm-write-await-echo pattern as recording, against the packet families in
 `docs/settings.md` (which also tabulates exactly which decoded payload
-elements each method compares, and which it deliberately doesn't).
-`set_video_format` is confirmed VERIFIED on real hardware — a real 2/2
-round trip through `CameraSession.set_video_format()` itself, not just a
-raw send tool, echo-verified both switches on the mode-notify channel
-below (`docs/settings.md` §8). `set_codec_quality` and
-`set_recording_format` remain CANDIDATE. Two deviations from the recording
-flow:
+elements each method compares, and which it deliberately doesn't). All
+three are now confirmed VERIFIED on real hardware through `CameraSession`
+itself, not just a raw send tool: `set_video_format` via 2/2 round trips
+(`docs/settings.md` §8), `set_codec_quality` and `set_recording_format`
+via one genuine cycle each, surfaced by `set_camera_format`'s proxy path
+(`docs/settings.md` §10). Two deviations from the recording flow:
 
-- **`set_video_format` arms two echo channels.** The FORMAT packet's echo
-  behaviour is uncaptured, and a mode change plausibly reports as the
-  recording-format struct on `0x01/0x09` ("mode-notify") rather than on the
-  command's own `0x01/0x00`. A `_wait_first_echo` helper runs one
-  `NotificationRouter.wait_for` task per armed key concurrently and takes
-  the first fresh delivery from either, cancelling the rest; each channel's
-  payload is decoded per its own family. Both keys are armed *before* the
+- **`set_video_format` arms three echo channels.** Its own `0x01/0x00`
+  (never observed to fire in practice), the recording-format coordinates
+  `0x01/0x09` ("mode-notify"), and — added after a real bug, below — the
+  `codec_quality` coordinates `0x0A/0x00`. A `_wait_first_echo` helper runs
+  one `NotificationRouter.wait_for` task per armed key concurrently and
+  takes the first fresh delivery from any, cancelling the rest; each
+  channel's payload is decoded per its own family (the `0x0A/0x00` branch
+  only checks the reported `codec_id`, since this method takes no
+  `variant` argument to compare against). All keys are armed *before* the
   write, per the router's usual staleness contract.
+
+  **Why three, not two — a real bug found on real hardware
+  (`docs/settings.md` §10):** the mode-notify payload encodes
+  fps/width/height only, never codec. A `set_video_format` call that
+  changes *only* the codec family (same resolution and fps — e.g. 4K
+  DCI/ProRes → 4K DCI/BRAW) produces a mode-notify report byte-identical
+  to what `NotificationRouter` already saw before the write, so its
+  stale-duplicate filter (see `NotificationRouter`'s own docstring below —
+  it exists to protect other families from genuine retransmit duplicates,
+  and is not being weakened) discards the fresh report, and the call
+  spuriously raised `BMDVerificationError` even though the camera's
+  `0x0A/0x00` report (which reliably follows *every* `video_format` write,
+  confirmed since `docs/settings.md` §8) carried real confirmation the
+  whole time. Watching that channel too closes the gap: a codec-only
+  switch always changes what it reports, even when it can't change
+  mode-notify's content.
 - **Precondition failures raise before any write.** `BMDUnsupportedError`
   (its first use in the repo — CLAUDE.md design principle 7) when the
   profile says the camera doesn't offer the requested codec at that
@@ -159,23 +176,19 @@ flow:
   combination is supported but its `dimension_enum` hasn't been
   reverse-engineered yet.
 
-Because the echo behaviour for `codec_quality` and `recording_format` is
-still unconfirmed, a `BMDVerificationError: no echo received` from those
-two methods can mean "the camera doesn't echo this family" rather than
-"the write failed" — the error text says so, and `docs/settings.md`'s
-runbook is the path to resolving it. `set_codec_quality` specifically has
-a second, now-confirmed false-positive mode: real hardware showed the
-camera's `0x0A/0x00` report only fires on an *actual applied change* — a
-call requesting the (codec, variant) the camera is already at (easy to hit
-right after a `set_video_format` switch, since each codec family
-remembers its own last-set quality independently) produces no report and
-the same "no echo received" error, indistinguishable from a genuine
-failure. Mirrors `record_stop()`'s documented no-echo-on-redundant-command
-behavior (`docs/recording.md`) — but unlike `record_stop()`,
-`set_codec_quality` has no `is_recording`-style guard to skip a redundant
-write, since `CameraSession` doesn't track current codec/quality state (no
-`CameraState` yet, design principle 4); the error message names this
-possibility instead. See `docs/settings.md` §8.
+`set_codec_quality` has a confirmed false-positive mode independent of the
+bug above: real hardware showed the camera's `0x0A/0x00` report only fires
+on an *actual applied change* — a call requesting the (codec, variant) the
+camera is already at (easy to hit right after a `set_video_format` switch,
+since each codec family remembers its own last-set quality independently)
+produces no report and a `BMDVerificationError: no echo received`
+indistinguishable from a genuine failure. Mirrors `record_stop()`'s
+documented no-echo-on-redundant-command behavior (`docs/recording.md`) —
+but unlike `record_stop()`, `set_codec_quality` has no `is_recording`-style
+guard to skip a redundant write, since `CameraSession` doesn't track
+current codec/quality state (no `CameraState` yet, design principle 4);
+the error message names this possibility instead, and `set_camera_format`
+(below) doesn't mitigate it either. See `docs/settings.md` §8, §10.
 
 **`set_camera_format(codec, variant, resolution, fps)`** orchestrates the
 three methods above from one combination, so a caller doesn't need to know

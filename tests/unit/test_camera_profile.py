@@ -521,18 +521,22 @@ class TestSettingsSections:
 
 
 def test_pocket_6k_g2_profile_resolves_settings_blocks():
-    """POCKET_6K_G2_v7.9.json carries the CANDIDATE settings families
-    transcribed from the external reverse-engineering doc — see
-    docs/settings.md. Spot-check the load path end to end."""
+    """POCKET_6K_G2_v7.9.json's settings families, originally transcribed
+    from an external reverse-engineering doc — see docs/settings.md. Spot-
+    check the load path end to end; all three are now VERIFIED on real
+    hardware (docs/settings.md §8/§10)."""
     profile = CameraProfile.for_model("POCKET_6K_G2", "v7.9")
 
     codec_quality = profile.require_command("codec_quality")
     assert (codec_quality.category, codec_quality.parameter) == (10, 0)
     assert codec_quality.reserved == 0
-    assert codec_quality.provenance.status == "CANDIDATE"
     # Observed on the 2026-07-20 passive capture — camera reports use
     # CAMERA_REPORT (0x02) on this family's coordinates.
     assert codec_quality.echo_operation == 2
+    # Promoted 2026-07-20: CameraSession.set_codec_quality() confirmed a
+    # genuine (non-redundant) real-hardware write+echo cycle via
+    # examples/change_codec.py's set_camera_format().
+    assert codec_quality.provenance.status == "VERIFIED"
 
     video_format = profile.require_command("video_format")
     assert (video_format.category, video_format.parameter) == (1, 0)
@@ -549,6 +553,10 @@ def test_pocket_6k_g2_profile_resolves_settings_blocks():
     assert (recording_format.category, recording_format.parameter) == (1, 9)
     assert recording_format.data_type is DataType.INT16_ARRAY
     assert recording_format.echo_operation == 2
+    # Promoted 2026-07-20: CameraSession.set_recording_format() confirmed a
+    # genuine write+echo cycle (including the CANDIDATE 0x82 data-type byte)
+    # via examples/change_codec.py's set_camera_format().
+    assert recording_format.provenance.status == "VERIFIED"
 
     assert profile.require_codec("BRAW", "5:1").id == 3
     assert profile.require_codec("ProRes", "HQ").id == 2

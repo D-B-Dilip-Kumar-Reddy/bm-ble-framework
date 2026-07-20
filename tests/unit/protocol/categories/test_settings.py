@@ -287,6 +287,39 @@ class TestDecoders:
         prior_6k_24_report = bytes.fromhex("FF 0E 00 00 01 09 02 02 19 00 19 00 00 18 00 0A 10 00")
         assert unchanged_after_0x10 == prior_6k_24_report
 
+    def test_decodes_real_captured_first_genuine_codec_quality_write_echo(self):
+        """Regression net against the 2026-07-20 examples/change_codec.py
+        run (docs/settings.md section 10) — the first genuine (non-redundant)
+        set_codec_quality() write+echo cycle: ProRes HQ -> 422, confirmed on
+        the 0x0A/0x00 channel."""
+        tx = bytes.fromhex("FF 06 00 00 0A 00 01 00 02 01")
+        rx = bytes.fromhex("FF 06 00 00 0A 00 01 02 02 01")
+
+        tx_header, tx_payload = decode_packet(tx)
+        rx_header, rx_payload = decode_packet(rx)
+
+        assert tx_header.operation is Operation.ASSIGN
+        assert rx_header.operation is Operation.CAMERA_REPORT
+        assert decode_codec_quality(tx_payload, tx_header.data_type) == (2, 1)
+        assert decode_codec_quality(rx_payload, rx_header.data_type) == (2, 1)
+
+    def test_decodes_real_captured_first_genuine_recording_format_write_echo(self):
+        """Same run: the first genuine set_recording_format() write+echo
+        cycle sent with the claimed 0x82 write byte, landing 4K DCI."""
+        tx = bytes.fromhex("FF 0E 00 01 01 09 82 00 19 00 19 00 00 10 70 08 10 00")
+        rx = bytes.fromhex("FF 0E 00 00 01 09 02 02 19 00 19 00 00 10 70 08 10 00")
+
+        tx_header, tx_payload = decode_packet(tx)
+        rx_header, rx_payload = decode_packet(rx)
+
+        assert tx_header.data_type is DataType.INT16_ARRAY
+        assert rx_header.data_type is DataType.INT16
+        expected = RecordingFormat(
+            fps_int=25, sensor_fps_int=25, width=4096, height=2160, frame_flags=0x0010
+        )
+        assert decode_recording_format(tx_payload, tx_header.data_type) == expected
+        assert decode_recording_format(rx_payload, rx_header.data_type) == expected
+
     def test_is_settings_notification_matches_on_category_and_parameter(self):
         header = CommandHeader(
             destination=0xFF,

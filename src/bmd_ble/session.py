@@ -396,13 +396,27 @@ class CameraSession:
         been captured yet.
 
         The echo channel for this family is unconfirmed: the camera may
-        report on the command's own (category, parameter) or on the
-        recording_format coordinates ("mode-notify"), so both are armed and
-        the first matching report is used for verification.
+        report on the command's own (category, parameter), on the
+        recording_format coordinates ("mode-notify"), or on codec_quality's
+        coordinates (the camera reliably reports the new family's
+        remembered quality after any video_format write, regardless of
+        whether set_codec_quality is called separately) — all three that
+        exist in the profile are armed and the first matching report is
+        used for verification.
+
+        KNOWN GAP, confirmed on real hardware (docs/settings.md §10): the
+        mode-notify payload encodes fps/width/height only, never codec — a
+        codec-only switch (same resolution and fps, different family, e.g.
+        4K DCI/ProRes -> 4K DCI/BRAW) produces a mode-notify report
+        byte-identical to the one already seen before the write, which
+        NotificationRouter's staleness filter then discards as a stale
+        duplicate. Arming the codec_quality channel too closes this gap: a
+        codec-only switch still changes what that channel reports, so it
+        becomes the confirmation when mode-notify's content can't be.
         """
         spec = self.profile.require_command("video_format")
         resolution_spec = self.profile.require_resolution(resolution)
-        self.profile.require_codec(codec)
+        codec_spec = self.profile.require_codec(codec)
         fps_spec = self.profile.require_fps_mode(fps)
 
         if resolution_spec.codecs and codec not in resolution_spec.codecs:
@@ -435,6 +449,9 @@ class CameraSession:
         notify_spec = self.profile.command("recording_format")
         if notify_spec is not None:
             keys.append((notify_spec.category, notify_spec.parameter))
+        codec_quality_spec = self.profile.command("codec_quality")
+        if codec_quality_spec is not None:
+            keys.append((codec_quality_spec.category, codec_quality_spec.parameter))
         for category, parameter in keys:
             self._router.arm(category, parameter)
 
@@ -457,7 +474,7 @@ class CameraSession:
                     f"set_video_format({resolution} {codec} {fps}): echo reported "
                     f"(fps_int, m_rate, dimension_enum)={observed}, expected {expected}"
                 )
-        else:
+        elif notify_spec is not None and key == (notify_spec.category, notify_spec.parameter):
             reported_format = decode_recording_format(payload, notify_spec.data_type)
             expected = (fps_spec.fps_int, resolution_spec.width, resolution_spec.height)
             observed = (
@@ -469,6 +486,15 @@ class CameraSession:
                 raise BMDVerificationError(
                     f"set_video_format({resolution} {codec} {fps}): mode-notify reported "
                     f"(fps_int, width, height)={observed}, expected {expected}"
+                )
+        else:
+            reported_codec_id, _reported_variant_id = decode_codec_quality(
+                payload, codec_quality_spec.data_type
+            )
+            if reported_codec_id != codec_spec.id:
+                raise BMDVerificationError(
+                    f"set_video_format({resolution} {codec} {fps}): codec_quality-channel "
+                    f"reported codec_id={reported_codec_id}, expected {codec_spec.id}"
                 )
 
     async def set_recording_format(
