@@ -158,3 +158,13 @@ def decode_packet(data: bytes) -> tuple[CommandHeader, bytes]:
         operation=operation,
     )
     return header, bytes(data[HEADER_LENGTH:])
+
+
+def header_matches(header: CommandHeader, *, category: int, parameter: int) -> bool:
+    """Whether a decoded header's (category, parameter) matches the given pair.
+
+    Shared by every `protocol/categories/*.py` module that needs to pick a
+    specific notification out of the INCOMING_CONTROL stream before
+    decoding its payload — semantics-free, like the rest of this module.
+    """
+    return header.category == category and header.parameter == parameter

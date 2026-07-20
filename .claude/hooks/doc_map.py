@@ -35,6 +35,7 @@ DOC_MAP: list[tuple[str, list[str]]] = [
         ["docs/packet_structure_and_constants.md", "docs/protocol.md"],
     ),
     ("src/bmd_ble/protocol/categories/recording.py", ["docs/recording.md"]),
+    ("src/bmd_ble/protocol/categories/storage.py", ["docs/recording.md"]),
     (
         "src/bmd_ble/camera_controller.py",
         [
@@ -44,6 +45,7 @@ DOC_MAP: list[tuple[str, list[str]]] = [
     ),
     ("src/bmd_ble/notification_router.py", ["docs/session_and_verification.md"]),
     ("src/bmd_ble/session.py", ["docs/session_and_verification.md"]),
+    ("src/bmd_ble/timecode.py", ["docs/timecode.md"]),
     ("src/bmd_ble/camera_profile.py", ["docs/payload_profiles.md"]),
     ("src/bmd_ble/scanner.py", ["docs/protocol.md"]),
     ("src/bmd_ble/constants.py", ["docs/protocol.md", "docs/packet_structure_and_constants.md"]),

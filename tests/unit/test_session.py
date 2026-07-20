@@ -6,23 +6,86 @@ test_camera_profile.py) so `require_command` behaves exactly as in
 production.
 """
 
-from unittest.mock import AsyncMock, MagicMock
+import asyncio
+import time
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+import bmd_ble.session as session_module
 from bmd_ble.camera_profile import CameraProfile
 from bmd_ble.exceptions import BMDVerificationError
+from bmd_ble.protocol.codec import CommandHeader, Operation, encode_packet
+from bmd_ble.protocol.types import DataType
 from bmd_ble.session import CameraSession
+from bmd_ble.timecode import TIMECODE_CATEGORY, TIMECODE_PARAMETER, Timecode
 
 MODEL_KEY = "POCKET_6K_G2"
 FIRMWARE = "v7.9"
 
 
-def make_profile(recording_block: dict | str = "default") -> CameraProfile:
-    """A real CameraProfile with a controllable `commands.recording` block.
+def _bcd(value: int) -> int:
+    tens, ones = divmod(value, 10)
+    return (tens << 4) | ones
 
-    Pass ``recording_block=None`` for a profile without the block, or a dict
-    to override the default sniffer-verified G2 values.
+
+def _timecode_packet(*, frames: int, seconds: int, minutes: int, hours: int) -> bytearray:
+    header = CommandHeader(
+        destination=0xFF,
+        command_id=0x00,
+        reserved=0xFF,
+        category=TIMECODE_CATEGORY,
+        parameter=TIMECODE_PARAMETER,
+        data_type=DataType.INT32,
+        operation=Operation.ASSIGN,
+    )
+    payload = bytes(_bcd(v) for v in (frames, seconds, minutes, hours))
+    return bytearray(encode_packet(header, payload))
+
+
+def _recording_packet(value: int) -> bytearray:
+    """A recording-category CAMERA_REPORT, matching the default profile's
+    category=0x0A/parameter=0x01/INT8 (see `make_profile`'s default block)."""
+    header = CommandHeader(
+        destination=0xFF,
+        command_id=0x00,
+        reserved=0x01,
+        category=0x0A,
+        parameter=0x01,
+        data_type=DataType.INT8,
+        operation=Operation.CAMERA_REPORT,
+    )
+    return bytearray(encode_packet(header, payload=bytes([value])))
+
+
+def _storage_packet(value: int, *, byte_offset: int = 1) -> bytearray:
+    """A storage-category CAMERA_REPORT matching the default profile's
+    write_margin_warning block (category=0x09/parameter=0x01/INT8,
+    meaningful byte at offset 1) — mirrors the real 3-byte capture
+    (`00 01 00` / `00 FE 00`), with `value` placed at `byte_offset` and the
+    other two bytes zero."""
+    header = CommandHeader(
+        destination=0xFF,
+        command_id=0x00,
+        reserved=0x00,
+        category=0x09,
+        parameter=0x01,
+        data_type=DataType.INT8,
+        operation=Operation.CAMERA_REPORT,
+    )
+    payload = bytearray(3)
+    payload[byte_offset] = value & 0xFF
+    return bytearray(encode_packet(header, payload=bytes(payload)))
+
+
+def make_profile(
+    recording_block: dict | str = "default", storage_block: dict | str = "default"
+) -> CameraProfile:
+    """A real CameraProfile with controllable `commands.recording` and
+    `storage.write_margin_warning` blocks.
+
+    Pass ``None`` for either to build a profile lacking that block, or a
+    dict to override the defaults.
     """
     if recording_block == "default":
         recording_block = {
@@ -32,9 +95,19 @@ def make_profile(recording_block: dict | str = "default") -> CameraProfile:
             "reserved": 0x01,
             "values": {"start": 2, "stop": 0},
         }
+    if storage_block == "default":
+        storage_block = {
+            "category": 0x09,
+            "parameter": 0x01,
+            "data_type": "INT8",
+            "byte_offset": 1,
+            "values": {"nominal": 1, "low_margin": -2},
+        }
     raw = {"_meta": {"model": "Pocket 6K G2", "ble_name": "A:TEST"}}
     if recording_block is not None:
         raw["commands"] = {"recording": recording_block}
+    if storage_block is not None:
+        raw["storage"] = {"write_margin_warning": storage_block}
     return CameraProfile._from_raw(MODEL_KEY, FIRMWARE, raw)
 
 
@@ -44,9 +117,19 @@ def make_session(profile: CameraProfile) -> CameraSession:
     session = CameraSession.__new__(CameraSession)
     session.profile = profile
     session.echo_timeout_s = 2.0
+    session.write_margin_window_s = 2.0
     session._router = MagicMock()
     session._router.wait_for = AsyncMock()
     session._controller = AsyncMock()
+    session._latest_timecode = None
+    session.last_start_timecode = None
+    session.last_stop_timecode = None
+    session.is_recording = None
+    session.last_stop_reason = None
+    session.last_stop_signal = None
+    session._last_low_margin_at = None
+    session._unexpected_stop_event = asyncio.Event()
+    session._pending_command = False
     return session
 
 
@@ -118,3 +201,362 @@ class TestSetRecordingState:
             await session.record_start()
 
         session._controller.write_outgoing_control.assert_not_awaited()
+
+
+class TestTimecodeCapture:
+    def _confirmed_echo(self, *, value: int):
+        return (MagicMock(category=0x0A, parameter=0x01), bytes([value]))
+
+    @pytest.mark.asyncio
+    async def test_record_start_sets_canonical_zero_timecode(self):
+        """TIMECODE resets to 00:00:00:00 on real hardware when recording
+        starts (confirmed on POCKET_6K_G2 v7.9 and POCKET_6K_PRO v8.6) — a
+        confirmed record_start must set this canonical zero regardless of
+        whatever `_latest_timecode` currently holds, since that could be a
+        stale leftover reading from the *previous* clip's end."""
+        session = make_session(make_profile())
+        session._router.wait_for.return_value = self._confirmed_echo(value=2)
+        session._latest_timecode = Timecode(hours=1, minutes=0, seconds=0, frames=0)
+
+        await session.record_start()
+
+        assert session.last_start_timecode == Timecode(hours=0, minutes=0, seconds=0, frames=0)
+        assert session.last_stop_timecode is None
+
+    @pytest.mark.asyncio
+    async def test_record_start_sets_canonical_zero_even_with_no_timecode_seen_yet(self):
+        session = make_session(make_profile())
+        session._router.wait_for.return_value = self._confirmed_echo(value=2)
+        # session._latest_timecode already None from make_session
+
+        await session.record_start()
+
+        assert session.last_start_timecode == Timecode(hours=0, minutes=0, seconds=0, frames=0)
+
+    @pytest.mark.asyncio
+    async def test_record_stop_snapshots_latest_timecode(self):
+        session = make_session(make_profile())
+        session._router.wait_for.return_value = self._confirmed_echo(value=0)
+        tc = Timecode(hours=1, minutes=0, seconds=10, frames=0)
+        session._latest_timecode = tc
+
+        await session.record_stop()
+
+        assert session.last_stop_timecode == tc
+
+    @pytest.mark.asyncio
+    async def test_record_stop_snapshots_none_when_no_timecode_seen_yet(self):
+        session = make_session(make_profile())
+        session._router.wait_for.return_value = self._confirmed_echo(value=0)
+        # session._latest_timecode already None from make_session
+
+        await session.record_stop()
+
+        assert session.last_stop_timecode is None
+
+    @pytest.mark.asyncio
+    async def test_failed_verification_does_not_snapshot_timecode(self):
+        session = make_session(make_profile())
+        session._router.wait_for.return_value = None  # no echo -> raises
+        session._latest_timecode = Timecode(hours=0, minutes=0, seconds=5, frames=0)
+
+        with pytest.raises(BMDVerificationError):
+            await session.record_start()
+
+        assert session.last_start_timecode is None
+
+    def test_handle_timecode_decodes_and_stores(self):
+        session = make_session(make_profile())
+        packet = _timecode_packet(frames=10, seconds=53, minutes=12, hours=9)
+
+        session._handle_timecode(MagicMock(), packet)
+
+        assert session._latest_timecode == Timecode(hours=9, minutes=12, seconds=53, frames=10)
+
+    def test_handle_timecode_ignores_malformed_data(self):
+        session = make_session(make_profile())
+
+        session._handle_timecode(MagicMock(), bytearray([0x01, 0x02]))
+
+        assert session._latest_timecode is None
+
+
+class TestLastClipDurationSeconds:
+    def test_returns_none_when_start_missing(self):
+        session = make_session(make_profile())
+        session.last_stop_timecode = Timecode(hours=0, minutes=0, seconds=5, frames=0)
+
+        assert session.last_clip_duration_seconds() is None
+
+    def test_returns_none_when_stop_missing(self):
+        session = make_session(make_profile())
+        session.last_start_timecode = Timecode(hours=0, minutes=0, seconds=0, frames=0)
+
+        assert session.last_clip_duration_seconds() is None
+
+    def test_computes_duration_when_both_present(self):
+        session = make_session(make_profile())
+        session.last_start_timecode = Timecode(hours=0, minutes=0, seconds=0, frames=0)
+        session.last_stop_timecode = Timecode(hours=0, minutes=0, seconds=7, frames=0)
+
+        assert session.last_clip_duration_seconds() == 7.0
+
+    def test_returns_none_when_stop_not_after_start(self):
+        session = make_session(make_profile())
+        session.last_start_timecode = Timecode(hours=0, minutes=0, seconds=10, frames=0)
+        session.last_stop_timecode = Timecode(hours=0, minutes=0, seconds=5, frames=0)
+
+        assert session.last_clip_duration_seconds() is None
+
+
+class TestAenter:
+    @pytest.mark.asyncio
+    async def test_settles_after_subscribing_before_returning(self):
+        """A just-connected camera floods the link with an initial info dump;
+        __aenter__ must wait connect_settle_s (after subscribing, before
+        returning) so the first command isn't sent into that backlog — see
+        real-hardware evidence in docs/session_and_verification.md."""
+        fake_controller = AsyncMock()
+        with (
+            patch.object(
+                session_module, "scan_for_camera", new=AsyncMock(return_value=MagicMock())
+            ),
+            patch.object(session_module, "BMDCameraController", return_value=fake_controller),
+            patch.object(session_module.asyncio, "sleep", new=AsyncMock()) as mock_sleep,
+        ):
+            session = CameraSession(MODEL_KEY, FIRMWARE, connect_settle_s=1.5)
+            result = await session.__aenter__()
+
+        assert result is session
+        fake_controller.connect.assert_awaited_once()
+        fake_controller.subscribe_incoming.assert_awaited_once()
+        fake_controller.subscribe_timecode.assert_awaited_once()
+        mock_sleep.assert_awaited_once_with(1.5)
+
+
+class TestObserveRecordingState:
+    """Real-hardware evidence (slow SD card write speed): the camera can
+    autonomously stop recording without us ever sending a stop command.
+    `_observe_recording_state` is what lets CameraSession notice this from
+    the notification stream instead of only finding out the next time
+    record_stop() is called. See docs/recording.md."""
+
+    def test_updates_is_recording_from_any_recording_notification(self):
+        session = make_session(make_profile())
+
+        session._observe_recording_state(_recording_packet(2))
+        assert session.is_recording is True
+
+        session._observe_recording_state(_recording_packet(0))
+        assert session.is_recording is False
+
+    def test_ignores_non_recording_notifications(self):
+        session = make_session(make_profile())
+
+        session._observe_recording_state(_timecode_packet(frames=0, seconds=0, minutes=0, hours=0))
+
+        assert session.is_recording is None
+
+    def test_ignores_malformed_data(self):
+        session = make_session(make_profile())
+
+        session._observe_recording_state(bytearray([0x01, 0x02]))
+
+        assert session.is_recording is None
+
+    def test_unsolicited_stop_flags_unexpected_and_sets_event(self):
+        session = make_session(make_profile())
+        session.is_recording = True  # already recording, no command in flight
+        tc = Timecode(hours=0, minutes=0, seconds=3, frames=0)
+        session._latest_timecode = tc
+
+        session._observe_recording_state(_recording_packet(0))
+
+        assert session.is_recording is False
+        assert session.last_stop_reason == "unexpected"
+        assert session.last_stop_timecode == tc
+        assert session._unexpected_stop_event.is_set()
+
+    def test_stop_while_pending_command_is_not_flagged_unexpected(self):
+        """The echo for our *own* record_stop() must not be mistaken for an
+        unsolicited stop — see _pending_command in _set_recording_state."""
+        session = make_session(make_profile())
+        session.is_recording = True
+        session._pending_command = True
+
+        session._observe_recording_state(_recording_packet(0))
+
+        assert session.is_recording is False
+        assert session.last_stop_reason is None
+        assert not session._unexpected_stop_event.is_set()
+
+    def test_start_transition_never_flags_unexpected(self):
+        session = make_session(make_profile())
+        session.is_recording = False
+
+        session._observe_recording_state(_recording_packet(2))
+
+        assert session.is_recording is True
+        assert session.last_stop_reason is None
+        assert not session._unexpected_stop_event.is_set()
+
+    def test_no_op_without_a_recording_command_block(self):
+        session = make_session(make_profile(recording_block=None))
+
+        session._observe_recording_state(_recording_packet(0))
+
+        assert session.is_recording is None
+
+
+class TestWaitWhileRecording:
+    @pytest.mark.asyncio
+    async def test_returns_true_when_timeout_elapses_undisturbed(self):
+        session = make_session(make_profile())
+
+        held = await session.wait_while_recording(0.05)
+
+        assert held is True
+
+    @pytest.mark.asyncio
+    async def test_returns_false_when_unexpected_stop_is_observed(self):
+        session = make_session(make_profile())
+        session.is_recording = True
+
+        async def stop_soon():
+            await asyncio.sleep(0.01)
+            session._observe_recording_state(_recording_packet(0))
+
+        asyncio.create_task(stop_soon())
+        held = await session.wait_while_recording(1.0)
+
+        assert held is False
+        assert session.last_stop_reason == "unexpected"
+
+
+class TestRecordStopNoOp:
+    @pytest.mark.asyncio
+    async def test_no_op_when_already_confirmed_not_recording(self):
+        session = make_session(make_profile())
+        session.is_recording = False
+
+        await session.record_stop()
+
+        session._controller.write_outgoing_control.assert_not_awaited()
+        session._router.wait_for.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_still_sends_when_recording_state_unknown(self):
+        session = make_session(make_profile())
+        session.is_recording = None
+        session._router.wait_for.return_value = (
+            MagicMock(category=0x0A, parameter=0x01),
+            bytes([0x00]),
+        )
+
+        await session.record_stop()
+
+        session._controller.write_outgoing_control.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_still_sends_when_recording_state_is_true(self):
+        session = make_session(make_profile())
+        session.is_recording = True
+        session._router.wait_for.return_value = (
+            MagicMock(category=0x0A, parameter=0x01),
+            bytes([0x00]),
+        )
+
+        await session.record_stop()
+
+        session._controller.write_outgoing_control.assert_awaited_once()
+
+
+class TestObserveWriteMargin:
+    """CANDIDATE signal (see docs/recording.md): a storage notification
+    observed to precede a camera-initiated stop on a known-slow SD card.
+    `_observe_write_margin` tracks it; `_observe_recording_state` only
+    attaches it to an unexpected stop when it fired recently enough, and
+    never claims it without direct supporting evidence for that stop."""
+
+    def test_low_margin_alone_does_not_touch_stop_fields(self):
+        session = make_session(make_profile())
+
+        session._observe_write_margin(_storage_packet(-2))
+
+        assert session._last_low_margin_at is not None
+        assert session.last_stop_reason is None
+        assert session.last_stop_signal is None
+
+    def test_nominal_reading_never_sets_low_margin_timestamp(self):
+        session = make_session(make_profile())
+
+        session._observe_write_margin(_storage_packet(1))
+
+        assert session._last_low_margin_at is None
+
+    def test_ignores_malformed_data(self):
+        session = make_session(make_profile())
+
+        session._observe_write_margin(bytearray([0x01, 0x02]))
+
+        assert session._last_low_margin_at is None
+
+    def test_no_op_without_a_storage_command_block(self):
+        session = make_session(make_profile(storage_block=None))
+
+        session._observe_write_margin(_storage_packet(-2))
+
+        assert session._last_low_margin_at is None
+
+    def test_unexpected_stop_within_window_sets_low_write_margin_signal(self):
+        session = make_session(make_profile())
+        session.is_recording = True
+
+        session._observe_write_margin(_storage_packet(-2))
+        session._observe_recording_state(_recording_packet(0))
+
+        assert session.last_stop_reason == "unexpected"
+        assert session.last_stop_signal == "low_write_margin"
+
+    def test_unexpected_stop_with_no_prior_warning_keeps_signal_none(self):
+        session = make_session(make_profile())
+        session.is_recording = True
+
+        session._observe_recording_state(_recording_packet(0))
+
+        assert session.last_stop_reason == "unexpected"
+        assert session.last_stop_signal is None
+
+    def test_unexpected_stop_outside_window_keeps_signal_none(self):
+        session = make_session(make_profile())
+        session.is_recording = True
+        session.write_margin_window_s = 2.0
+        session._last_low_margin_at = time.monotonic() - 5.0  # older than the window
+
+        session._observe_recording_state(_recording_packet(0))
+
+        assert session.last_stop_reason == "unexpected"
+        assert session.last_stop_signal is None
+
+    def test_requested_stop_never_sets_low_write_margin_signal(self):
+        """A confirmed record_stop() must not pick up a stale low-margin
+        reading — last_stop_signal only ever applies to unexpected stops."""
+        session = make_session(make_profile())
+        session.is_recording = True
+        session._pending_command = True
+
+        session._observe_write_margin(_storage_packet(-2))
+        session._observe_recording_state(_recording_packet(0))
+
+        assert session.last_stop_reason is None  # unchanged: _pending_command suppressed it
+        assert session.last_stop_signal is None
+
+    def test_low_margin_timestamp_resets_on_fresh_recording_start(self):
+        session = make_session(make_profile())
+        session.is_recording = False
+        session._last_low_margin_at = time.monotonic()
+
+        session._observe_recording_state(_recording_packet(2))
+
+        assert session.is_recording is True
+        assert session._last_low_margin_at is None

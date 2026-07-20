@@ -141,6 +141,121 @@ storage-related notification, not by polling.
 
 ---
 
+## Camera-initiated stop detection
+
+Real captures (`6K_G2_slow_write_speed_1.txt`, `6K_PRO_slow_write_speed_1.txt`
+— both against an SD card too slow for the recording's write bitrate) showed
+the camera autonomously stopping a recording, sending an unsolicited
+`INCOMING_CONTROL` `CAMERA_REPORT` on the recording `(category, parameter)`
+— the *same* notification shape as a normal record_stop echo — without this
+repo's code ever sending a stop command. In both captures this happened
+within about a second of `record_start` confirming, and every `record_stop()`
+call later in that cycle then got **no echo at all**: the camera was already
+stopped, so a redundant stop command apparently isn't re-echoed.
+
+Two problems followed from this, both now fixed:
+
+**Problem 1 — nothing noticed the stop until the full recording duration had
+elapsed.** `CameraSession` only watched the notification stream for a fresh
+echo *while a `record_start()`/`record_stop()` call was actively waiting for
+one* (via `NotificationRouter.arm()`/`wait_for()`). Anything arriving outside
+that window — like this unsolicited stop, arriving in the middle of a
+script's `asyncio.sleep(RECORD_SECONDS)` — was buffered but nothing ever
+looked at it until the *next* explicit call.
+
+Fixed with `_observe_recording_state()`: `CameraSession._handle_incoming`
+(the real `INCOMING_CONTROL` callback, subscribed in `__aenter__`) now feeds
+*every* notification through this method in addition to the router, decoding
+any recording-category report and updating `is_recording` unconditionally —
+this is a notification-driven read, never inferred from "we sent a command"
+(CLAUDE.md design principle 4). If it observes a `True → False` transition
+while no `record_start()`/`record_stop()` call is currently awaiting its own
+echo (tracked via `_pending_command`, set only for the duration of
+`_set_recording_state`'s own write+wait), that's classified as **unexpected**:
+`last_stop_reason` is set to `"unexpected"`, `last_stop_timecode` is
+snapshotted (mirroring what a requested stop does, so
+`last_clip_duration_seconds()` stays meaningful), and `_unexpected_stop_event`
+is set.
+
+`CameraSession.wait_while_recording(timeout)` replaces a blind
+`asyncio.sleep(duration)`: it returns `True` if `timeout` elapses with
+recording still going, `False` immediately if an unexpected stop is
+observed first — so a script can react right away instead of waiting out
+the rest of a recording that already ended. `examples/record_start_stop.py`
+uses this instead of `asyncio.sleep(RECORD_SECONDS)`.
+
+**Problem 2 — the now-redundant `record_stop()` call raised
+`BMDVerificationError` for a misleading reason.** Once the camera has
+already autonomously stopped, sending another stop command gets no echo at
+all (see above), so the old code always raised `no echo received within
+{echo_timeout_s}s` — technically true, but misleading: it reads as "we don't
+know whether the stop succeeded," when the confirmed state is actually "the
+camera already stopped, on its own, for an as-yet-unknown reason." Fixed:
+`record_stop()` is now a no-op when `is_recording` already positively
+confirms `False` — the requested end state is already true, verified from a
+notification, so there's nothing to send or wait for.
+
+### A CANDIDATE signal: the write-margin warning
+
+The recording category's own echo payload carries no cause — it's the same
+single truthy/falsy byte in both the requested and unexpected cases. But a
+byte-level comparison of the slow-write-speed captures against 7 unrelated
+normal-session captures (same two camera models) found a second, distinct
+notification that reliably precedes the autonomous stop:
+
+```
+FF 07 00 00 09 01 01 02 00 FE 00
+```
+
+Decoded: `category=0x09`, `parameter=0x01`, `data_type=0x01` (`INT8`),
+`operation=0x02` (`CAMERA_REPORT`), 3-byte payload `00 FE 00`. The payload's
+**offset-1 byte** flips from `0x01` (`1`, "nominal") to `0xFE` (`-2`,
+"low_margin") **0.1–1.4 seconds before every autonomous stop observed** —
+6/6 occurrences, 3 start/stop cycles × 2 camera models
+(`POCKET_6K_G2 v7.9`, `POCKET_6K_PRO v8.6`). Across the 7 normal sessions,
+this notification fires exactly once per session and is always `0x01` —
+`0xFE` never appears. Payload offsets 0 and 2 are constant (`0x00`) in every
+sample, both conditions; only offset 1 carries information observed so far.
+
+This is now modeled as `payloads/models/*.json`'s `storage.write_margin_warning`
+block (`category=9, parameter=1, data_type=INT8, byte_offset=1,
+values={"nominal": 1, "low_margin": -2}`, `provenance.status: "CANDIDATE"`),
+decoded via `protocol/categories/storage.py`'s `decode_write_margin`, and
+watched continuously by `CameraSession._observe_write_margin` the same way
+`_observe_recording_state` watches the recording category — every
+`INCOMING_CONTROL` notification, not just ones an active call is waiting on.
+
+If a low-margin reading (`value == spec.values["low_margin"]`, an *exact*
+match — never a sign-based "any negative value" heuristic, per CLAUDE.md
+design principle 6) was seen within `write_margin_window_s` (default `2.0`s,
+chosen from the observed 0.1–1.4s window) before an unexpected stop,
+`CameraSession.last_stop_signal` is set to `"low_write_margin"`. Otherwise
+it stays `None` — including for every *requested* stop, and for an
+unexpected stop with no preceding warning. **`last_stop_signal` is a
+separate attribute from `last_stop_reason`**, which keeps its existing,
+documented `"requested" | "unexpected" | None` contract unchanged; a caller
+wanting the detail checks both:
+
+```python
+if session.last_stop_reason == "unexpected":
+    if session.last_stop_signal == "low_write_margin":
+        ...  # likely a slow SD card
+    else:
+        ...  # stopped for an unknown reason
+```
+
+**What this is not:** confirmed causation, or CLAUDE.md's planned "Storage
+Media Monitoring" subsystem. There is no log of a *different* autostop cause
+(card full, card removed, power loss) to rule those out — attributing this
+signal to "slow write speed" specifically is inference from test context (a
+known-slow card was used in both captures), not something read off the wire
+alone. This also doesn't implement storage-precondition gating — no
+card-ready check, no remaining-capacity tracking, no `BMDStorageError`. See
+"Remaining work" below for the real-hardware follow-up that could resolve
+this.
+
+---
+
 ## Remaining work
 
 Per CLAUDE.md, "Workflow: Adding a New Command":
@@ -176,3 +291,32 @@ Per CLAUDE.md, "Workflow: Adding a New Command":
    yet) — recording's own verification is recorded as structured
    `commands.recording.provenance` data (`status: "VERIFIED"`, method,
    capture refs, date) in `payloads/models/POCKET_6K_G2_v7.9.json`.
+8. ~~Capture the clip length.~~ Done — `CameraSession` tracks the `TIMECODE`
+   reading around a confirmed `record_start`/`record_stop` and exposes
+   `last_clip_duration_seconds()` (see `docs/timecode.md`). The real wire
+   format (a wrapped BMD-style packet, not a bare BCD value) was confirmed
+   against real captures on both `POCKET_6K_G2 v7.9` and `POCKET_6K_PRO
+   v8.6`. Those same captures confirmed TIMECODE resets to `00:00:00:00`
+   when recording starts, so `record_start` sets a canonical zero rather
+   than snapshotting the (often stale, left over from the previous clip)
+   latest reading — see `docs/timecode.md` for the bug this fixed. Duration
+   is still hours/minutes/seconds precision only: the `frames` field is
+   decoded and displayed but not yet used in the math, since its rollover
+   point isn't confirmed to hold across frame rates. **Next**: capture a
+   longer recording, or one at a different frame rate, to confirm the
+   `frames` rollover and extend `duration_seconds` to be frame-accurate if
+   warranted.
+9. ~~Detect a camera-initiated (unexpected) recording stop.~~ Done — see
+   "Camera-initiated stop detection" below.
+10. **Isolate the write-margin warning from other autostop causes.** The
+    `storage.write_margin_warning` CANDIDATE signal (see "A CANDIDATE
+    signal: the write-margin warning" above) is real and repeatable, but
+    only compared against slow-write-speed failures vs. normal successful
+    recordings — not against a *different* autostop cause. Next: a
+    real-hardware session that deliberately induces a card-full stop and/or
+    a card-removed stop, capturing the same way, to check whether the
+    signal is specific to write speed or a more general "recording ended
+    abnormally" indicator. Out of scope for this repo's automated work — no
+    live camera in this environment; a human operator needs to run the
+    repro and share the logs, same iterative loop as every other protocol
+    finding in this doc.

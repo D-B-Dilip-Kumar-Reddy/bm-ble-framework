@@ -1,6 +1,6 @@
 # Payload Profiles — structure, schema, and provenance
 
-**Status:** implemented — schema-validated profiles + `CommandSpec` are live; capability/lookup sections are reserved, not yet populated.
+**Status:** implemented — schema-validated profiles + `CommandSpec` are live; capability/lookup sections are reserved, not yet populated. `storage` has its first entry (a CANDIDATE signal, `StorageSignalSpec`) but is otherwise still reserved.
 
 ## Overview
 
@@ -42,11 +42,24 @@ tool emits blocks directly; JSON Schema can validate every block with one
 `$defs` entry.
 
 Lookup tables (`codec_ids`, `quality_ids`, `resolution_ids`,
-`fps_encodings`), `capabilities`, and `storage` are *not* commands — they are
-data tables consumed by future settings/storage code — so they stay separate
-top-level sections. They are defined in the schema now but deliberately
-absent from the profiles until sniffed on each camera (principle 6: never
-invent values ahead of captures).
+`fps_encodings`) and `capabilities` are *not* commands — they are data
+tables consumed by future settings code — so they stay separate top-level
+sections. They remain defined in the schema but deliberately absent from
+the profiles until sniffed on each camera (principle 6: never invent values
+ahead of captures).
+
+`storage` is no longer purely reserved: the first CANDIDATE storage signal
+(a write-margin warning correlated with camera-initiated recording stops on
+a slow SD card — see `docs/recording.md`'s "Camera-initiated stop
+detection") has landed in both real profiles. `storage` entries are the
+*same generic shape* as `commands` — protocol coordinates, a named `values`
+map, structured `provenance` — minus the send-only fields (`reserved`,
+`operation`, `echo_operation`), since nothing under `storage` is ever
+encoded and sent by this repo's code; these are decode-only hints for
+notifications the camera emits unprompted. A sibling `StorageSignalSpec`
+dataclass (not `CommandSpec`) models this in `camera_profile.py`, and
+`payloads/schema.json` validates it via a `$defs/storageSignal` entry
+mirroring `$defs/command`.
 
 ---
 
@@ -116,6 +129,41 @@ invent values ahead of captures).
 - **`_comment` keys are allowed anywhere** (schema `patternProperties:
   "^_"`) and skipped by the loader.
 
+### A `storage` entry
+
+```json
+"storage": {
+  "write_margin_warning": {
+    "category": 9,
+    "parameter": 1,
+    "data_type": "INT8",
+    "byte_offset": 1,
+    "values": { "nominal": 1, "low_margin": -2 },
+    "provenance": {
+      "status": "CANDIDATE",
+      "method": "passive observation from examples/record_start_stop.py real-hardware logs during induced SD card slow-write-speed testing",
+      "notes": "..."
+    }
+  }
+}
+```
+
+- **`byte_offset`** (new, `storage`-only field, defaults to `0`) — the byte
+  offset within the payload that carries the signal. Every `commands` entry
+  so far reads from the start of the payload (offset 0, implicit); this
+  write-margin signal's meaningful byte was observed at offset 1 instead —
+  offsets 0 and 2 are constant and unexplained on every capture seen so
+  far. Rather than assume offset 0 is universal, `byte_offset` makes it an
+  explicit, sniffer-observed, profile-supplied fact (CLAUDE.md design
+  principle 1) instead of a Python default.
+- **No `reserved`/`operation`/`echo_operation`** — these only mean something
+  for a block this repo encodes and writes to `OUTGOING_CONTROL`; a
+  `storage` entry is decode-only.
+- **`values` only records exact observed values**, e.g. `-2` for
+  `low_margin` — never a range or sign-based generalization. Code compares
+  a decoded reading against `spec.values["low_margin"]` explicitly, not
+  "any negative value" (CLAUDE.md design principle 6).
+
 ---
 
 ## Schema validation at load time
@@ -152,6 +200,14 @@ spec.values["start"]     # 2
 spec.reserved            # 1
 spec.echo_operation      # 2
 spec.provenance.status   # "VERIFIED"
+
+storage_spec = profile.require_storage_signal(
+    "write_margin_warning", ("nominal", "low_margin")
+)  # StorageSignalSpec
+storage_spec.category            # 9
+storage_spec.byte_offset         # 1
+storage_spec.values["low_margin"]  # -2
+storage_spec.provenance.status   # "CANDIDATE"
 ```
 
 - `CommandSpec` (frozen dataclass) carries one command family;
@@ -161,11 +217,17 @@ spec.provenance.status   # "VERIFIED"
   `ValueError` that names the missing block or value names and points at the
   profile JSON path — both `session.py` and `tools/control/` fail the same
   way on an unpopulated profile.
+- `StorageSignalSpec` (frozen dataclass) carries one passively-decoded
+  storage signal, sharing `CommandProvenance` but not `CommandSpec` (see "A
+  `storage` entry" above for why). `profile.storage_signal(name)` /
+  `profile.require_storage_signal(name, value_names)` mirror
+  `command`/`require_command` exactly, pointing at `storage.<name>` in the
+  profile JSON path.
 
-Consumers: `session.py` (`record_start`/`record_stop`),
-`tools/control/send_record_command.py`, and
-`tools/control/discover_command.py` (emits new blocks in exactly this
-shape — see `docs/command_discovery.md`).
+Consumers: `session.py` (`record_start`/`record_stop`,
+`_observe_write_margin`), `tools/control/send_record_command.py`, and
+`tools/control/discover_command.py` (emits new `commands` blocks in exactly
+this shape — see `docs/command_discovery.md`).
 
 ---
 
@@ -182,7 +244,10 @@ shape — see `docs/command_discovery.md`).
 ## Testing
 
 `tests/unit/test_camera_profile.py` covers: every `KNOWN_PROFILES` JSON
-validating and loading, `CommandSpec`/provenance resolution, `require_command`
-error messages, `validate_profile` rejections (typos, bad enums, wrong value
-types, missing provenance), the filename↔`_meta` cross-check, the UNVERIFIED
-load warning, and `_from_raw` leniency.
+validating and loading (including both profiles' `storage.write_margin_warning`
+block resolving identically), `CommandSpec`/`StorageSignalSpec`/provenance
+resolution, `require_command`/`require_storage_signal` error messages,
+`validate_profile` rejections (typos, bad enums, wrong value types, missing
+provenance — for both `commands` and `storage` blocks), the filename↔`_meta`
+cross-check, the UNVERIFIED load warning (and the non-VERIFIED provenance
+INFO log now covering `storage` too), and `_from_raw` leniency.

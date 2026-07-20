@@ -56,6 +56,19 @@ still-capture on an URSA later.
   operator triggered the action. **Capture at least two windows** (e.g.
   `record_start` and `record_stop`) or the filter has no contrast and
   keeps everything.
+
+  **Known limitation:** this heuristic would also filter out a signal like
+  `protocol/categories/storage.py`'s CANDIDATE write-margin warning
+  (category `0x09`, parameter `0x01`) — it ticks frequently enough, and its
+  category/parameter pair is present across essentially every window, to
+  look like ordinary ambient telemetry even though its *value* carries real
+  meaning. That signal was found by comparing raw log bytes directly
+  (`docs/recording.md`'s "Camera-initiated stop detection"), not through
+  this tool. `exclude_ambient` filters on `(category, parameter)` presence,
+  not on whether the *values* within a triple vary meaningfully — a future
+  improvement here could look for exactly this pattern (a triple present
+  everywhere, but whose payload takes on a rare/different value in one
+  specific window).
 - `extract_echo(notifications, category, parameter)` — first
   cleanly-decoded matching echo as `(operation_int, payload_hex)`.
 - `build_command_block(name, confirmed, capture_ref, discovered_on)` —

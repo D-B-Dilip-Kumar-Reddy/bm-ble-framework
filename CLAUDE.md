@@ -59,7 +59,7 @@ Both checks carry configurable timeouts. If neither confirms the state change, r
 *Current implementation status:* recording verification is **echo-only** — none of the known `CAMERA_STATUS` bits encode recording state, so there is no meaningful secondary cross-check for it yet. See `docs/session_and_verification.md`.
 
 ### 4. Observable state model *(planned)*
-A `CameraState` object reflects the last-known camera state. It is updated **only** from incoming BLE notifications — never inferred from "I sent command X therefore state is now Y". On connect, read the current state before any automation begins. *(Not yet implemented — no `state.py` / `CameraState` / `StorageState` exists today; see `docs/session_and_verification.md` for what verification does instead.)*
+A `CameraState` object reflects the last-known camera state. It is updated **only** from incoming BLE notifications — never inferred from "I sent command X therefore state is now Y". On connect, read the current state before any automation begins. *(The full `state.py` / `CameraState` / `StorageState` object is not yet implemented. A small, notification-driven slice of this already exists directly on `CameraSession` — `is_recording`/`last_stop_reason`, updated only from decoded recording-category notifications, used to detect a camera-initiated stop (e.g. on a slow SD card) without waiting on a command's own echo — see `docs/session_and_verification.md` and `docs/recording.md`.)*
 
 ### 5. Strict transport / protocol separation
 - `camera_controller.py` — BLE transport only: connect, disconnect, raw byte read/write, notification subscription. No BMD protocol knowledge.
@@ -108,6 +108,8 @@ src/bmd_ble/
   camera_profile.py         # Load, validate, and cache model/firmware profiles
   camera_controller.py      # BLE transport layer — raw bytes only
   notification_router.py    # Buffer and route INCOMING_CONTROL notifications by (category, param)
+  timecode.py               # TIMECODE characteristic decode + clip-duration math
+                            # (wrapped BMD packet, distinct characteristic — see docs/timecode.md)
   state.py                  # (planned) CameraState + StorageState dataclasses —
                             # updated from notifications only
   session.py                # CameraSession context manager — user-facing API
@@ -119,6 +121,8 @@ src/bmd_ble/
     categories/
       __init__.py
       recording.py          # Record start / stop
+      storage.py            # Passive decode of storage-monitoring
+                            # notifications (CANDIDATE write-margin signal)
       settings.py           # (planned) Codec, quality, resolution, FPS
       media.py              # (planned) Photo capture, playback controls
       metadata.py           # (planned) Video / photo metadata reads
@@ -186,6 +190,7 @@ added, a new `docs/<feature>.md` must be created alongside the code change.
 | `docs/session_and_verification.md` | `CameraSession`, `NotificationRouter` echo buffering (`arm`/`wait_for`), why `CAMERA_STATUS` isn't a secondary cross-check for recording yet |
 | `docs/payload_profiles.md` | Profile JSON structure (`commands` map, `values`, `provenance`), `payloads/schema.json` load-time validation, `CommandSpec` API |
 | `docs/command_discovery.md` | Guided command discovery (`tools/control/discover_command.py`) — candidate sweep, operator confirmation, emitted profile blocks |
+| `docs/timecode.md` | `TIMECODE` wire format (wrapped BMD packet, confirmed by real capture), BCD decode, clip-duration math (`timecode.py`), and why the `frames` field isn't used in duration yet |
 
 ---
 
@@ -225,6 +230,7 @@ Populate this table as categories are confirmed from sniffer sessions. Each cate
 | Category | Description | File |
 |---|---|---|
 | `0x0A` | Recording (record start/stop) | `protocol/categories/recording.py` |
+| `0x09` (param `0x01`) | Storage write-margin signal — CANDIDATE, not confirmed causation, see `docs/recording.md` (category `0x09` is the same ambient-telemetry category `TIMECODE` param `0x04` already lives in) | `protocol/categories/storage.py` |
 
 ### Data types (`protocol/types.py`)
 
@@ -375,7 +381,7 @@ For every write command:
 
 1. Confirm `INCOMING_CONTROL` notifications are active and `NotificationRouter` is buffering
 2. Write command bytes to `OUTGOING_CONTROL`
-3. Await matching echo on `INCOMING_CONTROL` with configurable timeout (default 2 s)
+3. Await matching echo on `INCOMING_CONTROL` with configurable timeout (default 3 s — bumped from an initial 2 s after real-hardware logs showed occasional echo arrivals taking close to that long)
 4. If echo arrives — optionally read `CAMERA_STATUS` as a cross-check
 5. If echo times out and camera is still connected — attempt `CAMERA_STATUS` read
 6. If neither check confirms the expected state → raise `BMDVerificationError`
