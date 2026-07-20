@@ -814,3 +814,133 @@ class TestSetRecordingFormat:
 
         with pytest.raises(BMDVerificationError, match="echo reported"):
             await session.set_recording_format("4K DCI", "25")
+
+
+class TestClosestReachableResolution:
+    """Tests for the private proxy-selection helper set_camera_format uses."""
+
+    def test_picks_closest_available_resolution(self):
+        # 4K DCI has no ProRes dimension_enum in the fixture; HD is the only
+        # other ProRes-enabled resolution, so it's the (only, hence closest)
+        # candidate.
+        session = make_session(make_settings_profile())
+
+        assert session._closest_reachable_resolution("4K DCI", "ProRes") == "HD"
+
+    def test_returns_target_itself_when_it_already_has_the_enum(self):
+        session = make_session(make_settings_profile())
+
+        assert session._closest_reachable_resolution("4K DCI", "BRAW") == "4K DCI"
+
+    def test_raises_when_no_resolution_offers_the_codec(self):
+        session = make_session(make_settings_profile())
+
+        with pytest.raises(ValueError, match="No resolution with a known dimension_enum"):
+            session._closest_reachable_resolution("4K DCI", "H265")
+
+    def test_raises_naming_unknown_target_resolution(self):
+        session = make_session(make_settings_profile())
+
+        with pytest.raises(ValueError, match="no resolution 'UHD'"):
+            session._closest_reachable_resolution("UHD", "ProRes")
+
+
+class TestSetCameraFormat:
+    """Tests for the (codec, variant, resolution, fps) orchestration method.
+
+    These mock CameraSession's own set_video_format/set_codec_quality/
+    set_recording_format rather than the router+echo mechanics — each of
+    those is already thoroughly tested by its own TestSet* class above;
+    set_camera_format's job is purely to sequence them with the right
+    arguments (including the proxy-resolution substitution), which is what
+    these tests verify.
+    """
+
+    @pytest.mark.asyncio
+    async def test_direct_path_uses_target_resolution_for_video_format(self):
+        session = make_session(make_settings_profile())
+        session.set_video_format = AsyncMock()
+        session.set_codec_quality = AsyncMock()
+        session.set_recording_format = AsyncMock()
+
+        await session.set_camera_format("BRAW", "5:1", "4K DCI", "25")
+
+        session.set_video_format.assert_awaited_once_with("4K DCI", "BRAW", "25")
+        session.set_codec_quality.assert_awaited_once_with("BRAW", "5:1")
+        session.set_recording_format.assert_awaited_once_with("4K DCI", "25")
+
+    @pytest.mark.asyncio
+    async def test_proxy_path_switches_video_format_through_closest_resolution_first(self):
+        session = make_session(make_settings_profile())
+        session.set_video_format = AsyncMock()
+        session.set_codec_quality = AsyncMock()
+        session.set_recording_format = AsyncMock()
+
+        # 4K DCI has no ProRes dimension_enum in the fixture -- video_format
+        # must go through HD (the only ProRes-enabled resolution) first,
+        # while set_codec_quality and the final set_recording_format still
+        # target the caller's real request.
+        await session.set_camera_format("ProRes", "HQ", "4K DCI", "25")
+
+        session.set_video_format.assert_awaited_once_with("HD", "ProRes", "25")
+        session.set_codec_quality.assert_awaited_once_with("ProRes", "HQ")
+        session.set_recording_format.assert_awaited_once_with("4K DCI", "25")
+
+    @pytest.mark.asyncio
+    async def test_steps_run_in_order(self):
+        session = make_session(make_settings_profile())
+        order: list[str] = []
+        session.set_video_format = AsyncMock(side_effect=lambda *a: order.append("video_format"))
+        session.set_codec_quality = AsyncMock(side_effect=lambda *a: order.append("codec_quality"))
+        session.set_recording_format = AsyncMock(
+            side_effect=lambda *a: order.append("recording_format")
+        )
+
+        await session.set_camera_format("BRAW", "5:1", "4K DCI", "25")
+
+        assert order == ["video_format", "codec_quality", "recording_format"]
+
+    @pytest.mark.asyncio
+    async def test_propagates_verification_error_from_video_format_step_and_stops(self):
+        session = make_session(make_settings_profile())
+        session.set_video_format = AsyncMock(side_effect=BMDVerificationError("boom"))
+        session.set_codec_quality = AsyncMock()
+        session.set_recording_format = AsyncMock()
+
+        with pytest.raises(BMDVerificationError, match="boom"):
+            await session.set_camera_format("BRAW", "5:1", "4K DCI", "25")
+
+        session.set_codec_quality.assert_not_awaited()
+        session.set_recording_format.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_propagates_verification_error_from_codec_quality_step_and_stops(self):
+        session = make_session(make_settings_profile())
+        session.set_video_format = AsyncMock()
+        session.set_codec_quality = AsyncMock(side_effect=BMDVerificationError("no echo"))
+        session.set_recording_format = AsyncMock()
+
+        with pytest.raises(BMDVerificationError, match="no echo"):
+            await session.set_camera_format("BRAW", "5:1", "4K DCI", "25")
+
+        session.set_recording_format.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_raises_before_any_call_on_unknown_resolution(self):
+        session = make_session(make_settings_profile())
+        session.set_video_format = AsyncMock()
+
+        with pytest.raises(ValueError, match="no resolution 'UHD'"):
+            await session.set_camera_format("ProRes", "HQ", "UHD", "25")
+
+        session.set_video_format.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_raises_before_any_call_on_unknown_variant(self):
+        session = make_session(make_settings_profile())
+        session.set_video_format = AsyncMock()
+
+        with pytest.raises(ValueError, match="no variant '12:1'"):
+            await session.set_camera_format("BRAW", "12:1", "4K DCI", "25")
+
+        session.set_video_format.assert_not_awaited()

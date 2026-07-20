@@ -157,9 +157,9 @@ examples/
   connect_to_camera.py      # Connect-only smoke test (connect, hold, disconnect)
   monitor_incoming.py       # Stream raw INCOMING_CONTROL notifications
   record_start_stop.py      # Echo-verified record start/stop via CameraSession
-  change_codec.py           # BRAW <-> ProRes round trip via set_video_format
-                            # (VERIFIED) + set_codec_quality (CANDIDATE),
-                            # docs/settings.md
+  change_codec.py           # BRAW <-> ProRes round trip via set_camera_format
+                            # (codec+quality+resolution+fps orchestration;
+                            # see docs/settings.md and docs/session_and_verification.md)
   capture_photo.py          # (planned)
   playback.py               # (planned)
 

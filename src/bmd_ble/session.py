@@ -9,13 +9,17 @@ STATUS: record start/stop are implemented with echo-only verification (see
 docs/session_and_verification.md for why CAMERA_STATUS can't yet serve as
 the secondary cross-check CLAUDE.md's verification strategy calls for).
 Settings writes (set_codec_quality / set_video_format /
-set_recording_format) are implemented against the CANDIDATE
-POCKET_6K_G2 v7.9 packet families in docs/settings.md — their echo
-behaviour has not been captured yet, so a timeout there may mean "the
-camera doesn't echo this family" rather than "the write failed"; run the
-tools/ settings capture workflow before trusting them. Storage
-preconditions, GAP/device metadata, and reconnect wiring beyond what
-CameraController already provides are not implemented here yet.
+set_recording_format) are implemented against the POCKET_6K_G2 v7.9
+packet families in docs/settings.md — set_video_format is VERIFIED on real
+hardware, the other two are still CANDIDATE (their echo behaviour hasn't
+been captured yet, so a timeout there may mean "the camera doesn't echo
+this family" rather than "the write failed"). set_camera_format
+orchestrates all three from one (codec, variant, resolution, fps)
+combination, including the two-step workaround the one known
+dimension_enum gap (4K DCI/ProRes) needs — see its own docstring and
+docs/settings.md §9. Storage preconditions, GAP/device metadata, and
+reconnect wiring beyond what CameraController already provides are not
+implemented here yet.
 
 Also tracks the latest TIMECODE reading. A confirmed record_start() snapshots
 a canonical 00:00:00:00 (TIMECODE is known to reset at recording start on
@@ -519,6 +523,90 @@ class CameraSession:
                 f"set_recording_format({resolution} {fps}): echo reported "
                 f"(fps_int, width, height)={observed}, expected {expected}"
             )
+
+    def _closest_reachable_resolution(self, target: str, codec: str) -> str:
+        """The resolution offering `codec` a known `dimension_enum` whose
+        pixel dimensions are closest to `target`'s — the `video_format`
+        "proxy" `set_camera_format` switches through when `target` itself
+        has no known `dimension_enum` for `codec` (currently: 4K DCI under
+        ProRes, which has no confirmed enum but is reachable in two steps
+        via UHD — see docs/settings.md §9). Distance is plain pixel-count
+        difference (`|Δwidth| + |Δheight|`); with only two ProRes-enabled
+        resolutions in the current profile (`HD`, `UHD`) this reliably picks
+        `UHD` for a 4K DCI target, and the metric generalizes cleanly if a
+        future profile adds more.
+        """
+        target_spec = self.profile.require_resolution(target)
+        candidates = [
+            (name, spec)
+            for name, spec in self.profile.resolutions.items()
+            if codec in spec.dimension_enums
+        ]
+        if not candidates:
+            raise ValueError(
+                f"No resolution with a known dimension_enum for codec '{codec}' exists in "
+                f"{self.profile.model_key} {self.profile.firmware}'s profile — '{target}' "
+                f"under '{codec}' isn't reachable via video_format at all yet."
+            )
+        name, _spec = min(
+            candidates,
+            key=lambda pair: (
+                abs(pair[1].width - target_spec.width) + abs(pair[1].height - target_spec.height)
+            ),
+        )
+        return name
+
+    async def set_camera_format(self, codec: str, variant: str, resolution: str, fps: str) -> None:
+        """Set codec family, quality variant, resolution, and frame rate
+        together from one (codec, variant, resolution, fps) combination —
+        the orchestration `CameraSession` exposes so a caller doesn't need
+        to know which of the three settings packets (docs/settings.md)
+        accomplishes which part, or that one (resolution, codec) pair —
+        currently only 4K DCI/ProRes — needs a two-step workaround.
+
+        Sequence, each step already independently echo-verified by the
+        method it calls (real-hardware evidence: docs/settings.md §8-§9):
+
+          1. `set_video_format(resolution, codec, fps)` if `resolution` has
+             a known `dimension_enum` for `codec`. Otherwise — a
+             `video_format` write can only select a (resolution, codec)
+             pair it has a `dimension_enum` for — switch through the
+             pixel-dimension-closest resolution `codec` *does* have one
+             for instead (`_closest_reachable_resolution`), which gets the
+             codec family right even though the resolution isn't the
+             caller's target yet.
+          2. `set_codec_quality(codec, variant)` — now that the codec
+             family is confirmed active.
+          3. `set_recording_format(resolution, fps)` — lands the caller's
+             exact requested resolution and fps directly. This works even
+             when step 1 only got the codec family right (not the
+             resolution): `recording_format` encodes raw width/height, not
+             a codec-locked enum, so it can retarget resolution within
+             whatever family step 1 selected (confirmed on real hardware,
+             docs/settings.md §4.2's third run).
+
+        This method adds no verification of its own beyond what each step
+        already does — a failure at any step raises `BMDVerificationError`
+        or `BMDUnsupportedError` from that step, and later steps don't run.
+
+        KNOWN RISK (see `set_codec_quality`'s own docstring): step 1's
+        `video_format` write resets the codec family's quality to a
+        per-family remembered value; if that happens to already match the
+        `variant` requested in step 2, step 2's write is a no-op the camera
+        doesn't echo, and `BMDVerificationError` is indistinguishable from
+        a real failure. Not papered over here — see docs/settings.md §8.
+        """
+        resolution_spec = self.profile.require_resolution(resolution)
+        self.profile.require_codec(codec, variant)
+
+        if codec in resolution_spec.dimension_enums:
+            format_resolution = resolution
+        else:
+            format_resolution = self._closest_reachable_resolution(resolution, codec)
+
+        await self.set_video_format(format_resolution, codec, fps)
+        await self.set_codec_quality(codec, variant)
+        await self.set_recording_format(resolution, fps)
 
     async def _wait_first_echo(
         self, keys: list[tuple[int, int]], *, timeout: float

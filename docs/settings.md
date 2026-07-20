@@ -14,10 +14,12 @@ clean, decoded echo (§7), and the write mechanism, echo channel, and
 `CameraSession.set_video_format()`'s own verification logic are confirmed
 by a real 2/2 round trip (§8) — the missing piece every earlier round
 pointed at. 4K DCI/ProRes's `dimension_enum` remains unknown after an
-exhaustive `0x01`–`0x16` search (§7–§8). `_meta.status` stays `UNVERIFIED`
-overall per design principle 8 — plenty of the profile is still
-unpopulated (media, metadata, playback) even though this one family is
-fully verified.
+exhaustive `0x01`–`0x16` search (§7–§8), so `CameraSession.set_camera_format`
+(§9) reaches it with a two-step workaround (proxy through UHD, then
+`recording_format`'s raw width/height) instead of waiting on that gap to
+close. `_meta.status` stays `UNVERIFIED` overall per design principle 8 —
+plenty of the profile is still unpopulated (media, metadata, playback)
+even though this one family is fully verified.
 
 ## Provenance and evidence status
 
@@ -724,7 +726,62 @@ this run — a third corroboration (after §5's initial sighting and §7's
 resolutions, and now codec families, well outside any recording context.
 No change to the signal's modeling; see `docs/recording.md`.
 
-## 9. Code surface
+## 9. `set_camera_format` — the combination orchestration method
+
+`CameraSession.set_camera_format(codec, variant, resolution, fps)` (added
+2026-07-20) is the surface a script uses when it just wants "make the
+camera look like this," without knowing which of the three settings
+packets accomplishes which part, or that one combination needs a
+workaround. Internally it sequences the three methods already documented
+above:
+
+1. **codec + resolution** — `set_video_format(resolution, codec, fps)`, if
+   `resolution` has a known `dimension_enum` for `codec`. If not (today,
+   only 4K DCI under ProRes — §7–§8's exhausted search), a `video_format`
+   write can only select a (resolution, codec) pair it *has* an enum for,
+   so it switches through the pixel-dimension-closest resolution that
+   `codec` does have one for instead (`_closest_reachable_resolution`) —
+   this only gets the codec **family** right, not yet the target
+   resolution.
+2. **quality** — `set_codec_quality(codec, variant)`, now that the codec
+   family is confirmed active.
+3. **fps (and, if step 1 took the proxy path, the real resolution)** —
+   `set_recording_format(resolution, fps)`. This always targets the
+   caller's real `resolution`, not the proxy: `recording_format` encodes
+   raw width/height rather than a codec-locked enum, so it can retarget
+   resolution within whatever family step 1 selected — confirmed on real
+   hardware by §4.2's third run, which changed resolution+fps via
+   `recording_format` alone with no `video_format` write in that request
+   at all.
+
+For 4K DCI/ProRes specifically this means: `video_format` to UHD/ProRes
+(the closest ProRes-enabled resolution) → `codec_quality` to the requested
+variant → `recording_format` to 4K DCI — two packets to get the codec
+family right and the third to land the actual target, since no single
+`dimension_enum` for that exact combination is known. For any combination
+that *does* have a direct enum, step 1 already lands on the real target,
+and step 3's `recording_format` call re-asserts the same values — redundant
+in that case, but harmless, and keeps the method's behavior uniform
+regardless of which path it took.
+
+`_closest_reachable_resolution(target, codec)` picks by minimum pixel-count
+distance (`|Δwidth| + |Δheight|`) among resolutions that have a
+`dimension_enum` for `codec` — a principled, generalizable rule that
+happens to select `UHD` for a `4K DCI` target today (the profile's only
+other ProRes-enabled resolution), documented in the method's own
+docstring. It raises `ValueError` if `codec` has no enum'd resolution at
+all in the profile (nothing to proxy through).
+
+**Adds no verification of its own** — each step already raises
+`BMDVerificationError`/`BMDUnsupportedError`/`ValueError` independently,
+and a failure at any step stops the sequence (later steps don't run).
+Inherits the known `set_codec_quality` no-echo-on-redundant-write risk
+(below) unmitigated — step 1's `video_format` write can reset quality to
+a value step 2 then redundantly "sets" again, which the camera won't echo.
+`examples/change_codec.py` demonstrates both paths (a direct BRAW/4K DCI
+combination and the ProRes/4K DCI proxy case) in one run.
+
+## 10. Code surface
 
 | Piece | Where |
 |---|---|
@@ -733,10 +790,10 @@ No change to the signal's modeling; see `docs/recording.md`.
 | CANDIDATE data type | `protocol/types.py` `DataType.INT16_ARRAY` (0x82) |
 | Profile blocks + tables | `payloads/models/POCKET_6K_G2_v7.9.json` `commands.codec_quality` / `commands.video_format` / `commands.recording_format`, `codecs`, `resolutions`, `fps_modes`; schema `$defs` `codecSpec`/`resolutionSpec`/`fpsModeSpec` |
 | Profile accessors | `camera_profile.py` `require_codec` / `require_resolution` / `require_fps_mode` (`CodecSpec`/`ResolutionSpec`/`FpsModeSpec`) |
-| Session methods | `session.py` `set_codec_quality` / `set_video_format` / `set_recording_format` (see `docs/session_and_verification.md` for the echo strategy) |
+| Session methods | `session.py` `set_codec_quality` / `set_video_format` / `set_recording_format` (see `docs/session_and_verification.md` for the echo strategy), plus the `set_camera_format` orchestration (§9) and its `_closest_reachable_resolution` helper |
 | Tools | `tools/sniffers/sniffer_settings.py` (passive), `tools/control/send_settings_command.py` (active, typed-yes gated) |
 | Example | `examples/change_codec.py` |
-| Tests | `tests/unit/protocol/categories/test_settings.py`, plus settings cases in `test_codec.py`, `test_types.py`, `test_camera_profile.py`, `test_session.py` |
+| Tests | `tests/unit/protocol/categories/test_settings.py`, plus settings cases in `test_codec.py`, `test_types.py`, `test_camera_profile.py`, `test_session.py` (`TestSetCameraFormat`, `TestClosestReachableResolution`) |
 
 ### Session verification strategy for settings writes
 

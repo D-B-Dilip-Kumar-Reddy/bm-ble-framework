@@ -177,6 +177,20 @@ write, since `CameraSession` doesn't track current codec/quality state (no
 `CameraState` yet, design principle 4); the error message names this
 possibility instead. See `docs/settings.md` §8.
 
+**`set_camera_format(codec, variant, resolution, fps)`** orchestrates the
+three methods above from one combination, so a caller doesn't need to know
+which packet does which part. It sequences `set_video_format` →
+`set_codec_quality` → `set_recording_format`, adding no verification of
+its own — a failure at any step raises from that step and later steps
+don't run. Its only real logic is choosing what to pass `set_video_format`:
+the caller's real target resolution when a `dimension_enum` is known for
+it, or (currently only 4K DCI/ProRes) the pixel-dimension-closest
+resolution that *does* have one, via a private `_closest_reachable_resolution`
+helper — `set_recording_format`'s closing call still targets the caller's
+real resolution either way, since that packet encodes raw width/height
+rather than a codec-locked enum. Full design rationale and the real-hardware
+evidence behind the two-step workaround: `docs/settings.md` §9.
+
 ### Timecode tracking and clip duration
 
 `__aenter__` also subscribes `TIMECODE`, storing the latest decoded reading
