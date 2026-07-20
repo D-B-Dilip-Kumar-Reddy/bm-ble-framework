@@ -159,12 +159,17 @@ mirroring `$defs/command`.
   appended with its own date, before `status` finally moves past
   `CANDIDATE`. The three settings families
   (`POCKET_6K_G2_v7.9.json`'s `commands.codec_quality` /
-  `video_format` / `recording_format`) are the worked example: each
-  block's notes now record the original external-document transcription,
-  a 2026-07-20 passive-capture confirmation, a 2026-07-20 operator-confirmed
-  active-send round, and (for `video_format`) a 2026-07-20 probe sweep
-  whose decoded echoes confirmed every known `dimension_enum` value — in
-  that order, each dated — see `docs/settings.md` §5–§7.
+  `video_format` / `recording_format`) are the worked example — and
+  `video_format` is the completed one: its notes record the original
+  external-document transcription, a 2026-07-20 passive-capture
+  confirmation, an operator-confirmed active-send round, a probe sweep
+  whose decoded echoes confirmed every known `dimension_enum` value, and
+  finally a real `CameraSession.set_video_format()` round trip (2/2,
+  echo-verified) — five rounds, each dated, before `status` actually
+  moved from `CANDIDATE` to `VERIFIED`. `codec_quality` and
+  `recording_format` are still mid-sequence, stalled at the
+  operator-confirmed-but-no-clean-echo stage. See `docs/settings.md`
+  §5–§8.
 - **A lookup-table entry can be *removed*, not just added, as evidence
   accumulates** — this isn't only an additive process. `resolutions`'
   `"3.7K Anamorphic alt"` entry (a second `dimension_enum` guessed for the

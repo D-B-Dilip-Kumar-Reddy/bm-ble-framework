@@ -134,10 +134,15 @@ structure.
 ### Settings writes (`set_codec_quality` / `set_video_format` / `set_recording_format`)
 
 The three settings methods follow the same profile-driven
-arm-write-await-echo pattern as recording, against the CANDIDATE packet
-families in `docs/settings.md` (which also tabulates exactly which decoded
-payload elements each method compares, and which it deliberately doesn't).
-Two deviations from the recording flow:
+arm-write-await-echo pattern as recording, against the packet families in
+`docs/settings.md` (which also tabulates exactly which decoded payload
+elements each method compares, and which it deliberately doesn't).
+`set_video_format` is confirmed VERIFIED on real hardware — a real 2/2
+round trip through `CameraSession.set_video_format()` itself, not just a
+raw send tool, echo-verified both switches on the mode-notify channel
+below (`docs/settings.md` §8). `set_codec_quality` and
+`set_recording_format` remain CANDIDATE. Two deviations from the recording
+flow:
 
 - **`set_video_format` arms two echo channels.** The FORMAT packet's echo
   behaviour is uncaptured, and a mode change plausibly reports as the
@@ -154,11 +159,23 @@ Two deviations from the recording flow:
   combination is supported but its `dimension_enum` hasn't been
   reverse-engineered yet.
 
-Because the echo behaviour for all three families is unconfirmed, a
-`BMDVerificationError: no echo received` from these methods can mean "the
-camera doesn't echo this family" rather than "the write failed" — the
-error text says so, and `docs/settings.md`'s runbook is the path to
-resolving it.
+Because the echo behaviour for `codec_quality` and `recording_format` is
+still unconfirmed, a `BMDVerificationError: no echo received` from those
+two methods can mean "the camera doesn't echo this family" rather than
+"the write failed" — the error text says so, and `docs/settings.md`'s
+runbook is the path to resolving it. `set_codec_quality` specifically has
+a second, now-confirmed false-positive mode: real hardware showed the
+camera's `0x0A/0x00` report only fires on an *actual applied change* — a
+call requesting the (codec, variant) the camera is already at (easy to hit
+right after a `set_video_format` switch, since each codec family
+remembers its own last-set quality independently) produces no report and
+the same "no echo received" error, indistinguishable from a genuine
+failure. Mirrors `record_stop()`'s documented no-echo-on-redundant-command
+behavior (`docs/recording.md`) — but unlike `record_stop()`,
+`set_codec_quality` has no `is_recording`-style guard to skip a redundant
+write, since `CameraSession` doesn't track current codec/quality state (no
+`CameraState` yet, design principle 4); the error message names this
+possibility instead. See `docs/settings.md` §8.
 
 ### Timecode tracking and clip duration
 

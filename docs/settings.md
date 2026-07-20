@@ -1,18 +1,23 @@
 # Settings — codec, quality, resolution, FPS
 
-**Status:** CANDIDATE — three packet families implemented end to end
-(`protocol/categories/settings.py`, profile blocks, `CameraSession` methods,
-capture tooling). The **report side** of `codec_quality` and
-`recording_format` is sniffer-confirmed by this repo's own passive capture
-(§5, 2026-07-20). The **write side** of all three families is
-operator-confirmed on real hardware (§6, 2026-07-20 active sends) —
-including the doc's two central claims (`codec_quality` alone can't switch
-codec families; `video_format` can). All 8 known `dimension_enum` values
-are now confirmed by a clean, decoded echo too (§7, 2026-07-20 probe
-sweep, run after a tooling fix) — only 4K DCI/ProRes's enum remains
-unknown. Nothing is hardware-`VERIFIED` yet: every family still needs a
-round trip through `CameraSession` itself (not just the raw send tool)
-before promotion — see §6/§7 for exactly what's missing.
+**Status:** `video_format` is `VERIFIED` (2026-07-20) — the only settings
+family to cross that bar so far. `codec_quality` and `recording_format`
+stay `CANDIDATE`: their report-side coordinates are sniffer-confirmed by
+this repo's own passive capture (§5), and the doc's central
+`codec_quality`-can't/`video_format`-can codec-switch claims are both
+operator-confirmed on real hardware (§6), but neither has yet produced a
+genuine write+echo confirmation through `CameraSession` itself — §8
+explains why the one attempt at `codec_quality` didn't count (a
+methodological no-op, not a protocol failure) and what a real test needs.
+All 8 known `video_format` `dimension_enum` values are confirmed by a
+clean, decoded echo (§7), and the write mechanism, echo channel, and
+`CameraSession.set_video_format()`'s own verification logic are confirmed
+by a real 2/2 round trip (§8) — the missing piece every earlier round
+pointed at. 4K DCI/ProRes's `dimension_enum` remains unknown after an
+exhaustive `0x01`–`0x16` search (§7–§8). `_meta.status` stays `UNVERIFIED`
+overall per design principle 8 — plenty of the profile is still
+unpopulated (media, metadata, playback) even though this one family is
+fully verified.
 
 ## Provenance and evidence status
 
@@ -318,7 +323,7 @@ the write. `--connect-settle-seconds` (default `6.0`s, added same date) now
 waits it out first — every command above already benefits from it without
 changing the command line.
 
-### 4.3 End to end: the session path
+### 4.3 End to end: the session path — ✅ RUN 2026-07-20, results in §8
 
 ```bash
 python examples/change_codec.py
@@ -329,7 +334,10 @@ to BRAW) through `CameraSession`'s echo verification. §5 established that
 body-initiated changes report on `0x01/0x09` and `0x0A/0x00` — both
 channels the session methods already await — so verification is *expected*
 to work; whether a written command triggers the same reports is exactly
-what this step tests. A `BMDVerificationError: no echo received` with the
+what this step tests. `set_video_format` passed 2/2, promoting
+`commands.video_format` to `VERIFIED` — see §8 for the full byte evidence
+and the (unrelated) reason `set_codec_quality` still needs a retest. A
+`BMDVerificationError: no echo received` with the
 camera *visibly changing* would mean writes don't trigger the reports body
 changes do — feed that back into the profile blocks and, if needed, the
 session verification strategy.
@@ -604,7 +612,119 @@ at the BRAW resolutions used here, unrelated to recording at all. Recorded
 in the profile's provenance notes; no change to the signal's `values` or
 `CameraSession`'s behavior.
 
-## 8. Code surface
+## 8. Fourth round — CameraSession round trip + exhausted near-range enum search (2026-07-20)
+
+Runbook §4.3, finally run: `examples/change_codec.py` against real
+`POCKET_6K_G2 v7.9` hardware. This is the step every earlier round pointed
+at as the remaining gap — up to now, every echo confirmation had come from
+the raw `send_settings_command.py` tool, never from `CameraSession`'s own
+verification logic.
+
+### `set_video_format` — 2/2 confirmed through CameraSession itself
+
+```
+=== switch to ProRes (UHD @ 25) ===
+TX: FF 09 00 01 01 00 01 00 19 00 06 00 00
+RX (0x01/0x09): 19 00 19 00 00 0F 70 08 10 00  -> 3840x2160 = UHD
+RX (0x0A/0x00, moments later): 02 00           -> ProRes, HQ
+switch to ProRes (UHD @ 25) confirmed by echo ✓
+
+=== switch back to BRAW (4K DCI @ 25) ===
+TX: FF 09 00 01 01 00 01 00 19 00 08 00 00
+RX (0x01/0x09): 19 00 19 00 00 10 70 08 10 00  -> 4096x2160 = 4K DCI
+RX (0x0A/0x00, moments later): 03 03           -> BRAW, 5:1
+switch back to BRAW (4K DCI @ 25) confirmed by echo ✓
+```
+
+`CameraSession.set_video_format()` armed both its own coordinates
+(`0x01/0x00`) and the mode-notify coordinates (`0x01/0x09`) before each
+write, exactly as designed since §6 — and, exactly as every prior round
+predicted, the confirmation landed on `0x01/0x09` both times; `0x01/0x00`
+itself still never echoed anything. **This promotes `commands.video_format`
+to `VERIFIED`**: the packet bytes, the echo channel, and `CameraSession`'s
+own arm/write/wait_for logic are now all confirmed on real hardware, not
+just the raw tool. Combined with §7's 8/8 byte-exact `dimension_enum`
+confirmations, this is the most thoroughly verified family in this doc.
+
+A bonus confirmation rode along in the codec reports: after switching to
+ProRes with no `codec_quality` write at all, the camera reported quality
+`HQ` (`02 00`); after switching back to BRAW, it reported `5:1` (`03 03`)
+— the same quality that had been active in BRAW before this run started
+(from earlier probe-sweep sessions). See the next section for what this
+implies.
+
+### `set_codec_quality` — two false failures explain a real behavior
+
+Both `set_codec_quality` calls in this run raised
+`BMDVerificationError("no echo received")`:
+
+```
+=== set ProRes variant HQ ===
+TX: FF 06 00 00 0A 00 01 00 02 00
+(3s of only ambient category-9 ticks — no 0x0A/0x00 report)
+set ProRes variant HQ NOT confirmed: ... no echo received within 3.0s
+
+=== set BRAW variant 5:1 ===
+TX: FF 06 00 00 0A 00 01 00 03 03
+(3s of only ambient category-9 ticks — no 0x0A/0x00 report)
+set BRAW variant 5:1 NOT confirmed: ... no echo received within 3.0s
+```
+
+These are **not** evidence `codec_quality` writes fail. Look at what each
+one requested against what the *previous* section's codec report had just
+shown: `set_codec_quality("ProRes", "HQ")` ran right after the camera had
+already reported itself at ProRes/HQ; `set_codec_quality("BRAW", "5:1")`
+ran right after it had reported BRAW/5:1. Both calls asked the camera to
+do something it was already doing. The camera's `0x0A/0x00` report
+evidently fires **only on an actual applied change** — a redundant write
+gets no report and thus no echo, the exact same behavior
+`docs/recording.md` documents for `record_stop()` (a redundant stop while
+already stopped never echoes either). This is now documented on
+`CameraSession.set_codec_quality`'s own docstring and in its
+`BMDVerificationError` message.
+
+This also reveals a mechanism worth naming: **a codec family remembers its
+own last-set quality variant**, independent of the *other* family's
+setting. Switching to ProRes doesn't reset quality to some fixed default —
+it restores whatever ProRes was last set to (here, `HQ`, its apparent
+factory/session default) — and switching back to BRAW restored `5:1`
+(left over from §7's probe sweep, run in the same longer session). A
+future write to one family's quality has no effect on the other family's
+remembered value.
+
+`examples/change_codec.py` had a latent bug exposed by this: it always
+requested the same fixed target variant per family, which is guaranteed to
+eventually collide with whatever that family's remembered value already
+is (as it did here, on both legs). Fixed by sending two *different*
+variants per family in sequence — the first may harmlessly no-op exactly
+as above (not counted toward the script's pass/fail summary), the second
+is guaranteed to be a real change from whatever preceded it, so it
+actually exercises the write+echo path. `commands.codec_quality` stays
+`CANDIDATE`: this run still produced zero real write+echo confirmations
+for it (both were coincidental no-ops) — the fixed script is what would
+finally produce one on a future run.
+
+### 4K DCI/ProRes: the near-cluster search is exhausted
+
+The operator additionally probed `0x0A`, `0x0B`, `0x0C`, `0x15`, and `0x16`
+(not captured to a saved log this time) — none produced 4K DCI under
+ProRes either. Combined with §7's `0x01`–`0x14` sweep, **every value from
+`0x01` to `0x16` has now been tried**, and none selects it. Either its enum
+lies well outside this cluster, or 4K DCI isn't reachable under ProRes via
+a single `dimension_enum` byte at all. `resolutions."4K DCI".dimension_enums`
+still has no `ProRes` entry, and `set_video_format("4K DCI", "ProRes", ...)`
+still raises pointing here — this is now a settled, standing gap rather
+than "not yet searched."
+
+### The write-margin signal, once more
+
+`low_margin`/`-2` appeared again immediately after the ProRes/UHD switch in
+this run — a third corroboration (after §5's initial sighting and §7's
+~18-cycle persistence) of the reading persisting across sessions,
+resolutions, and now codec families, well outside any recording context.
+No change to the signal's modeling; see `docs/recording.md`.
+
+## 9. Code surface
 
 | Piece | Where |
 |---|---|
@@ -624,9 +744,9 @@ in the profile's provenance notes; no change to the signal's `values` or
 arm-write-await pattern on the command's own (category, parameter).
 `set_video_format` arms **two** channels — its own `0x01/0x00` and the
 recording_format coordinates `0x01/0x09` — and accepts the first fresh
-report on either, because the echo channel for a FORMAT write is
-unconfirmed (a mode change plausibly reports as the mode struct on `1/9`).
-Payload comparison per channel:
+report on either. §8 confirmed this design choice on real hardware: two
+`CameraSession.set_video_format()` calls both landed their confirmation on
+`0x01/0x09`, never `0x01/0x00`. Payload comparison per channel:
 
 | Echo channel | Compared | Deliberately not compared |
 |---|---|---|
@@ -640,3 +760,15 @@ use in this repo — design principle 7) is raised before any write when the
 profile says the camera doesn't offer the codec at that resolution;
 a missing dimension_enum raises `ValueError` pointing at the capture
 workflow instead, since that's a profile gap, not a camera limitation.
+
+**`codec_quality`'s "no echo" failure mode, confirmed on real hardware
+(§8):** the camera's `0x0A/0x00` report only fires on an *actual applied
+change* — a `set_codec_quality` call requesting the (codec, variant) the
+camera is already at (which happens easily right after `set_video_format`,
+since a family remembers its own last-set quality independently of the
+other family) produces no report and thus a `BMDVerificationError`
+indistinguishable from a real failure. Mirrors `record_stop()`'s
+documented no-echo-on-redundant-command behavior (`docs/recording.md`) —
+`set_codec_quality` has no equivalent `is_recording`-style guard to skip
+the write, since `CameraSession` doesn't track current codec/quality state
+(no `CameraState` yet, design principle 4); the error message says so.

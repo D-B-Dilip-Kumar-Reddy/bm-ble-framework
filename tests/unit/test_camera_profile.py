@@ -540,6 +540,10 @@ def test_pocket_6k_g2_profile_resolves_settings_blocks():
     # The camera never reports on 1/0 (2026-07-20 capture) — no
     # echo_operation may be recorded until a write-side echo is observed.
     assert video_format.echo_operation is None
+    # Promoted 2026-07-20: CameraSession.set_video_format() itself confirmed
+    # 2/2 real-hardware switches via examples/change_codec.py, on top of the
+    # dimension_enum probe sweep's 8/8 byte-exact confirmations.
+    assert video_format.provenance.status == "VERIFIED"
 
     recording_format = profile.require_command("recording_format")
     assert (recording_format.category, recording_format.parameter) == (1, 9)
@@ -549,7 +553,8 @@ def test_pocket_6k_g2_profile_resolves_settings_blocks():
     assert profile.require_codec("BRAW", "5:1").id == 3
     assert profile.require_codec("ProRes", "HQ").id == 2
     four_k = profile.require_resolution("4K DCI")
-    assert four_k.dimension_enums == {"BRAW": 8}  # ProRes enum not captured yet
+    # ProRes enum still unknown — 0x01-0x16 all probed 2026-07-20, none matched.
+    assert four_k.dimension_enums == {"BRAW": 8}
     assert profile.require_fps_mode("23.98").m_rate == 1
     assert profile.require_fps_mode("23.98").fps_int == 24
 

@@ -336,6 +336,15 @@ class CameraSession:
         BRAW <-> ProRes, even though it carries a codec id — use
         `set_video_format` for a codec-family switch, then this for the
         variant.
+
+        OBSERVED ON REAL HARDWARE (2026-07-20, docs/settings.md §8): the
+        camera's 0x0A/0x00 report only fires on an actual applied change —
+        requesting the (codec, variant) the camera is *already* at (e.g.
+        right after `set_video_format` switches families, which resets the
+        quality to a per-family remembered value) produces no report at
+        all, and this call raises `BMDVerificationError` for that reason,
+        not because the write failed. Mirrors `record_stop()`'s documented
+        no-echo-on-redundant-command behavior (docs/recording.md).
         """
         spec = self.profile.require_command("codec_quality")
         codec_spec = self.profile.require_codec(codec, variant)
@@ -357,8 +366,9 @@ class CameraSession:
         if result is None:
             raise BMDVerificationError(
                 f"set_codec_quality({codec} {variant}): no echo received within "
-                f"{self.echo_timeout_s}s (this family's echo behaviour is not yet "
-                f"captured — see docs/settings.md)"
+                f"{self.echo_timeout_s}s — either this family's echo behaviour is not "
+                f"captured yet, or the camera was already at ({codec}, {variant}) and simply "
+                f"didn't report a no-op (see docs/settings.md)"
             )
         _header, payload = result
         reported = decode_codec_quality(payload, spec.data_type)
