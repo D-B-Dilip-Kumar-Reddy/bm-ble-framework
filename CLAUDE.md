@@ -126,8 +126,10 @@ src/bmd_ble/
       storage.py            # Passive decode of storage-monitoring
                             # notifications (CANDIDATE write-margin signal)
       settings.py           # Codec/quality, video format (codec-family switch),
-                            # recording format (resolution + FPS) — CANDIDATE
-                            # values from external RE doc, see docs/settings.md
+                            # recording format (resolution + FPS) — values from
+                            # an external RE doc; video_format is VERIFIED on
+                            # POCKET_6K_G2 v7.9, the other two still CANDIDATE,
+                            # see docs/settings.md
       media.py              # (planned) Photo capture, playback controls
       metadata.py           # (planned) Video / photo metadata reads
 
@@ -155,8 +157,9 @@ examples/
   connect_to_camera.py      # Connect-only smoke test (connect, hold, disconnect)
   monitor_incoming.py       # Stream raw INCOMING_CONTROL notifications
   record_start_stop.py      # Echo-verified record start/stop via CameraSession
-  change_codec.py           # BRAW <-> ProRes round trip via set_video_format +
-                            # set_codec_quality (CANDIDATE families, docs/settings.md)
+  change_codec.py           # BRAW <-> ProRes round trip via set_video_format
+                            # (VERIFIED) + set_codec_quality (CANDIDATE),
+                            # docs/settings.md
   capture_photo.py          # (planned)
   playback.py               # (planned)
 
@@ -196,7 +199,7 @@ added, a new `docs/<feature>.md` must be created alongside the code change.
 | `docs/payload_profiles.md` | Profile JSON structure (`commands` map, `values`, `provenance`), `payloads/schema.json` load-time validation, `CommandSpec` API |
 | `docs/command_discovery.md` | Guided command discovery (`tools/control/discover_command.py`) — candidate sweep, operator confirmation, emitted profile blocks |
 | `docs/timecode.md` | `TIMECODE` wire format (wrapped BMD packet, confirmed by real capture), BCD decode, clip-duration math (`timecode.py`), and why the `frames` field isn't used in duration yet |
-| `docs/settings.md` | Settings families (codec/quality, video format, recording format) — CANDIDATE byte layouts and value tables from an external RE doc, why `codec_quality` can't switch BRAW↔ProRes but `video_format` can, the `0x82` data type, and the verification runbook (`sniffer_settings.py`, `send_settings_command.py`, `change_codec.py`) |
+| `docs/settings.md` | Settings families (codec/quality, video format, recording format) — byte layouts and value tables from an external RE doc, now hardware-verified for `video_format` (the only settings family promoted so far); why `codec_quality` can't switch BRAW↔ProRes but `video_format` can, the `0x82` data type, and the verification runbook (`sniffer_settings.py`, `send_settings_command.py`, `change_codec.py`) |
 
 ---
 
@@ -237,7 +240,7 @@ Populate this table as categories are confirmed from sniffer sessions. Each cate
 |---|---|---|
 | `0x0A` (param `0x01`) | Recording (record start/stop) | `protocol/categories/recording.py` |
 | `0x0A` (param `0x00`) | Codec + quality variant — report side sniffer-verified, write CANDIDATE; does NOT switch BRAW↔ProRes (see `docs/settings.md`) | `protocol/categories/settings.py` |
-| `0x01` (param `0x00`) | Video format (FORMAT packet) — CANDIDATE; dimension_enum locks resolution + codec family, the actual BRAW↔ProRes switch. Never appears in notifications — enums need active probing (`docs/settings.md` §5) | `protocol/categories/settings.py` |
+| `0x01` (param `0x00`) | Video format (FORMAT packet) — VERIFIED (2026-07-20: `CameraSession.set_video_format()` 2/2 real-hardware round trip); dimension_enum locks resolution + codec family, the actual BRAW↔ProRes switch. Never appears in notifications itself — enums need active probing (`docs/settings.md` §7–§8) | `protocol/categories/settings.py` |
 | `0x01` (param `0x09`) | Recording format (fps/sensor-fps/width/height/flags, int16 ×5) — report side sniffer-verified (data-type byte `0x02`), write CANDIDATE (claimed byte `0x82`) | `protocol/categories/settings.py` |
 | `0x09` (param `0x01`) | Storage write-margin signal — CANDIDATE, not confirmed causation, see `docs/recording.md` (category `0x09` is the same ambient-telemetry category `TIMECODE` param `0x04` already lives in) | `protocol/categories/storage.py` |
 
