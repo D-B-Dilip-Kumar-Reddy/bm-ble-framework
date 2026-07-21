@@ -65,7 +65,7 @@
         "capture_refs": [
           "tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260721T174504.json"
         ],
-        "notes": "category/parameter/data_type directly observed on the wire; reserved=0 matches every codec_quality report captured so far (untested for writes — no active send attempted yet). Real transitions confirmed on this camera: (2,3)->(3,4) switching to BRAW, (3,4)->(3,5) on a quality change within BRAW, (3,x)->(2,0) switching back to ProRes. Codec ids ProRes=2, BRAW=3 match POCKET_6K_G2_v7.9's ids — independently confirmed via this camera's own transitions, not copied. Quality variant NAMES (on-screen labels) are not yet known — only ids 0 and 3 (ProRes) and 4 and 5 (BRAW) have been observed on the wire; the codecs table below uses placeholder names until an operator confirms what each shows on screen."
+        "notes": "category/parameter/data_type directly observed on the wire; reserved=0 matches every codec_quality report captured passively. Codec ids ProRes=2, BRAW=3 match POCKET_6K_G2_v7.9's ids — independently confirmed via this camera's own transitions, not copied. Quality variant NAMES: operator-confirmed on screen for every id via an active-send sweep (2026-07-21, tools/control/send_settings_command.py --packet codec_quality across every candidate id for both codecs) — see the codecs table below; HQ=0 (ProRes) and Q0=0/5:1=3 (BRAW) match the G2's own ids exactly. None of those sends' own capture windows happened to show a confirming 0x0A/0x00 echo (each caught the camera's lens-metadata burst on category 0x0C instead, tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260721T190251.json onward) — the mapping rests on the operator's direct visual read of the on-screen label, per this project's operator-is-ground-truth convention for CANDIDATE sends, not yet a wire-verified write+echo round trip."
       }
     },
     "recording_format": {
@@ -87,18 +87,26 @@
     "ProRes": {
       "id": 2,
       "variants": {
-        "variant_0": 0,
-        "variant_3": 3
+        "HQ": 0,
+        "422": 1,
+        "LT": 2,
+        "PXY": 3
       },
-      "_comment": "Placeholder variant names — only the wire ids are confirmed (0 seen switching back from BRAW, 3 seen as the steady-state before any change). No operator-confirmed on-screen label yet for either."
+      "_comment": "Operator-confirmed on-screen labels (2026-07-21, active send sweep of every id via tools/control/send_settings_command.py --packet codec_quality). HQ=0 matches POCKET_6K_G2_v7.9's ProRes HQ=0 exactly — independently confirmed on this camera, not copied."
     },
     "BRAW": {
       "id": 3,
       "variants": {
-        "variant_4": 4,
-        "variant_5": 5
+        "Q0": 0,
+        "Q5": 1,
+        "3:1": 2,
+        "5:1": 3,
+        "8:1": 4,
+        "12:1": 5,
+        "Q1": 7,
+        "Q3": 8
       },
-      "_comment": "Placeholder variant names — only the wire ids are confirmed (4 seen switching in from ProRes, 5 seen after one quality_variant_change action). No operator-confirmed on-screen label yet for either."
+      "_comment": "Operator-confirmed on-screen labels (2026-07-21, active send sweep of every id via tools/control/send_settings_command.py --packet codec_quality; id 6 not tested/not offered). Q0=0 and 5:1=3 match POCKET_6K_G2_v7.9's BRAW ids exactly — independently confirmed on this camera, not copied."
     }
   },
   "resolutions": {

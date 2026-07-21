@@ -353,6 +353,13 @@ same sweep on a future model: the PRO's on-screen display does not live-update a
 genuinely took effect — don't trust a static menu as proof a write failed; check the
 wire (a fresh `recording_format`/`codec_quality` report) instead.
 
+The same pattern held for `codecs.*.variants` (`docs/settings.md` §15): every ProRes
+and BRAW quality-variant id swept on the PRO got an operator-confirmed on-screen name,
+and the ones that overlap with what the G2 already had confirmed (`HQ`, `Q0`, `5:1`)
+use the identical numeric id on both cameras. Still independently confirmed per
+camera, never copied — the coincidence is a real finding about this camera family,
+not a shortcut for the next one.
+
 ## Testing
 
 `tests/unit/test_camera_profile.py` covers: every `KNOWN_PROFILES` JSON

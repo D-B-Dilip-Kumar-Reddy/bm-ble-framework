@@ -585,8 +585,8 @@ def test_pocket_6k_pro_profile_resolves_settings_blocks():
     recording_format = profile.require_command("recording_format")
     assert (recording_format.category, recording_format.parameter) == (1, 9)
 
-    assert profile.require_codec("BRAW", "variant_5").id == 3
-    assert profile.require_codec("ProRes", "variant_0").id == 2
+    assert profile.require_codec("BRAW", "5:1").id == 3
+    assert profile.require_codec("ProRes", "HQ").id == 2
 
     four_k = profile.require_resolution("4K DCI")
     # ProRes enum unknown here too — same open gap as the G2's 4K DCI/ProRes.

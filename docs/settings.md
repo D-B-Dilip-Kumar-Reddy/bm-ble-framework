@@ -31,10 +31,10 @@ is now verified.
 
 **`POCKET_6K_PRO v8.6`** (§15, 2026-07-21) has all three command blocks and the
 `codecs`/`resolutions`/`fps_modes` tables populated from its own captures —
-`dimension_enum` values matching the G2's numbers exactly for every resolution tested
-so far — but everything there is still `CANDIDATE`: no `CameraSession` write+echo
-round trip has been attempted on this camera yet, and quality-variant on-screen names
-are still unknown (wire ids only). §15 also documents a PRO-specific finding: its
+`dimension_enum` and quality-variant values matching the G2's numbers exactly for
+every one confirmed so far — but everything there is still `CANDIDATE`: no
+`CameraSession` write+echo round trip has been attempted on this camera yet. §15 also
+documents a PRO-specific finding: its
 on-screen display doesn't live-update after a `video_format` write until the camera is
 power-cycled, even though the write demonstrably takes effect.
 
@@ -1190,9 +1190,27 @@ video_format verification runbook (§8) never happened to hit this ambiguity, si
 `CameraSession.set_video_format()` round trips were confirmed via the wire the same way
 this section's evidence was, not via an on-screen check.
 
-**Still open:** every command block and lookup table transcribed here stays
-`CANDIDATE`, not `VERIFIED` — no write+echo cycle has been attempted through
-`CameraSession` yet on this camera (the equivalent of the G2's §8/§10 promotion, via
-`examples/change_codec.py`), and `codec_quality`'s quality-variant names are still
-wire ids only (`variant_0`/`variant_3` for ProRes, `variant_4`/`variant_5` for BRAW) —
-no operator-confirmed on-screen label exists yet for any of them.
+**Still open (as of the sweep above):** every command block and lookup table
+transcribed here stays `CANDIDATE`, not `VERIFIED` — no write+echo cycle has been
+attempted through `CameraSession` yet on this camera (the equivalent of the G2's
+§8/§10 promotion, via `examples/change_codec.py`).
+
+**Update, 2026-07-21 (same day): quality-variant names now confirmed.** An active
+send sweep across every candidate id for both codecs
+(`tools/control/send_settings_command.py --packet codec_quality`), with the operator
+reading the resulting on-screen quality label after each, produced a full mapping:
+
+| Codec | Variant ids → names |
+|---|---|
+| ProRes | `0`=HQ, `1`=422, `2`=LT, `3`=PXY |
+| BRAW | `0`=Q0, `1`=Q5, `2`=3:1, `3`=5:1, `4`=8:1, `5`=12:1, `7`=Q1, `8`=Q3 (`6` not tested/not offered) |
+
+Both codecs' `0` and `3`/`5:1` ids match the G2's own ids for the same names exactly
+(`HQ=0` on both; `Q0=0` and `5:1=3` on both) — the same cross-model numbering
+consistency every other confirmed value in this section has shown. None of these
+sweep sends' own capture windows happened to show a confirming `0x0A/0x00` echo (each
+caught the camera's lens-metadata burst on category `0x0C` instead — new protocol
+surface, unrelated to settings, not investigated further here) — so this mapping
+rests on the operator's direct on-screen read, not yet a wire-verified write+echo
+round trip. That gap, and the full `CameraSession` promotion, remain the two open
+items for `POCKET_6K_PRO v8.6`'s settings families.
