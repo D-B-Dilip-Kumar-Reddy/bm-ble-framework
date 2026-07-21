@@ -343,7 +343,8 @@ design principle 6): coordinates are protocol *structure*, and the send
 itself is the sniffer-equivalent confirmation step once it succeeds.
 
 The hypothesis paid off (`docs/settings.md` §15): every `dimension_enum` value found
-on the PRO matches the G2's number for the same resolution exactly, and the
+on the PRO — eight resolutions now, including an operator-verified `0x0F` for
+"3.7K Anamorphic" — matches the G2's number for the same resolution exactly, and the
 `--dimension-enum` sweep produced real, repeatable resolution transitions — confirming
 the coordinate guess without ever copying a resolution/codec *value* across the two
 profiles. It also surfaced a camera-specific quirk worth knowing before running this

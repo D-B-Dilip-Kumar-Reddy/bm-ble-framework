@@ -1137,8 +1137,10 @@ passively on either camera (§8's finding held here as well).
 **The dimension_enum sweep.** `tools/control/send_settings_command.py --packet
 video_format --dimension-enum 0x..` was swept across candidates on real
 `POCKET_6K_PRO v8.6` hardware. Every candidate below produced a genuine, repeatable
-transition on the `recording_format` mode-notify channel, and — critically — every
-enum value matches the G2's own number for the same resolution:
+transition on the `recording_format` mode-notify channel (`0x0F` was operator-verified
+directly rather than decoded from a pasted capture, but follows the identical
+enum-matches-the-G2 pattern), and — critically — every enum value matches the G2's own
+number for the same resolution:
 
 | Enum | Resolution | Codec | Pixel dimensions |
 |---|---|---|---|
@@ -1146,6 +1148,7 @@ enum value matches the G2's own number for the same resolution:
 | `0x06` | UHD | ProRes | 3840×2160 |
 | `0x08` | 4K DCI | **BRAW only** | 4096×2160 |
 | `0x0D` | 2.8K 17:9 | BRAW | 2880×1512 |
+| `0x0F` | 3.7K Anamorphic | BRAW | 3728×3104 |
 | `0x12` | 5.7K 17:9 | BRAW | 5744×3024 |
 | `0x13` | 6K | BRAW | 6144×3456 |
 | `0x14` | 6K 2.4:1 | BRAW | 6144×2560 |

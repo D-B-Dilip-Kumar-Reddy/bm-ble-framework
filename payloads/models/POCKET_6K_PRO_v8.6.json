@@ -127,6 +127,13 @@
       "codecs": ["BRAW"],
       "dimension_enums": { "BRAW": 13 }
     },
+    "3.7K Anamorphic": {
+      "width": 3728,
+      "height": 3104,
+      "codecs": ["BRAW"],
+      "dimension_enums": { "BRAW": 15 },
+      "_comment": "Operator-verified (2026-07-21), same dimension_enum (0x0F) as POCKET_6K_G2_v7.9's '3.7K Anamorphic' — independently confirmed on this camera, not copied."
+    },
     "5.7K 17:9": {
       "width": 5744,
       "height": 3024,
