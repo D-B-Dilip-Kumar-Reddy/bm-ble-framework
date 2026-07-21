@@ -406,16 +406,130 @@ The echo must be buffered *before* the write is issued. A router that only start
 
 ---
 
-## Workflow: Adding Support for a New Camera
+## Workflow: Adding Support for a New Camera (Reverse-Engineering Procedure)
 
-1. Run `tools/sniffers/` scripts while performing the target action on the camera (or, once a candidate command is known, `tools/control/` scripts to send it directly and capture the response)
-2. Analyse captured packets — extract category, parameter, data type, payload bytes. For an unknown command, run `tools/control/discover_command.py`: it seeds from the passive capture, sweeps candidate values with operator confirmation, and emits the ready-to-paste `commands` block (see `docs/command_discovery.md`)
-3. Create or update `payloads/models/<MODEL_KEY>_<FIRMWARE>.json` with verified values
-4. Run `tools/query/ble_services_chars.py` to confirm UUIDs match expectations
-5. Add the tuple to `KNOWN_PROFILES` in `camera_profile.py`
-6. Run `pytest tests/unit` — no Python code should need to change if the protocol layer is correct
-7. Test on real hardware and set `status` to `"VERIFIED"`
-8. Update the camera registry table in this file
+This is the concrete, tool-by-tool procedure for bringing up a new `(MODEL_KEY, FIRMWARE)`
+pair — which tool to run in which order, and what profile change each step produces.
+Follow the phases in order; each one depends on the profile state the previous phase left
+behind. Derived from reverse-engineering `POCKET_6K_G2 v7.9` (all phases) and
+`POCKET_6K_PRO v8.6` (Phase 2, in progress) — see `docs/settings.md` and
+`docs/command_discovery.md` for the full evidentiary write-ups behind Phase 3 and Phase 2
+respectively.
+
+Two flag conventions to keep straight: `tools/query/`, `tools/sniffers/`, and
+`tools/control/` scripts all take `--model-key`/`--firmware` CLI flags. `examples/*.py`
+scripts do **not** — they hardcode `MODEL_KEY`/`FIRMWARE` as module-level constants near
+the top of the file (edit that constant, or uncomment the alternate model's line where
+one is already present, to point at a different camera).
+
+### Phase 1 — Profile scaffold and transport sanity
+
+1. **Scaffold the profile.** Add `payloads/models/<MODEL_KEY>_<FIRMWARE>.json` with only
+   `_meta` (`model`, `model_key`, `firmware`, `ble_name` — the real advertised name, never
+   a placeholder — `status: "UNVERIFIED"`) and `ble` populated. No `commands` yet.
+   Validate against `payloads/schema.json`.
+2. **Confirm discoverability** — `python examples/scan_camera.py` (after setting
+   `MODEL_KEY`/`FIRMWARE`). Confirms the camera actually advertises under `ble_name`.
+3. **Confirm a bare connect works** — `python examples/connect_to_camera.py`. Connect,
+   hold, disconnect — nothing else.
+4. **Confirm GATT UUIDs match expectations** —
+   `python tools/query/ble_services_chars.py --model-key <MODEL_KEY> --firmware <FIRMWARE>`.
+   If a characteristic UUID differs from `constants.py`'s default, override it under the
+   profile's `ble` section (e.g. `characteristic_incoming`) — never edit `constants.py`
+   for a per-model value (design principle 1).
+5. **Check GAP metadata readability** —
+   `python tools/query/gap_meta_data.py --model-key <MODEL_KEY> --firmware <FIRMWARE>`.
+   Record the result in `gap_meta_data.readable`. Known hazard: on `POCKET_6K_G2 v7.9`,
+   reading GAP characteristics disconnects the camera — if the new model does the same,
+   set `readable: false` and don't retry the read anywhere else for this camera.
+6. **Check device-info metadata readability** —
+   `python tools/query/device_meta_data.py --model-key <MODEL_KEY> --firmware <FIRMWARE>`.
+   Record the result in `device_info_meta_data.readable`.
+7. **Confirm notifications stream** — `python examples/monitor_incoming.py` (after
+   setting `MODEL_KEY`/`FIRMWARE`). Watch raw INCOMING_CONTROL bytes while performing a
+   few obvious actions on the camera body — gives a first feel for the protocol before
+   any targeted sniffing begins.
+
+### Phase 2 — Recording start/stop
+
+8. Sniff → discover → paste → verify → session round-trip:
+   1. `python tools/sniffers/sniffer_recording.py --model-key <MODEL_KEY> --firmware <FIRMWARE>`
+      — passive capture while the operator starts/stops recording on the camera body.
+   2. `python tools/control/discover_command.py --model-key <MODEL_KEY> --firmware <FIRMWARE> --label recording --from-capture <path to the capture saved by step 8.1> --values 2,0 --reserved 1,0 --outcomes start,stop`
+      — seeds candidates from the passive capture, sweeps them with operator confirmation
+      per candidate, emits the ready-to-paste `commands.recording` block (see
+      `docs/command_discovery.md`). `--reserved 1,0` tries the G2's known reserved byte
+      first; a genuinely new family may need different candidates.
+   3. Paste the emitted block into the profile's `commands.recording`, then
+      `pytest tests/unit` — no Python code should need to change; the protocol layer
+      already handles the recording category generically.
+   4. `python tools/control/send_record_command.py --model-key <MODEL_KEY> --firmware <FIRMWARE>`
+      — deterministic active send-then-capture, confirming the pasted block's echo on
+      demand rather than waiting to catch it inside a passive window.
+   5. `python examples/record_start_stop.py` (after setting `MODEL_KEY`/`FIRMWARE`) — the
+      real `CameraSession.record_start()`/`record_stop()` round trip with echo
+      verification. Passing this promotes `commands.recording.provenance.status` to
+      `"VERIFIED"`.
+
+### Phase 3 — Settings: codec, quality, resolution, FPS
+
+9. **Sniff all three families passively**, one capture window per concrete setting so
+   each result is unambiguously attributable:
+   ```
+   python tools/sniffers/sniffer_settings.py --model-key <MODEL_KEY> --firmware <FIRMWARE> \
+       --actions res_HD,res_UHD,res_4K_DCI,codec_prores,codec_braw,quality_variant_change,fps_change
+   ```
+   (adjust the action list to the model's actual resolutions/codecs). The operator
+   performs each change on the camera body between prompts. This is expected to confirm
+   `codec_quality` (`0x0A/0x00`) and `recording_format` (`0x01/0x09`) reports — on the G2,
+   `video_format`'s own channel (`0x01/0x00`) never reported passively at all, so its
+   `dimension_enum` values could not be captured this way; assume the same here unless
+   proven otherwise, and probe them actively next.
+10. **Probe every (resolution, codec) `dimension_enum` actively**, one candidate at a
+    time:
+    ```
+    python tools/control/send_settings_command.py --model-key <MODEL_KEY> --firmware <FIRMWARE> \
+        --packet video_format --fps <fps> --dimension-enum 0x<candidate>
+    ```
+    Typed-yes gated; the operator watches the body, and the resulting `0x01/0x09` report's
+    width/height plus the on-screen codec identifies what the enum selects. Repeat per
+    candidate until every needed (resolution, codec) pair has a confirmed enum, or the
+    search is exhausted for a pair like the G2's 4K DCI/ProRes (see `docs/settings.md`
+    §7-§9 for that precedent and the two-step `set_camera_format` proxy workaround it
+    needs when a gap can't be closed).
+11. **Transcribe confirmed values into the profile** — `commands.codec_quality` /
+    `commands.video_format` / `commands.recording_format`, plus the `codecs` /
+    `resolutions` / `fps_modes` lookup tables. Nothing may be copied from another model's
+    profile (design principle 6); every value must come from this model's own capture.
+12. **Confirm each family's write+echo cycle**, one deterministic active send per family:
+    ```
+    python tools/control/send_settings_command.py --model-key <MODEL_KEY> --firmware <FIRMWARE> \
+        --packet codec_quality --codec <codec> --variant <variant>
+    python tools/control/send_settings_command.py --model-key <MODEL_KEY> --firmware <FIRMWARE> \
+        --packet video_format --resolution <resolution> --codec <codec> --fps <fps>
+    python tools/control/send_settings_command.py --model-key <MODEL_KEY> --firmware <FIRMWARE> \
+        --packet recording_format --resolution <resolution> --fps <fps>
+    ```
+    Add `--repeat 2` to any of these to also probe that family's redundant-write echo
+    behavior (send the identical command twice; compare whether the second window shows
+    `(none observed)`) before relying on a `last_known_*` no-op guard for it in
+    `session.py` — every family went silent on a repeated identical write on the G2
+    (`docs/settings.md` §11, §14), but that must be reconfirmed per model, not assumed.
+13. **Session round-trip** — `python examples/change_codec.py` (after setting
+    `MODEL_KEY`/`FIRMWARE`). Runs `CameraSession.set_camera_format()`, which orchestrates
+    all three writes with echo verification. Passing this promotes all three families'
+    `provenance.status` to `"VERIFIED"`.
+
+### Phase 4 — Finish
+
+14. Add the `(MODEL_KEY, FIRMWARE)` tuple to `KNOWN_PROFILES` in `camera_profile.py` —
+    only after the profile JSON exists (never before — see "What Not To Do").
+15. Run `pytest tests/unit` and `ruff check . && ruff format --check .` — both must pass
+    before committing.
+16. Update the camera registry table at the top of this file (status column, notes).
+
+Every profile JSON change in this procedure needs a doc touch in the same commit, per the
+"Feature doc convention": `docs/recording.md` for Phase 2, `docs/settings.md` for Phase 3.
 
 ---
 
