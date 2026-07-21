@@ -567,18 +567,26 @@ def test_pocket_6k_g2_profile_resolves_settings_blocks():
     assert profile.require_fps_mode("23.98").fps_int == 24
 
 
-def test_pocket_6k_pro_profile_has_no_settings_blocks():
+def test_pocket_6k_pro_profile_has_no_transcribed_settings_values_yet():
     """Settings values must never be copied across models without sniffing
-    that camera (CLAUDE.md design principle 6) — the PRO profile stays
-    empty until captured on the PRO itself."""
+    that camera (CLAUDE.md design principle 6) — codec_quality/
+    recording_format and the codecs/resolutions lookup tables stay
+    untranscribed until captured on the PRO itself. video_format's
+    category/parameter/data_type/reserved exist as an explicit CANDIDATE
+    hypothesis (mirroring the G2's coordinates, since video_format never
+    reports passively on either camera — see docs/settings.md §14/PRO
+    section) and fps_modes has one wire-observed entry ("50") — neither
+    is a copied *value*, both are pending confirmation via active send."""
     profile = CameraProfile.for_model("POCKET_6K_PRO", "v8.6")
 
     assert profile.command("codec_quality") is None
-    assert profile.command("video_format") is None
     assert profile.command("recording_format") is None
+    video_format = profile.command("video_format")
+    assert video_format is not None
+    assert video_format.provenance.status == "CANDIDATE"
     assert profile.codecs == {}
     assert profile.resolutions == {}
-    assert profile.fps_modes == {}
+    assert set(profile.fps_modes) == {"50"}
 
 
 def test_pocket_6k_pro_profile_resolves_recording_command():

@@ -36,6 +36,28 @@
         "notes": "Operator-confirmed outcomes: start, stop. 2026-07-09: data_type relabelled BOOL -> INT8 when DataType was remapped to the official spec coding; the captured wire byte (0x01) is unchanged."
       },
       "echo_operation": 2
+    },
+    "video_format": {
+      "category": 1,
+      "parameter": 0,
+      "data_type": "INT8",
+      "reserved": 1,
+      "provenance": {
+        "status": "CANDIDATE",
+        "method": "hypothesis, not sniffed — video_format never appeared in any INCOMING_CONTROL notification across every settings capture on this camera (category/parameter/data_type/reserved mirror POCKET_6K_G2_v7.9, which has the identical never-reports-passively finding, see docs/settings.md §8). codec_quality and recording_format's category/parameter DID match the G2 exactly on this model (0x0A/0x00 and 0x01/0x09), which is the basis for trying the same coordinates here rather than a blind guess — but per design principle 6 this is unconfirmed until an active send (tools/control/send_settings_command.py --packet video_format --dimension-enum) actually changes the camera and/or shows up on another channel.",
+        "capture_refs": [
+          "tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260721T171924.json",
+          "tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260721T174504.json"
+        ]
+      }
+    }
+  },
+  "fps_modes": {
+    "50": {
+      "fps_int": 50,
+      "m_rate": 0,
+      "frame_flags": 0,
+      "_comment": "CANDIDATE (fps_modes has no per-entry provenance field in the schema). fps_int directly observed on the wire (passive recording_format 0x01/0x09 reports, tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260721T171924.json). frame_flags is genuinely resolution-dependent at this fps on real captures (0x00 for HD/UHD, 0x10 for 4K DCI — same 'windowed bit' pattern already flagged for the G2, docs/settings.md) but this table only holds one value per fps; 0 chosen as the 2-of-3-resolutions default — revisit if a recording_format write at 4K DCI needs the 0x10 variant. m_rate=0 is an untested candidate (video_format has never been sent yet) — reasonable for a round, non-NTSC rate but not confirmed."
     }
   },
   "storage": {

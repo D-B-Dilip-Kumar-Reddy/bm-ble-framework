@@ -320,6 +320,28 @@ this shape — see `docs/command_discovery.md`).
    parametrizes over `KNOWN_PROFILES` and validates every real profile
    against the schema, so a malformed block fails CI immediately.
 
+### When a command never appears in a passive capture
+
+`video_format` is a known case (`docs/settings.md` §8, §14): its own
+`(category, parameter)` never shows up in any INCOMING_CONTROL notification
+on either camera reverse-engineered so far, so step 1 above has nothing to
+seed a block from. Sending it at all requires a `commands.video_format`
+block to already exist — chicken-and-egg, since `tools/control/
+send_settings_command.py` builds its packet from the profile.
+
+The precedent (first hit on `POCKET_6K_PRO v8.6`, in progress): add the
+block as an explicit `provenance.status: "CANDIDATE"` **hypothesis**, not a
+copied value — category/parameter/data_type/reserved mirroring the *other*
+model's coordinates, justified only when that other model's already-sniffed
+families (`codec_quality`, `recording_format`) matched exactly on the new
+camera too (a real, per-model-confirmed data point, not an assumption). The
+`provenance.method` field must say plainly that it's untested and name what
+would confirm or falsify it — here, an active `--dimension-enum` send
+actually changing the camera. This is different from copying a *value*
+(codec ids, dimension enums, resolutions — never allowed across models,
+design principle 6): coordinates are protocol *structure*, and the send
+itself is the sniffer-equivalent confirmation step once it succeeds.
+
 ## Testing
 
 `tests/unit/test_camera_profile.py` covers: every `KNOWN_PROFILES` JSON
