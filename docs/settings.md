@@ -15,10 +15,15 @@ issue: a redundant `set_codec_quality` call (requesting the value a
 `video_format` switch had just reset quality to) reliably produces no
 echo — now fixed for real via `last_known_codec_variant`, a
 notification-derived no-op guard mirroring `record_stop()`'s (§11), rather
-than just documented as a known risk. 4K DCI/ProRes's `dimension_enum`
-remains unknown after an exhaustive `0x01`–`0x16` search (§7–§8), so
-`set_camera_format` (§9) reaches it with a two-step workaround (proxy
-through UHD, then `recording_format`'s raw width/height) instead of
+than just documented as a known risk. The same no-echo-on-redundant-write
+behavior was then confirmed on real hardware for `video_format` and
+`recording_format` too (§14, 2026-07-21: 7/7 and 5/5 `--repeat 2` runs)
+and fixed the same way — `set_recording_format` and `set_video_format`
+both now guard against it via notification-derived state, so all three
+settings writes are hardened, not just `codec_quality`. 4K DCI/ProRes's
+`dimension_enum` remains unknown after an exhaustive `0x01`–`0x16` search
+(§7–§8), so `set_camera_format` (§9) reaches it with a two-step workaround
+(proxy through UHD, then `recording_format`'s raw width/height) instead of
 waiting on that gap to close. `_meta.status` stays `UNVERIFIED` overall
 per design principle 8 — plenty of the profile is still unpopulated
 (media, metadata, playback) even though every implemented settings family
@@ -941,8 +946,8 @@ matching what the camera was doing the whole time.
 | Profile blocks + tables | `payloads/models/POCKET_6K_G2_v7.9.json` `commands.codec_quality` / `commands.video_format` / `commands.recording_format`, `codecs`, `resolutions`, `fps_modes`; schema `$defs` `codecSpec`/`resolutionSpec`/`fpsModeSpec` |
 | Profile accessors | `camera_profile.py` `require_codec` / `require_resolution` / `require_fps_mode` (`CodecSpec`/`ResolutionSpec`/`FpsModeSpec`) |
 | Session methods | `session.py` `set_codec_quality` / `set_video_format` / `set_recording_format` (see `docs/session_and_verification.md` for the echo strategy), plus the `set_camera_format` orchestration (§9) and its `_closest_reachable_resolution` helper |
-| Notification-derived state | `session.py` `last_known_codec_variant` + `_observe_codec_quality` (§11) — feeds `set_codec_quality`'s no-op guard, same discipline as `is_recording` |
-| Tools | `tools/sniffers/sniffer_settings.py` (passive), `tools/control/send_settings_command.py` (active, typed-yes gated; `--repeat N` probes redundant-write echo behavior — §13) |
+| Notification-derived state | `session.py` `last_known_codec_variant` + `_observe_codec_quality` (§11); `last_known_recording_format` + `_observe_recording_format` (§14) — feed the no-op guards in `set_codec_quality`, `set_recording_format`, and `set_video_format`, same discipline as `is_recording` |
+| Tools | `tools/sniffers/sniffer_settings.py` (passive), `tools/control/send_settings_command.py` (active, typed-yes gated; `--repeat N` probes redundant-write echo behavior — §13, §14) |
 | Example | `examples/change_codec.py` |
 | Tests | `tests/unit/protocol/categories/test_settings.py`, plus settings cases in `test_codec.py`, `test_types.py`, `test_camera_profile.py`, `test_session.py` (`TestSetCameraFormat`, `TestClosestReachableResolution`, `TestObserveCodecQuality`) |
 
@@ -984,6 +989,15 @@ writing (§11). The guard only fires once a prior notification has proven
 the state; before that (a session's very first `set_codec_quality` call)
 it still writes and waits normally, and the original error message
 remains for the case where it genuinely doesn't know.
+
+**The same failure mode, confirmed and fixed for `video_format` and
+`recording_format` too (§14):** real-hardware `--repeat 2` captures showed
+both families share `codec_quality`'s exact silent-no-op behavior.
+`set_recording_format` now has the same guard shape, via a new
+`last_known_recording_format` field. `set_video_format` reuses that field
+plus `last_known_codec_variant` together rather than tracking a third —
+its guard fires only when both the codec family and the (fps_int, width,
+height) are already confirmed by prior notifications.
 
 ---
 
@@ -1032,3 +1046,70 @@ family too, and the fix is the same shape: a notification-derived
 reports unconditionally and needs no guard at all. Until one of those runs
 produces evidence, `set_camera_format`'s docstring correctly calls this a
 known, unmitigated risk — that is accurate today, not a stale TODO.
+
+---
+
+## 14. The question answered, and all three families hardened (2026-07-21)
+
+§13's open question is now closed with real-capture evidence, gathered the
+same way §11's `codec_quality` finding was: `--repeat 2` runs against real
+`POCKET_6K_G2 v7.9` hardware, covering every relevant category of starting
+state relative to the target.
+
+**`recording_format` — 5/5 runs confirm the same silent no-op.** Targeting
+`--packet recording_format --resolution "4K DCI" --fps 25` from five
+different prior states (including one already at the target), every run's
+second (redundant) send produced zero `0x01/0x09` notifications — only the
+ambient `0x09/0x00` storage telemetry. Send 1 always echoed normally,
+tracking the *new* fps/width/height exactly (not the prior state), which
+rules out the echo being unrelated connect-burst noise rather than a
+genuine response.
+
+**`video_format` — 7/7 runs confirm the same silent no-op.** Targeting
+`--packet video_format --resolution UHD --codec ProRes --fps 25` across
+same-family/different-resolution, exact-match-already, same-resolution/
+different-fps, and full family+resolution switch starting states, every
+run's second send produced zero notifications on *either* watched channel
+(`0x01/0x09` mode-notify and `0x0A/0x00` codec_quality) — `video_format`'s
+own channel (`0x01/0x00`) never appeared at all across any of the 14
+windows, reconfirming §8's finding that it isn't a usable echo channel.
+
+**`codec_quality` — 4 regression runs, consistent with §11, plus a fresh
+family-limitation confirmation.** Two runs landed a genuine variant change
+(422→HQ, LT→HQ) with a normal echo carrying the *new* variant id. One run
+requested BRAW→ProRes while the camera was in BRAW — the report that came
+back carried `(codec_id=3, variant_id=5)`, i.e. the *unchanged* BRAW/12:1
+state, reconfirming codec_quality still can't switch families on its own
+(§1); `set_codec_quality`'s existing mismatch-raising branch already
+handles this correctly (reported tuple ≠ requested tuple → raises with the
+documented family-limitation message), no change needed. The fourth run
+(already at the exact target) is not independently conclusive on its own —
+without a `--repeat` second send there's no way to rule out that single
+report being ordinary connect-burst tail rather than a genuine echo — but
+it doesn't contradict anything either, and §11's finding was already
+established from genuine `CameraSession` production usage (the original
+bug report this whole investigation started from), not from this tool.
+
+**Hardening applied**, all in `src/bmd_ble/session.py`:
+
+- A new notification-derived field, `last_known_recording_format:
+  tuple[int, int, int] | None` (`fps_int, width, height` — deliberately
+  excluding `sensor_fps_int`/`frame_flags`, matching what verification
+  already compares), updated by a new `_observe_recording_format` method
+  wired into `_handle_incoming` exactly like `_observe_codec_quality`.
+  Because `set_video_format`'s mode-notify confirmation is the *same*
+  (category, parameter) as `recording_format`'s own echo, this field
+  updates from both — no separate video_format-specific tracking needed.
+- `set_recording_format` gained the same no-op guard shape as
+  `set_codec_quality`: early-return when `last_known_recording_format`
+  already equals `(fps_int, width, height)` for the request.
+- `set_video_format` gained a no-op guard that reuses *both* existing
+  fields rather than tracking a third: early-return when
+  `last_known_codec_variant`'s codec id already matches the requested
+  codec **and** `last_known_recording_format` already matches the
+  requested `(fps_int, width, height)` — the two together are exactly
+  video_format's full observable state (codec family + resolution + fps).
+- `set_camera_format`'s docstring no longer calls the redundant-follow-up
+  risk "not papered over" — all three steps now self-guard.
+
+See §12's code surface table for the updated field/method list.

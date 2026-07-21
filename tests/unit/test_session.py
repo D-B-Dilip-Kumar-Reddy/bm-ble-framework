@@ -147,6 +147,7 @@ def make_session(profile: CameraProfile) -> CameraSession:
     session._unexpected_stop_event = asyncio.Event()
     session._pending_command = False
     session.last_known_codec_variant = None
+    session.last_known_recording_format = None
     return session
 
 
@@ -638,6 +639,27 @@ def _recording_format_payload(fps: int, sensor_fps: int, width: int, height: int
     return struct.pack("<5h", fps, sensor_fps, width, height, flags)
 
 
+def _recording_format_packet(
+    fps: int, sensor_fps: int, width: int, height: int, flags: int
+) -> bytearray:
+    """A recording_format-category CAMERA_REPORT, matching
+    `make_settings_profile`'s default block (category=0x01/parameter=0x09/
+    INT16_ARRAY) — mirrors the real capture's five little-endian int16
+    elements. This is also the exact (category, parameter) set_video_format's
+    mode-notify channel reports on."""
+    header = CommandHeader(
+        destination=0xFF,
+        command_id=0x00,
+        reserved=0x01,
+        category=0x01,
+        parameter=0x09,
+        data_type=DataType.INT16_ARRAY,
+        operation=Operation.CAMERA_REPORT,
+    )
+    payload = _recording_format_payload(fps, sensor_fps, width, height, flags)
+    return bytearray(encode_packet(header, payload))
+
+
 class TestObserveCodecQuality:
     """`last_known_codec_variant` is notification-derived only (design
     principle 4), like is_recording — never set from "we sent a command".
@@ -685,6 +707,58 @@ class TestObserveCodecQuality:
         session._handle_incoming(MagicMock(), _codec_quality_packet(2, 1))
 
         assert session.last_known_codec_variant == (2, 1)
+
+
+class TestObserveRecordingFormat:
+    """`last_known_recording_format` is notification-derived only (design
+    principle 4), like is_recording and last_known_codec_variant. Both
+    set_recording_format's and set_video_format's no-op guards depend on it
+    being accurate — and since this is the exact (category, parameter)
+    set_video_format's mode-notify channel reports on, a video_format
+    write's own confirmation updates it too."""
+
+    def test_updates_from_any_recording_format_report(self):
+        session = make_session(make_settings_profile())
+
+        session._observe_recording_format(_recording_format_packet(25, 25, 4096, 2160, 16))
+
+        assert session.last_known_recording_format == (25, 4096, 2160)
+
+    def test_later_report_overwrites_earlier_one(self):
+        session = make_session(make_settings_profile())
+        session._observe_recording_format(_recording_format_packet(25, 25, 4096, 2160, 16))
+
+        session._observe_recording_format(_recording_format_packet(24, 24, 1920, 1080, 19))
+
+        assert session.last_known_recording_format == (24, 1920, 1080)
+
+    def test_ignores_malformed_data(self):
+        session = make_session(make_settings_profile())
+
+        session._observe_recording_format(bytearray([0x01, 0x02]))
+
+        assert session.last_known_recording_format is None
+
+    def test_ignores_unrelated_notification(self):
+        session = make_session(make_settings_profile())
+
+        session._observe_recording_format(_codec_quality_packet(3, 3))
+
+        assert session.last_known_recording_format is None
+
+    def test_no_op_without_a_recording_format_command_block(self):
+        session = make_session(make_profile())  # recording-only profile
+
+        session._observe_recording_format(_recording_format_packet(25, 25, 4096, 2160, 16))
+
+        assert session.last_known_recording_format is None
+
+    def test_wired_through_handle_incoming(self):
+        session = make_session(make_settings_profile())
+
+        session._handle_incoming(MagicMock(), _recording_format_packet(25, 25, 4096, 2160, 16))
+
+        assert session.last_known_recording_format == (25, 4096, 2160)
 
 
 class TestSetCodecQuality:
@@ -922,6 +996,75 @@ class TestSetVideoFormat:
 
         session._controller.write_outgoing_control.assert_not_awaited()
 
+    @pytest.mark.asyncio
+    async def test_is_a_noop_when_family_and_format_already_known(self):
+        """Real-hardware regression (docs/settings.md §14, 7/7 --repeat 2
+        runs): requesting the (resolution, codec, fps) the camera is
+        already in produces no echo on any channel, mirroring
+        set_codec_quality's §11 finding. The guard reuses
+        last_known_codec_variant (codec family) and
+        last_known_recording_format (resolution+fps) rather than tracking a
+        third field."""
+        session = make_session(make_settings_profile())
+        session.last_known_codec_variant = (3, 3)  # BRAW, 5:1
+        session.last_known_recording_format = (25, 4096, 2160)  # 4K DCI, 25fps
+
+        await session.set_video_format("4K DCI", "BRAW", "25")
+
+        session._controller.write_outgoing_control.assert_not_awaited()
+        session._router.arm.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_writes_normally_when_only_codec_family_matches(self):
+        session = make_session(make_settings_profile())
+        session.last_known_codec_variant = (3, 3)  # BRAW — matches
+        session.last_known_recording_format = (25, 1920, 1080)  # wrong resolution
+
+        async def wait_for(category, parameter, timeout):
+            if (category, parameter) == (0x01, 0x00):
+                return MagicMock(category=0x01, parameter=0x00), bytes([25, 0, 8, 0, 0])
+            return None
+
+        session._router.wait_for = AsyncMock(side_effect=wait_for)
+
+        await session.set_video_format("4K DCI", "BRAW", "25")
+
+        session._controller.write_outgoing_control.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_writes_normally_when_only_format_matches(self):
+        session = make_session(make_settings_profile())
+        session.last_known_codec_variant = (2, 0)  # ProRes — wrong family
+        session.last_known_recording_format = (25, 4096, 2160)  # matches
+
+        async def wait_for(category, parameter, timeout):
+            if (category, parameter) == (0x01, 0x00):
+                return MagicMock(category=0x01, parameter=0x00), bytes([25, 0, 8, 0, 0])
+            return None
+
+        session._router.wait_for = AsyncMock(side_effect=wait_for)
+
+        await session.set_video_format("4K DCI", "BRAW", "25")
+
+        session._controller.write_outgoing_control.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_writes_normally_when_nothing_known_yet(self):
+        session = make_session(make_settings_profile())
+        assert session.last_known_codec_variant is None
+        assert session.last_known_recording_format is None
+
+        async def wait_for(category, parameter, timeout):
+            if (category, parameter) == (0x01, 0x00):
+                return MagicMock(category=0x01, parameter=0x00), bytes([25, 0, 8, 0, 0])
+            return None
+
+        session._router.wait_for = AsyncMock(side_effect=wait_for)
+
+        await session.set_video_format("4K DCI", "BRAW", "25")
+
+        session._controller.write_outgoing_control.assert_awaited_once()
+
 
 class TestSetRecordingFormat:
     @pytest.mark.asyncio
@@ -969,6 +1112,47 @@ class TestSetRecordingFormat:
 
         with pytest.raises(BMDVerificationError, match="echo reported"):
             await session.set_recording_format("4K DCI", "25")
+
+    @pytest.mark.asyncio
+    async def test_is_a_noop_when_already_at_the_target(self):
+        """Real-hardware regression (docs/settings.md §14, 5/5 --repeat 2
+        runs): requesting the (resolution, fps) the camera is already at
+        produces no echo at all, mirroring set_codec_quality's §11 finding.
+        last_known_recording_format (notification-derived) lets this be
+        recognized as already-satisfied instead of raising."""
+        session = make_session(make_settings_profile())
+        session.last_known_recording_format = (25, 4096, 2160)  # 4K DCI, 25fps
+
+        await session.set_recording_format("4K DCI", "25")
+
+        session._controller.write_outgoing_control.assert_not_awaited()
+        session._router.arm.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_writes_normally_when_last_known_format_differs(self):
+        session = make_session(make_settings_profile())
+        session.last_known_recording_format = (25, 1920, 1080)  # HD, 25fps
+        session._router.wait_for.return_value = (
+            MagicMock(),
+            _recording_format_payload(25, 25, 4096, 2160, 16),
+        )
+
+        await session.set_recording_format("4K DCI", "25")
+
+        session._controller.write_outgoing_control.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_writes_normally_when_nothing_known_yet(self):
+        session = make_session(make_settings_profile())
+        assert session.last_known_recording_format is None
+        session._router.wait_for.return_value = (
+            MagicMock(),
+            _recording_format_payload(25, 25, 4096, 2160, 16),
+        )
+
+        await session.set_recording_format("4K DCI", "25")
+
+        session._controller.write_outgoing_control.assert_awaited_once()
 
 
 class TestClosestReachableResolution:

@@ -10,10 +10,10 @@ docs/session_and_verification.md for why CAMERA_STATUS can't yet serve as
 the secondary cross-check CLAUDE.md's verification strategy calls for).
 Settings writes (set_codec_quality / set_video_format /
 set_recording_format) are implemented against the POCKET_6K_G2 v7.9
-packet families in docs/settings.md — set_video_format is VERIFIED on real
-hardware, the other two are still CANDIDATE (their echo behaviour hasn't
-been captured yet, so a timeout there may mean "the camera doesn't echo
-this family" rather than "the write failed"). set_camera_format
+packet families in docs/settings.md — all three are VERIFIED on real
+hardware, including each family's no-echo-on-redundant-write behavior
+(docs/settings.md §11, §14), which every one now guards against itself.
+set_camera_format
 orchestrates all three from one (codec, variant, resolution, fps)
 combination, including the two-step workaround the one known
 dimension_enum gap (4K DCI/ProRes) needs — see its own docstring and
@@ -57,6 +57,18 @@ known to be a no-op (real-hardware evidence, docs/settings.md §11: a
 remembered value, and a caller-requested `set_codec_quality` for that same
 value never echoes — indistinguishable from a real failure without this
 check). Mirrors `record_stop()`'s `is_recording is False` early return.
+
+The same silent-no-op behavior was subsequently confirmed on real hardware
+(docs/settings.md §14) for `video_format` and `recording_format` too —
+sending either family a value it's already at produces no echo on any of
+their watched channels. `last_known_recording_format` (a notification-
+derived `(fps_int, width, height)`, updated from any recording_format-
+category report — including `set_video_format`'s own mode-notify
+confirmations, since they share the exact same (category, parameter))
+gives `set_recording_format` the same guard `set_codec_quality` already
+has. `set_video_format` reuses that field plus `last_known_codec_variant`
+together — a redundant video_format write is one where the active codec
+family *and* the active resolution+fps both already match the request.
 """
 
 from __future__ import annotations
@@ -145,6 +157,15 @@ class CameraSession:
         # None until the first such report arrives. See set_codec_quality's
         # docstring for why this exists.
         self.last_known_codec_variant: tuple[int, int] | None = None
+        # Same discipline, for the recording_format family: (fps_int, width,
+        # height) from any recording_format-category report — including
+        # set_video_format's own mode-notify confirmations, which share this
+        # exact (category, parameter). Deliberately excludes sensor_fps_int
+        # and frame_flags, matching what set_recording_format's own
+        # verification compares (docs/settings.md §12's table) — the
+        # camera's own report of those two elements hasn't been
+        # characterised. See set_recording_format's docstring.
+        self.last_known_recording_format: tuple[int, int, int] | None = None
 
     async def __aenter__(self) -> CameraSession:
         discovered = await scan_for_camera(self.profile.ble_name)
@@ -166,11 +187,36 @@ class CameraSession:
     def _handle_incoming(self, characteristic: Any, data: bytearray) -> None:
         """INCOMING_CONTROL callback: feeds the echo router, then watches for
         an unsolicited recording-state change, the CANDIDATE write-margin
-        signal, and the current codec/quality. Never raises."""
+        signal, the current codec/quality, and the current recording
+        format. Never raises."""
         self._router.handle_incoming(characteristic, data)
         self._observe_recording_state(data)
         self._observe_write_margin(data)
         self._observe_codec_quality(data)
+        self._observe_recording_format(data)
+
+    def _observe_recording_format(self, data: bytearray) -> None:
+        """Update `last_known_recording_format` from any recording_format-
+        category report — see the module docstring, `set_recording_format`,
+        and `set_video_format` (whose mode-notify confirmation is this exact
+        (category, parameter), so a video_format write updates this too).
+        Never raises: a profile without the recording_format block, or a
+        packet this can't decode, is simply not this report."""
+        try:
+            spec = self.profile.require_command("recording_format")
+        except ValueError:
+            return
+        try:
+            header, payload = decode_packet(bytes(data))
+        except ValueError:
+            return
+        if not is_settings_notification(header, category=spec.category, parameter=spec.parameter):
+            return
+        try:
+            reported = decode_recording_format(payload, spec.data_type)
+        except ValueError:
+            return
+        self.last_known_recording_format = (reported.fps_int, reported.width, reported.height)
 
     def _observe_codec_quality(self, data: bytearray) -> None:
         """Update `last_known_codec_variant` from any codec_quality-category
@@ -462,6 +508,20 @@ class CameraSession:
         duplicate. Arming the codec_quality channel too closes this gap: a
         codec-only switch still changes what that channel reports, so it
         becomes the confirmation when mode-notify's content can't be.
+
+        OBSERVED ON REAL HARDWARE (2026-07-21, docs/settings.md §14, 7/7
+        `--repeat 2` runs covering every combination of same/different
+        family, resolution, and fps): the same silent-no-op behavior as
+        `set_codec_quality` and `set_recording_format` — requesting the
+        (resolution, codec, fps) the camera is already in produces no
+        report on any of the three watched channels. Now a no-op when both
+        `last_known_codec_variant` (its codec_id) and
+        `last_known_recording_format` already confirm the target family and
+        (fps_int, width, height) — reusing the same two notification-derived
+        fields `set_codec_quality` and `set_recording_format` maintain,
+        rather than tracking a third. The guard only fires once prior
+        notifications have proven both halves of the state; before that it
+        still writes and waits normally.
         """
         spec = self.profile.require_command("video_format")
         resolution_spec = self.profile.require_resolution(resolution)
@@ -483,6 +543,15 @@ class CameraSession:
                 f"tools/control/send_settings_command.py --dimension-enum (see "
                 f"docs/settings.md) before using this combination."
             )
+
+        already_satisfied = (
+            self.last_known_codec_variant is not None
+            and self.last_known_codec_variant[0] == codec_spec.id
+            and self.last_known_recording_format
+            == (fps_spec.fps_int, resolution_spec.width, resolution_spec.height)
+        )
+        if already_satisfied:
+            return
 
         command = encode_video_format(
             category=spec.category,
@@ -509,8 +578,12 @@ class CameraSession:
         if hit is None:
             raise BMDVerificationError(
                 f"set_video_format({resolution} {codec} {fps}): no echo received on any of "
-                f"{keys} within {self.echo_timeout_s}s (this family's echo behaviour is not "
-                f"yet captured — see docs/settings.md)"
+                f"{keys} within {self.echo_timeout_s}s — either the camera was already at "
+                f"({resolution}, {codec}, {fps}) without this session having previously "
+                f"observed both halves of that (the known-redundant-write case is normally "
+                f"caught before any write — see last_known_codec_variant and "
+                f"last_known_recording_format) or the write genuinely failed — see "
+                f"docs/settings.md"
             )
 
         key, (_header, payload) = hit
@@ -560,11 +633,29 @@ class CameraSession:
         sensor fps and frame_flags are not compared, since the camera's own
         report of those elements hasn't been characterised yet (see
         docs/settings.md).
+
+        OBSERVED ON REAL HARDWARE (2026-07-21, docs/settings.md §14, 5/5
+        `--repeat 2` runs): identical to `set_codec_quality`'s no-echo
+        finding — requesting the (resolution, fps) the camera is already at
+        produces no report at all. Like `set_codec_quality`, this is now a
+        no-op when `last_known_recording_format` (notification-derived,
+        updated from any recording_format-category report including
+        `set_video_format`'s own mode-notify confirmations) already confirms
+        the target `(fps_int, width, height)`: nothing is sent, no exception
+        is raised. The guard only fires once a prior notification has proven
+        the state; before that it still writes and waits normally.
         """
         spec = self.profile.require_command("recording_format")
         resolution_spec = self.profile.require_resolution(resolution)
         fps_spec = self.profile.require_fps_mode(fps)
         sensor_spec = self.profile.require_fps_mode(sensor_fps) if sensor_fps else fps_spec
+
+        if self.last_known_recording_format == (
+            fps_spec.fps_int,
+            resolution_spec.width,
+            resolution_spec.height,
+        ):
+            return
 
         command = encode_recording_format(
             category=spec.category,
@@ -586,8 +677,11 @@ class CameraSession:
         if result is None:
             raise BMDVerificationError(
                 f"set_recording_format({resolution} {fps}): no echo received within "
-                f"{self.echo_timeout_s}s (this family's echo behaviour is not yet "
-                f"captured — see docs/settings.md)"
+                f"{self.echo_timeout_s}s — either the camera was already at "
+                f"({resolution}, {fps}) without this session having previously observed "
+                f"that (the known-redundant-write case is normally caught before any "
+                f"write — see last_known_recording_format) or the write genuinely "
+                f"failed — see docs/settings.md"
             )
         _header, payload = result
         reported = decode_recording_format(payload, spec.data_type)
@@ -664,12 +758,18 @@ class CameraSession:
         already does — a failure at any step raises `BMDVerificationError`
         or `BMDUnsupportedError` from that step, and later steps don't run.
 
-        KNOWN RISK (see `set_codec_quality`'s own docstring): step 1's
-        `video_format` write resets the codec family's quality to a
-        per-family remembered value; if that happens to already match the
-        `variant` requested in step 2, step 2's write is a no-op the camera
-        doesn't echo, and `BMDVerificationError` is indistinguishable from
-        a real failure. Not papered over here — see docs/settings.md §8.
+        Each step routinely lands the *next* step's target as a side
+        effect — e.g. step 1's `video_format` write resets the codec
+        family's quality to a per-family remembered value, which can
+        already match the `variant` step 2 requests; step 1 alone can also
+        already land the exact resolution+fps step 3 asks for. Every one of
+        those redundant follow-up writes is a real-hardware-confirmed
+        no-echo case (`docs/settings.md` §11, §14) that used to be
+        indistinguishable from `BMDVerificationError`. As of 2026-07-21 all
+        three steps guard against it themselves via notification-derived
+        `last_known_*` state (`last_known_codec_variant`,
+        `last_known_recording_format`) — see each method's own docstring —
+        so a redundant step here is silently skipped rather than raising.
         """
         resolution_spec = self.profile.require_resolution(resolution)
         self.profile.require_codec(codec, variant)

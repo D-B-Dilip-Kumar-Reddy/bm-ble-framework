@@ -200,6 +200,24 @@ message remains for that case. `set_camera_format` inherits the
 mitigation automatically, with no changes needed there. See
 `docs/settings.md` §8, §10, §11.
 
+**The same no-echo-on-redundant-write behavior was confirmed for
+`video_format` and `recording_format` too (2026-07-21, `docs/settings.md`
+§14: 7/7 and 5/5 real-hardware `--repeat 2` captures)** — requesting a
+`(resolution, fps)` or `(resolution, codec, fps)` the camera is already in
+produces no report on any watched channel, exactly like `codec_quality`.
+Both are now guarded the same way: a new `last_known_recording_format:
+tuple[int, int, int] | None` field (`fps_int, width, height`; deliberately
+excludes `sensor_fps_int`/`frame_flags`, matching what verification
+already compares) is updated by a new `_observe_recording_format` watcher.
+Because `set_video_format`'s mode-notify confirmation shares the exact
+same `(category, parameter)` as `recording_format`'s own echo, this one
+field is updated by either write — `set_recording_format` checks it alone,
+while `set_video_format` checks it together with `last_known_codec_variant`
+(its codec_id) rather than tracking video_format's own three-way state
+separately. Both guards mirror `set_codec_quality`'s exactly: return
+immediately, no write, no wait, only once a prior notification has proven
+the state. See `docs/settings.md` §14.
+
 **`set_camera_format(codec, variant, resolution, fps)`** orchestrates the
 three methods above from one combination, so a caller doesn't need to know
 which packet does which part. It sequences `set_video_format` →

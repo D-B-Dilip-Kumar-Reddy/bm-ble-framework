@@ -7,10 +7,13 @@ doesn't need to know which of those three settings packets accomplishes
 which part, or that one combination (4K DCI/ProRes) needs a two-step
 workaround because its dimension_enum is still unknown.
 
-set_video_format is VERIFIED on real hardware (docs/settings.md §8);
-set_codec_quality and set_recording_format are still CANDIDATE. Every step
-raises BMDVerificationError unless confirmed by an INCOMING_CONTROL echo —
-this script never assumes success from "the call didn't raise".
+All three settings families are VERIFIED on real hardware (docs/settings.md
+§8, §10), including each one's no-echo-on-redundant-write behavior (§11,
+§14) — set_camera_format's steps silently skip a write that's already
+known to be satisfied rather than raising. Every step still raises
+BMDVerificationError unless confirmed by an INCOMING_CONTROL echo when a
+write does happen — this script never assumes success from "the call
+didn't raise".
 
 WHAT THIS SCRIPT CHANGES ON THE CAMERA: codec family, quality variant,
 resolution, and frame rate — twice (ProRes, then back to BRAW). Note your
