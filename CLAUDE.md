@@ -238,9 +238,9 @@ Populate this table as categories are confirmed from sniffer sessions. Each cate
 | Category | Description | File |
 |---|---|---|
 | `0x0A` (param `0x01`) | Recording (record start/stop) | `protocol/categories/recording.py` |
-| `0x0A` (param `0x00`) | Codec + quality variant — VERIFIED (2026-07-20: `CameraSession.set_codec_quality()` genuine real-hardware write+echo cycle); does NOT switch BRAW↔ProRes (see `docs/settings.md`) | `protocol/categories/settings.py` |
-| `0x01` (param `0x00`) | Video format (FORMAT packet) — VERIFIED (2026-07-20: `CameraSession.set_video_format()` 2/2 real-hardware round trip); dimension_enum locks resolution + codec family, the actual BRAW↔ProRes switch. Never appears in notifications itself — enums need active probing (`docs/settings.md` §7–§8) | `protocol/categories/settings.py` |
-| `0x01` (param `0x09`) | Recording format (fps/sensor-fps/width/height/flags, int16 ×5) — VERIFIED (2026-07-20: `CameraSession.set_recording_format()` real-hardware write+echo cycle with the `0x82` write byte accepted); the camera's own reports still use data-type byte `0x02` | `protocol/categories/settings.py` |
+| `0x0A` (param `0x00`) | Codec + quality variant — VERIFIED on `POCKET_6K_G2 v7.9` (2026-07-20: `CameraSession.set_codec_quality()` genuine real-hardware write+echo cycle); does NOT switch BRAW↔ProRes (see `docs/settings.md`). Same category/parameter and payload shape independently confirmed on `POCKET_6K_PRO v8.6` too (still CANDIDATE there — no write+echo cycle attempted yet, `docs/settings.md` §15) | `protocol/categories/settings.py` |
+| `0x01` (param `0x00`) | Video format (FORMAT packet) — VERIFIED on `POCKET_6K_G2 v7.9` (2026-07-20: `CameraSession.set_video_format()` 2/2 real-hardware round trip); dimension_enum locks resolution + codec family, the actual BRAW↔ProRes switch. Never appears in notifications itself — enums need active probing (`docs/settings.md` §7–§8). Same coordinates confirmed working on `POCKET_6K_PRO v8.6` via an active `dimension_enum` sweep (still CANDIDATE there); every enum value found matches the G2's number for the same resolution (`docs/settings.md` §15) — and on that camera, the on-screen display doesn't reflect the change until a power cycle even though the write took effect | `protocol/categories/settings.py` |
+| `0x01` (param `0x09`) | Recording format (fps/sensor-fps/width/height/flags, int16 ×5) — VERIFIED on `POCKET_6K_G2 v7.9` (2026-07-20: `CameraSession.set_recording_format()` real-hardware write+echo cycle with the `0x82` write byte accepted); the camera's own reports still use data-type byte `0x02`. Same category/parameter and payload shape independently confirmed on `POCKET_6K_PRO v8.6` too (still CANDIDATE there) | `protocol/categories/settings.py` |
 | `0x09` (param `0x01`) | Storage write-margin signal — CANDIDATE, not confirmed causation, see `docs/recording.md` (category `0x09` is the same ambient-telemetry category `TIMECODE` param `0x04` already lives in) | `protocol/categories/storage.py` |
 
 ### Data types (`protocol/types.py`)
@@ -412,9 +412,10 @@ This is the concrete, tool-by-tool procedure for bringing up a new `(MODEL_KEY, 
 pair — which tool to run in which order, and what profile change each step produces.
 Follow the phases in order; each one depends on the profile state the previous phase left
 behind. Derived from reverse-engineering `POCKET_6K_G2 v7.9` (all phases) and
-`POCKET_6K_PRO v8.6` (Phase 2, in progress) — see `docs/settings.md` and
-`docs/command_discovery.md` for the full evidentiary write-ups behind Phase 3 and Phase 2
-respectively.
+`POCKET_6K_PRO v8.6` (Phase 2 done, Phase 3 in progress — resolutions, dimension_enums,
+and codec ids transcribed, but nothing yet promoted past CANDIDATE) — see
+`docs/settings.md` and `docs/command_discovery.md` for the full evidentiary write-ups
+behind Phase 3 and Phase 2 respectively.
 
 Two flag conventions to keep straight: `tools/query/`, `tools/sniffers/`, and
 `tools/control/` scripts all take `--model-key`/`--firmware` CLI flags. `examples/*.py`
