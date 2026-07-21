@@ -136,6 +136,15 @@ own eyes (not the echo) are ground truth anyway. Worth the same fix if a
 future sweep's first-candidate echo looks suspiciously like unrelated
 camera state.
 
+**Sibling tool note.** `send_settings_command.py` gained a `--repeat N`
+flag (2026-07-21) for a different discovery question than this tool
+answers: not "what command produces this effect" but "does this
+already-verified command echo when it's a redundant no-op" (see
+`docs/settings.md` §13 and `docs/active_camera_control.md`). This tool has
+no equivalent flag — a discovery sweep's candidates are, by construction,
+rarely repeats of the same value, so the redundant-write question doesn't
+arise here the way it does when replaying one known command twice.
+
 ---
 
 ## Worked example: recording on POCKET_6K_PRO v8.6

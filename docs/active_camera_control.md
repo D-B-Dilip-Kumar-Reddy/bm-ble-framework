@@ -137,6 +137,38 @@ confirmation, independent of the bad capture) is in `docs/settings.md` §6.
 `tools/control/discover_command.py` has the same latent risk on its first
 candidate only — see `docs/command_discovery.md`'s safety model.
 
+**`--repeat N` (default `1`) — the redundant-write echo probe.** Added
+2026-07-21. Real-hardware evidence proved `codec_quality`'s report only
+fires on an *applied* change: requesting the (codec, variant) the camera
+is already at produces no echo at all (`docs/settings.md` §11 —
+`CameraSession.set_codec_quality` now guards against this via
+`last_known_codec_variant`). Whether `video_format` and `recording_format`
+share that same silent-no-op behavior is an open question (`docs/settings.md`
+§13) — this flag exists to answer it with a real capture rather than a
+guess. With `--repeat 2`, the tool sends the exact same command bytes
+twice in one connected session — via `build_repeated_actions`, which just
+duplicates the `(label, command)` pair `run_send_and_capture` already
+takes a list of, suffixing each with `(send i/N)` — so each send gets its
+own labeled capture window and `print_window_summary`:
+
+```
+python tools/control/send_settings_command.py \
+    --model-key POCKET_6K_G2 --firmware v7.9 \
+    --packet recording_format --resolution "4K DCI" --fps 25 --repeat 2
+
+python tools/control/send_settings_command.py \
+    --model-key POCKET_6K_G2 --firmware v7.9 \
+    --packet video_format --resolution UHD --codec ProRes --fps 25 --repeat 2
+```
+
+Send 1 lands the camera in the target state and should echo normally, same
+as any other run of this tool. Send 2, requesting a state the camera is
+already in, is the deliberate probe: `(none observed)` on that window's
+summary reproduces the `codec_quality` finding for this family too (a
+`last_known_*` no-op guard belongs in the matching `CameraSession` method,
+mirroring `last_known_codec_variant`); a normal echo on both windows means
+that family reports unconditionally and needs no such guard.
+
 ---
 
 ## `tools/control/discover_command.py`

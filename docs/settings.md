@@ -942,7 +942,7 @@ matching what the camera was doing the whole time.
 | Profile accessors | `camera_profile.py` `require_codec` / `require_resolution` / `require_fps_mode` (`CodecSpec`/`ResolutionSpec`/`FpsModeSpec`) |
 | Session methods | `session.py` `set_codec_quality` / `set_video_format` / `set_recording_format` (see `docs/session_and_verification.md` for the echo strategy), plus the `set_camera_format` orchestration (§9) and its `_closest_reachable_resolution` helper |
 | Notification-derived state | `session.py` `last_known_codec_variant` + `_observe_codec_quality` (§11) — feeds `set_codec_quality`'s no-op guard, same discipline as `is_recording` |
-| Tools | `tools/sniffers/sniffer_settings.py` (passive), `tools/control/send_settings_command.py` (active, typed-yes gated) |
+| Tools | `tools/sniffers/sniffer_settings.py` (passive), `tools/control/send_settings_command.py` (active, typed-yes gated; `--repeat N` probes redundant-write echo behavior — §13) |
 | Example | `examples/change_codec.py` |
 | Tests | `tests/unit/protocol/categories/test_settings.py`, plus settings cases in `test_codec.py`, `test_types.py`, `test_camera_profile.py`, `test_session.py` (`TestSetCameraFormat`, `TestClosestReachableResolution`, `TestObserveCodecQuality`) |
 
@@ -984,3 +984,51 @@ writing (§11). The guard only fires once a prior notification has proven
 the state; before that (a session's very first `set_codec_quality` call)
 it still writes and waits normally, and the original error message
 remains for the case where it genuinely doesn't know.
+
+---
+
+## 13. Open question: does the same no-op-no-echo behavior apply to video_format and recording_format? (2026-07-21)
+
+§11's `last_known_codec_variant` guard closes the redundant-write gap for
+`set_codec_quality` specifically, because that family's no-echo-on-no-op
+behavior was directly observed on real hardware. `set_camera_format`'s
+other two steps can hit the structurally identical failure mode, but
+**neither has been observed yet**:
+
+- **`set_recording_format` (step 3)** requests `(resolution, fps)`
+  directly. If step 1 (`set_video_format`, via its proxy path or
+  otherwise) already landed the caller's exact target resolution, step 3's
+  write asks for a state the camera is already in — possibly a redundant
+  no-op with no echo, exactly like §11's `codec_quality` case.
+- **`set_video_format` (step 1)** requests `(resolution, codec, fps)`
+  together. If the camera is already in that exact combination, it's
+  unknown whether any of its three watched channels (own, mode-notify,
+  codec_quality) report anything at all.
+
+Per CLAUDE.md's sniffer-first design principle, this is deliberately left
+**unfixed** rather than speculatively guarded — a `last_known_*` guard
+copy-pasted from §11 without a capture backing it would be exactly the
+kind of invented protocol behavior that principle rules out. Instead,
+`tools/control/send_settings_command.py` gained a `--repeat N` flag
+(2026-07-21, see its module docstring and `docs/active_camera_control.md`)
+that sends the same command twice in one session — send 1 lands the
+target state, send 2 deliberately probes the redundant-write case — so
+this can be answered with a real capture per family:
+
+```
+python tools/control/send_settings_command.py \
+    --model-key POCKET_6K_G2 --firmware v7.9 \
+    --packet recording_format --resolution "4K DCI" --fps 25 --repeat 2
+
+python tools/control/send_settings_command.py \
+    --model-key POCKET_6K_G2 --firmware v7.9 \
+    --packet video_format --resolution UHD --codec ProRes --fps 25 --repeat 2
+```
+
+`(none observed)` on the second window reproduces §11's finding for that
+family too, and the fix is the same shape: a notification-derived
+`last_known_*` field plus an early-return guard in the matching
+`CameraSession` method. A normal echo on both windows means that family
+reports unconditionally and needs no guard at all. Until one of those runs
+produces evidence, `set_camera_format`'s docstring correctly calls this a
+known, unmitigated risk — that is accurate today, not a stale TODO.

@@ -44,6 +44,29 @@ waiting `--connect-settle-seconds` (default 6.0s, matching
 `CameraSession`'s default) after connecting and before the send-and-capture
 window opens.
 
+REDUNDANT-WRITE PROBE (`--repeat`, added 2026-07-21, see docs/settings.md
+§13): real-hardware evidence proved that `codec_quality`'s report only
+fires on an *applied* change — requesting the (codec, variant) the camera
+is already at produces no echo at all, not a slow one (docs/settings.md
+§11; `CameraSession.set_codec_quality` now guards against it via
+`last_known_codec_variant`). Whether `video_format` and `recording_format`
+share that same silent-no-op behavior is still an open question — nobody
+has captured it yet. `--repeat N` (default 1) sends the exact same command
+bytes N times in one connected session, each into its own labeled capture
+window, so a caller can put the camera in the target state with send 1 and
+then deliberately probe the no-op case with send 2 onward:
+
+    # Does recording_format echo on a redundant write, or go silent?
+    python tools/control/send_settings_command.py \\
+        --model-key POCKET_6K_G2 --firmware v7.9 \\
+        --packet recording_format --resolution "4K DCI" --fps 25 --repeat 2
+
+Read the two windows' summaries side by side: a normal echo on both means
+that family always reports regardless of whether anything changed (no
+no-op guard needed); `(none observed)` on the second window only
+reproduces the `codec_quality` finding for this family too (a no-op guard
+belongs there, mirroring `last_known_codec_variant`).
+
 Usage:
     python tools/control/send_settings_command.py --model-key POCKET_6K_G2 --firmware v7.9 \\
         --packet recording_format --resolution "4K DCI" --fps 25
@@ -156,7 +179,7 @@ def build_command(profile: CameraProfile, args: argparse.Namespace) -> tuple[str
     )
 
 
-async def confirm_send(label: str, command: bytes, model_key: str) -> bool:
+async def confirm_send(label: str, command: bytes, model_key: str, *, repeat: int = 1) -> bool:
     """Typed-yes gate before the write — this family is CANDIDATE, so the
     bytes have never been confirmed by this repo's tooling on any camera."""
     tx = " ".join(f"{b:02X}" for b in command)
@@ -167,16 +190,32 @@ async def confirm_send(label: str, command: bytes, model_key: str) -> bool:
         "\nchange the camera's settings. Note the current settings so you can restore"
         "\nthem, keep the camera in view, and watch what it actually does."
     )
+    if repeat > 1:
+        print(
+            f"\n--repeat {repeat}: this exact command will be sent {repeat} times in a row "
+            "(a redundant-write echo probe — see the module docstring)."
+        )
     loop = asyncio.get_running_loop()
     answer = await loop.run_in_executor(None, input, "Type 'yes' to proceed: ")
     return answer.strip().lower() == "yes"
+
+
+def build_repeated_actions(label: str, command: bytes, repeat: int) -> list[tuple[str, bytes]]:
+    """`repeat` copies of `(label, command)`, suffixed with a send index when
+    `repeat > 1` so each capture window (`run_send_and_capture`) is
+    individually identifiable — see the module docstring's REDUNDANT-WRITE
+    PROBE section. `repeat == 1` returns the label unchanged, matching this
+    tool's prior single-send behavior exactly."""
+    if repeat == 1:
+        return [(label, command)]
+    return [(f"{label} (send {i + 1}/{repeat})", command) for i in range(repeat)]
 
 
 async def run(args: argparse.Namespace) -> int:
     profile = CameraProfile.for_model(model_key=args.model_key, firmware=args.firmware)
     label, command = build_command(profile, args)
 
-    if not await confirm_send(label, command, args.model_key):
+    if not await confirm_send(label, command, args.model_key, repeat=args.repeat):
         print("Aborted before any write.")
         return 1
 
@@ -191,9 +230,8 @@ async def run(args: argparse.Namespace) -> int:
         print(f"Waiting {args.connect_settle_seconds}s for the initial payload burst to settle…")
         await asyncio.sleep(args.connect_settle_seconds)
 
-        session = await run_send_and_capture(
-            cam, [(label, command)], listen_seconds=args.listen_seconds
-        )
+        actions = build_repeated_actions(label, command, args.repeat)
+        session = await run_send_and_capture(cam, actions, listen_seconds=args.listen_seconds)
         saved_path = save_capture(args.model_key, args.firmware, session)
         print(f"\nCapture saved to: {saved_path}")
         print(
@@ -246,6 +284,16 @@ def parse_args() -> argparse.Namespace:
             "notifications, so an active probe is the only way. Watch the camera and note "
             "what it switches to; then add the confirmed enum to the profile's resolutions "
             "table."
+        ),
+    )
+    parser.add_argument(
+        "--repeat",
+        type=int,
+        default=1,
+        help=(
+            "Send the exact same command this many times in one connected session, each "
+            "into its own labeled capture window — the redundant-write echo probe (see the "
+            "module docstring). Default: 1 (unchanged single-send behavior)."
         ),
     )
     parser.add_argument(
