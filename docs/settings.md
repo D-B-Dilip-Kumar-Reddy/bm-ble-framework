@@ -29,6 +29,15 @@ per design principle 8 — plenty of the profile is still unpopulated
 (media, metadata, playback) even though every implemented settings family
 is now verified.
 
+**`POCKET_6K_PRO v8.6`** (§15, 2026-07-21) has all three command blocks and the
+`codecs`/`resolutions`/`fps_modes` tables populated from its own captures —
+`dimension_enum` values matching the G2's numbers exactly for every resolution tested
+so far — but everything there is still `CANDIDATE`: no `CameraSession` write+echo
+round trip has been attempted on this camera yet, and quality-variant on-screen names
+are still unknown (wire ids only). §15 also documents a PRO-specific finding: its
+on-screen display doesn't live-update after a `video_format` write until the camera is
+power-cycled, even though the write demonstrably takes effect.
+
 ## Provenance and evidence status
 
 The byte layouts and value tables below were originally transcribed from
@@ -1113,3 +1122,74 @@ bug report this whole investigation started from), not from this tool.
   risk "not papered over" — all three steps now self-guard.
 
 See §12's code surface table for the updated field/method list.
+
+---
+
+## 15. POCKET_6K_PRO v8.6 — dimension_enum sweep and the on-screen UI staleness finding (2026-07-21)
+
+Following the reverse-engineering procedure in `CLAUDE.md` (Phase 3), the PRO's own
+passive captures confirmed `codec_quality` (`0x0A/0x00`) and `recording_format`
+(`0x01/0x09`) report with the *exact same category/parameter and payload shape* as the
+G2 — a real, independently-confirmed data point (not copied), and the basis for trying
+`video_format`'s coordinates (`0x01/0x00`) unchanged too, since it never reports
+passively on either camera (§8's finding held here as well).
+
+**The dimension_enum sweep.** `tools/control/send_settings_command.py --packet
+video_format --dimension-enum 0x..` was swept across candidates on real
+`POCKET_6K_PRO v8.6` hardware. Every candidate below produced a genuine, repeatable
+transition on the `recording_format` mode-notify channel, and — critically — every
+enum value matches the G2's own number for the same resolution:
+
+| Enum | Resolution | Codec | Pixel dimensions |
+|---|---|---|---|
+| `0x03` | HD | ProRes | 1920×1080 |
+| `0x06` | UHD | ProRes | 3840×2160 |
+| `0x08` | 4K DCI | **BRAW only** | 4096×2160 |
+| `0x0D` | 2.8K 17:9 | BRAW | 2880×1512 |
+| `0x12` | 5.7K 17:9 | BRAW | 5744×3024 |
+| `0x13` | 6K | BRAW | 6144×3456 |
+| `0x14` | 6K 2.4:1 | BRAW | 6144×2560 |
+
+Codec family per resolution came from the operator, confirmed against the same
+HD/UHD-under-ProRes, everything-else-under-BRAW split the G2 has, with the same
+4K DCI carve-out: the camera offers 4K DCI under *both* codecs, but the only known
+`dimension_enum` (`0x08`) reaches BRAW's 4K DCI — ProRes's 4K DCI enum is an
+open gap here too, unresolved on the G2 despite an exhaustive `0x01`–`0x16` search
+(§7–§8) and not yet exhaustively searched on the PRO either.
+
+**Unresolved: `0x02` vs `0x13` for "6K".** `0x02` also produced a transition to
+6144×3456 once, but clamped the requested 50fps down to 30 and did not repeat on a
+later attempt (no confirming echo that time — could be a genuine redundant-write no-op,
+or the candidate may simply not be reliable). `0x13` reproduced 6144×3456 cleanly at
+the requested 50fps on a separate occasion. The profile records only `0x13` for
+`resolutions."6K".dimension_enums.BRAW`, per the schema's one-enum-per-pair
+constraint; `0x02`'s behavior is noted in `commands.video_format`'s provenance for
+whoever investigates it further. `frame_flags` reported `0x00` for both attempts at
+6144×3456 (full-sensor readout) versus `0x10` for every other resolution
+(windowed/cropped) — the same "windowed bit" pattern already hypothesized for the G2,
+now with a second camera's worth of supporting evidence, and a plausible explanation
+for the fps ceiling difference (a full-sensor readout costing more bandwidth than a
+windowed crop).
+
+**The UI staleness finding — the reason "nothing worked" looked true at first.** The
+operator initially reported none of these dimension_enum sends visibly changed
+anything on the camera body. They did: the PRO's on-screen settings display does not
+live-update after a `video_format` write. The change genuinely takes effect (the wire
+evidence above, confirmed independently by power-cycling the camera afterward — the
+new value *is* what's active post-reboot) — the body's menu just keeps showing the old
+value until the camera is rebooted. This is now recorded in
+`commands.video_format`'s provenance notes as a standing caveat: on this
+camera/firmware, a static on-screen display after a video_format write is **not**
+reliable evidence the write failed. Trust the wire (a fresh `recording_format` or
+`codec_quality` report) or a power cycle, not a glance at the still-displayed menu.
+Whether this staleness also affects the G2 has not been tested — the G2's own
+video_format verification runbook (§8) never happened to hit this ambiguity, since its
+`CameraSession.set_video_format()` round trips were confirmed via the wire the same way
+this section's evidence was, not via an on-screen check.
+
+**Still open:** every command block and lookup table transcribed here stays
+`CANDIDATE`, not `VERIFIED` — no write+echo cycle has been attempted through
+`CameraSession` yet on this camera (the equivalent of the G2's §8/§10 promotion, via
+`examples/change_codec.py`), and `codec_quality`'s quality-variant names are still
+wire ids only (`variant_0`/`variant_3` for ProRes, `variant_4`/`variant_5` for BRAW) —
+no operator-confirmed on-screen label exists yet for any of them.

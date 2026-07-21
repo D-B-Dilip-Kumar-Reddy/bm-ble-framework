@@ -329,10 +329,10 @@ seed a block from. Sending it at all requires a `commands.video_format`
 block to already exist — chicken-and-egg, since `tools/control/
 send_settings_command.py` builds its packet from the profile.
 
-The precedent (first hit on `POCKET_6K_PRO v8.6`, in progress): add the
-block as an explicit `provenance.status: "CANDIDATE"` **hypothesis**, not a
-copied value — category/parameter/data_type/reserved mirroring the *other*
-model's coordinates, justified only when that other model's already-sniffed
+The precedent (`POCKET_6K_PRO v8.6`): add the block as an explicit
+`provenance.status: "CANDIDATE"` **hypothesis**, not a copied value —
+category/parameter/data_type/reserved mirroring the *other* model's
+coordinates, justified only when that other model's already-sniffed
 families (`codec_quality`, `recording_format`) matched exactly on the new
 camera too (a real, per-model-confirmed data point, not an assumption). The
 `provenance.method` field must say plainly that it's untested and name what
@@ -341,6 +341,16 @@ actually changing the camera. This is different from copying a *value*
 (codec ids, dimension enums, resolutions — never allowed across models,
 design principle 6): coordinates are protocol *structure*, and the send
 itself is the sniffer-equivalent confirmation step once it succeeds.
+
+The hypothesis paid off (`docs/settings.md` §15): every `dimension_enum` value found
+on the PRO matches the G2's number for the same resolution exactly, and the
+`--dimension-enum` sweep produced real, repeatable resolution transitions — confirming
+the coordinate guess without ever copying a resolution/codec *value* across the two
+profiles. It also surfaced a camera-specific quirk worth knowing before running this
+same sweep on a future model: the PRO's on-screen display does not live-update after a
+`video_format` write until the camera is power-cycled, even though the write
+genuinely took effect — don't trust a static menu as proof a write failed; check the
+wire (a fresh `recording_format`/`codec_quality` report) instead.
 
 ## Testing
 

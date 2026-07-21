@@ -44,12 +44,107 @@
       "reserved": 1,
       "provenance": {
         "status": "CANDIDATE",
-        "method": "hypothesis, not sniffed — video_format never appeared in any INCOMING_CONTROL notification across every settings capture on this camera (category/parameter/data_type/reserved mirror POCKET_6K_G2_v7.9, which has the identical never-reports-passively finding, see docs/settings.md §8). codec_quality and recording_format's category/parameter DID match the G2 exactly on this model (0x0A/0x00 and 0x01/0x09), which is the basis for trying the same coordinates here rather than a blind guess — but per design principle 6 this is unconfirmed until an active send (tools/control/send_settings_command.py --packet video_format --dimension-enum) actually changes the camera and/or shows up on another channel.",
+        "method": "active send (tools/control/send_settings_command.py --packet video_format --dimension-enum sweep, 2026-07-21). Coordinates now confirmed working, not just a hypothesis: repeated real-hardware sends produced genuine, repeatable resolution transitions on the recording_format (0x01/0x09) mode-notify channel — operator-confirmed against the on-screen resolution name after a power cycle (see notes). video_format's own channel (0x01/0x00) still never echoes, matching POCKET_6K_G2_v7.9. Not yet promoted to VERIFIED — that requires the full CameraSession round trip (examples/change_codec.py), not yet attempted on this camera.",
         "capture_refs": [
           "tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260721T171924.json",
-          "tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260721T174504.json"
-        ]
+          "tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260721T174504.json",
+          "tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260721T180755.json",
+          "tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260721T180939.json"
+        ],
+        "notes": "IMPORTANT, real-hardware confirmed 2026-07-21: this camera's on-screen settings display does NOT live-update after a video_format write — the change genuinely takes effect (confirmed both by the wire and by power-cycling the camera, which then shows the new value) — but the body's menu keeps showing the OLD value until rebooted. Do not treat a static on-screen display alone as evidence a write failed; check tools/captures/ or power-cycle to confirm. dimension_enum values found so far match POCKET_6K_G2_v7.9's numbers exactly for every resolution tested (independently confirmed on this camera's own captures, not copied — see the resolutions table below) — 0x02 also produced a transition to the same pixel dimensions as 0x13 ('6K') once, but with fps clamped to 30 instead of the requested 50 and no confirming echo on a repeat attempt; recorded as an open, unresolved candidate rather than a second dimension_enums entry (the schema only holds one enum per resolution/codec pair) — see the '6K' resolution entry's own comment."
       }
+    },
+    "codec_quality": {
+      "category": 10,
+      "parameter": 0,
+      "data_type": "INT8",
+      "reserved": 0,
+      "provenance": {
+        "status": "CANDIDATE",
+        "method": "passive sniffer capture (tools/sniffers/sniffer_settings.py, 0x0A/0x00 CAMERA_REPORT observed during codec_to_braw/codec_to_prores actions, 2026-07-21)",
+        "capture_refs": [
+          "tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260721T174504.json"
+        ],
+        "notes": "category/parameter/data_type directly observed on the wire; reserved=0 matches every codec_quality report captured so far (untested for writes — no active send attempted yet). Real transitions confirmed on this camera: (2,3)->(3,4) switching to BRAW, (3,4)->(3,5) on a quality change within BRAW, (3,x)->(2,0) switching back to ProRes. Codec ids ProRes=2, BRAW=3 match POCKET_6K_G2_v7.9's ids — independently confirmed via this camera's own transitions, not copied. Quality variant NAMES (on-screen labels) are not yet known — only ids 0 and 3 (ProRes) and 4 and 5 (BRAW) have been observed on the wire; the codecs table below uses placeholder names until an operator confirms what each shows on screen."
+      }
+    },
+    "recording_format": {
+      "category": 1,
+      "parameter": 9,
+      "data_type": "INT16_ARRAY",
+      "reserved": 1,
+      "provenance": {
+        "status": "CANDIDATE",
+        "method": "passive sniffer capture (tools/sniffers/sniffer_settings.py, 0x01/0x09 CAMERA_REPORT, five little-endian int16 elements — same shape as POCKET_6K_G2_v7.9)",
+        "capture_refs": [
+          "tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260721T171924.json"
+        ],
+        "notes": "category/parameter directly observed on the wire. data_type/reserved for WRITES mirror the G2's convention (its own reports use data_type 0x02, not the claimed write byte 0x82 — same discrepancy documented for the G2, docs/settings.md §3) — untested for writes on this camera, no active send attempted yet."
+      }
+    }
+  },
+  "codecs": {
+    "ProRes": {
+      "id": 2,
+      "variants": {
+        "variant_0": 0,
+        "variant_3": 3
+      },
+      "_comment": "Placeholder variant names — only the wire ids are confirmed (0 seen switching back from BRAW, 3 seen as the steady-state before any change). No operator-confirmed on-screen label yet for either."
+    },
+    "BRAW": {
+      "id": 3,
+      "variants": {
+        "variant_4": 4,
+        "variant_5": 5
+      },
+      "_comment": "Placeholder variant names — only the wire ids are confirmed (4 seen switching in from ProRes, 5 seen after one quality_variant_change action). No operator-confirmed on-screen label yet for either."
+    }
+  },
+  "resolutions": {
+    "HD": {
+      "width": 1920,
+      "height": 1080,
+      "codecs": ["ProRes"],
+      "dimension_enums": { "ProRes": 3 }
+    },
+    "UHD": {
+      "width": 3840,
+      "height": 2160,
+      "codecs": ["ProRes"],
+      "dimension_enums": { "ProRes": 6 }
+    },
+    "4K DCI": {
+      "width": 4096,
+      "height": 2160,
+      "codecs": ["BRAW", "ProRes"],
+      "dimension_enums": { "BRAW": 8 },
+      "_comment": "Camera offers 4K DCI under both codecs (operator-confirmed), but the only known dimension_enum (8) reaches BRAW's 4K DCI only — same unresolved gap as POCKET_6K_G2_v7.9's 4K DCI/ProRes (docs/settings.md §7-§9), independently observed here, not assumed from the G2."
+    },
+    "2.8K 17:9": {
+      "width": 2880,
+      "height": 1512,
+      "codecs": ["BRAW"],
+      "dimension_enums": { "BRAW": 13 }
+    },
+    "5.7K 17:9": {
+      "width": 5744,
+      "height": 3024,
+      "codecs": ["BRAW"],
+      "dimension_enums": { "BRAW": 18 }
+    },
+    "6K": {
+      "width": 6144,
+      "height": 3456,
+      "codecs": ["BRAW"],
+      "dimension_enums": { "BRAW": 19 },
+      "_comment": "dimension_enum 19 (0x13) cleanly reproduced this resolution at the requested 50fps. Enum 2 (0x02) also produced the same pixel dimensions once, but clamped fps to 30 and did not reproduce on a later attempt (no confirming echo that time) — left unresolved rather than recorded as a second candidate, since the schema holds only one enum per resolution/codec pair. frame_flags reported as 0x00 here vs 0x10 for every other resolution — matches the G2's 'windowed bit' hypothesis (0x00 = full sensor, 0x10 = windowed/cropped), consistent with a full-sensor readout mode plausibly explaining the lower fps ceiling."
+    },
+    "6K 2.4:1": {
+      "width": 6144,
+      "height": 2560,
+      "codecs": ["BRAW"],
+      "dimension_enums": { "BRAW": 20 }
     }
   },
   "fps_modes": {

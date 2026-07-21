@@ -567,26 +567,35 @@ def test_pocket_6k_g2_profile_resolves_settings_blocks():
     assert profile.require_fps_mode("23.98").fps_int == 24
 
 
-def test_pocket_6k_pro_profile_has_no_transcribed_settings_values_yet():
-    """Settings values must never be copied across models without sniffing
-    that camera (CLAUDE.md design principle 6) — codec_quality/
-    recording_format and the codecs/resolutions lookup tables stay
-    untranscribed until captured on the PRO itself. video_format's
-    category/parameter/data_type/reserved exist as an explicit CANDIDATE
-    hypothesis (mirroring the G2's coordinates, since video_format never
-    reports passively on either camera — see docs/settings.md §14/PRO
-    section) and fps_modes has one wire-observed entry ("50") — neither
-    is a copied *value*, both are pending confirmation via active send."""
+def test_pocket_6k_pro_profile_resolves_settings_blocks():
+    """POCKET_6K_PRO_v8.6.json's settings blocks/tables were populated from
+    this camera's own real captures (2026-07-21) — CLAUDE.md design
+    principle 6 requires that, never copied from the G2. All three command
+    blocks and the codecs/resolutions tables stay CANDIDATE (not VERIFIED)
+    until a full CameraSession write+echo round trip is attempted — see
+    docs/settings.md's PRO section."""
     profile = CameraProfile.for_model("POCKET_6K_PRO", "v8.6")
 
-    assert profile.command("codec_quality") is None
-    assert profile.command("recording_format") is None
-    video_format = profile.command("video_format")
-    assert video_format is not None
-    assert video_format.provenance.status == "CANDIDATE"
-    assert profile.codecs == {}
-    assert profile.resolutions == {}
-    assert set(profile.fps_modes) == {"50"}
+    for name in ("video_format", "codec_quality", "recording_format"):
+        spec = profile.require_command(name)
+        assert spec.provenance.status == "CANDIDATE"
+
+    codec_quality = profile.require_command("codec_quality")
+    assert (codec_quality.category, codec_quality.parameter) == (10, 0)
+    recording_format = profile.require_command("recording_format")
+    assert (recording_format.category, recording_format.parameter) == (1, 9)
+
+    assert profile.require_codec("BRAW", "variant_5").id == 3
+    assert profile.require_codec("ProRes", "variant_0").id == 2
+
+    four_k = profile.require_resolution("4K DCI")
+    # ProRes enum unknown here too — same open gap as the G2's 4K DCI/ProRes.
+    assert four_k.dimension_enums == {"BRAW": 8}
+    six_k = profile.require_resolution("6K")
+    assert (six_k.width, six_k.height) == (6144, 3456)
+    assert six_k.dimension_enums == {"BRAW": 19}
+
+    assert profile.require_fps_mode("50").fps_int == 50
 
 
 def test_pocket_6k_pro_profile_resolves_recording_command():
