@@ -33,10 +33,15 @@ is now verified.
 `codecs`/`resolutions`/`fps_modes` tables populated from its own captures —
 `dimension_enum` and quality-variant values matching the G2's numbers exactly for
 every one confirmed so far — but everything there is still `CANDIDATE`: no
-`CameraSession` write+echo round trip has been attempted on this camera yet. §15 also
-documents a PRO-specific finding: its
-on-screen display doesn't live-update after a `video_format` write until the camera is
-power-cycled, even though the write demonstrably takes effect.
+`CameraSession` write+echo round trip has fully succeeded on this camera yet. §15
+documents a PRO-specific finding: its on-screen display doesn't live-update after a
+`video_format` write until the camera is power-cycled, even though the write
+demonstrably takes effect. §16 (2026-07-22) documents a second, more serious
+PRO-specific finding: `set_recording_format` cannot retarget resolution to 4K DCI while
+ProRes is the active codec on this camera — confirmed 2/2 via real `CameraSession`
+round trips — so unlike the G2, the two-step proxy workaround never actually reaches
+ProRes/4K DCI here. This blocks promoting the PRO's settings families to `VERIFIED`
+until that combination is either fixed or explicitly excluded.
 
 ## Provenance and evidence status
 
@@ -1273,3 +1278,95 @@ behavior already established for this family (§11, §14) and for `codec_quality
 `commands.recording_format`'s provenance now records both the passive and this active
 confirmation; still `CANDIDATE`, not `VERIFIED` — that still needs a `CameraSession`
 round trip, not a raw `send_settings_command.py` send.
+
+## 16. POCKET_6K_PRO v8.6 — ProRes/4K DCI is unreachable via `recording_format` (2026-07-22)
+
+§15 left the `CameraSession` round trip (`examples/change_codec.py`) as the last open
+item before promoting the PRO's settings families to `VERIFIED`. Running it surfaced
+two distinct problems, one timing-related and already understood, and one genuinely
+new.
+
+### First: the default 3s echo timeout produces a false negative here too
+
+The first `change_codec.py` attempt (default `echo_timeout_s=3.0`) targeted
+`ProRes 422 4K DCI @ 25` and immediately failed: `set_video_format`'s own guard raised
+`BMDVerificationError` after 3s with no echo on any of `(1,0)`, `(1,9)`, `(10,0)`.
+The capture shows why — the camera's lens-metadata burst (category `0x0C`, `docs`
+already flagged this in `CLAUDE.md`'s Verification Strategy section as a hypothesis)
+dominated the window, and the genuine `0x01/0x09` confirmation (payload decoding to
+`fps=25, width=3840, height=2160` — UHD, the proxy resolution `set_camera_format`
+substitutes when a codec has no `dimension_enum` for the literal target) didn't arrive
+until ~4.2s after the write, past the 3s timeout. This is the same lens-burst delay
+pattern already documented for `codec_quality`/`recording_format` sends in §15 and in
+`CLAUDE.md`'s known-risk paragraph — now directly confirmed against a real
+`CameraSession` write, not just tooling. Re-running with `echo_timeout_s=6.0` avoided
+this false negative and exposed the real problem underneath.
+
+### Second: `recording_format` never confirms a retarget to 4K DCI while ProRes is active
+
+With `echo_timeout_s=6.0`, two independent `change_codec.py` runs — one starting from
+BRAW 8:1/5.7K 17:9/60fps, one starting from BRAW 5:1/4K DCI/25fps — both targeted
+`ProRes 422 4K DCI @ 25` and both failed the same way, at the same step:
+
+1. `set_video_format`'s proxy write to `(UHD, ProRes, 25)` (dimension_enum `6`, the
+   only ProRes enum near 4K DCI — see the `resolutions` table) landed and echoed
+   promptly: a fresh `0x01/0x09` report decoding to `fps=25, width=3840, height=2160,
+   frame_flags=0x10` in both runs, well inside the window.
+2. `set_codec_quality`'s write to ProRes/422 landed and echoed promptly too: a fresh
+   `0x0A/0x00` report decoding to `codec_id=2, variant_id=1` in both runs.
+3. `set_recording_format`'s write to retarget resolution to 4K DCI —
+   `TX: FF 0E 00 01 01 09 82 00 19 00 19 00 00 10 70 08 10 00`, decoding to
+   `fps=25, width=4096, height=2160, frame_flags=0x10` — produced **zero** fresh
+   `0x01/0x09` reports over the full 6.0s window in both runs. The only `0x01/0x09`
+   packet seen in either window was one stale, byte-identical duplicate of the prior
+   UHD report (`width=3840`), plus the ambient `0x09/0x00` storage telemetry that
+   free-runs regardless of any write. Both runs raised `BMDVerificationError` from this
+   step.
+
+Steps 1 and 2 prove the camera was genuinely and confirmedly in `ProRes/422/UHD` —
+not still mid-transition, not stuck on stale state — when step 3's write went out.
+Step 3 is a resolution-only change within the same codec family the camera was already
+verified to be in, and it simply never confirms.
+
+The identical target reached via BRAW instead succeeded immediately, every time, in
+the same script runs: `dimension_enums.BRAW.4K DCI = 8` lets `set_video_format` land
+directly on 4K DCI in one step, so `set_recording_format`'s retarget is never even
+invoked for that path. This isolates the failure specifically to `recording_format`
+retargeting resolution while ProRes is active — not to 4K DCI in general, not to
+`video_format`, and not to a timing artifact (the 6s budget gave more than enough room
+for the same lens-burst delay that explained the first false negative).
+
+**A third, superficially similar result is not independent evidence.** A standalone
+`send_settings_command.py --packet recording_format --resolution "4K DCI" --fps 25`
+probe also produced zero echoes over an 8s window. But it ran immediately after a
+`change_codec.py` invocation whose own BRAW combo had just succeeded, landing the
+camera at `BRAW 5:1/4K DCI/25fps/frame_flags=0x10` — an exact byte-for-byte match of
+the probe's own request. Its silence is fully explained by the already-confirmed
+redundant-write no-echo behavior (§11, §14), not by anything ProRes-specific, and
+doesn't add to the evidence above. The two `change_codec.py` failures, whose starting
+states are independently confirmed to differ from the target and from each other, are
+what the conclusion rests on.
+
+### Consequence
+
+This makes the PRO's ProRes/4K DCI gap worse than the G2's: the G2's two-step proxy
+workaround (`video_format` to a reachable resolution, then `recording_format` to nudge
+the rest of the way — §7-§9) is documented as actually reaching 4K DCI/ProRes on that
+camera. On the PRO, the same workaround's second step never confirms, so
+`set_camera_format("ProRes", <a 422/HQ/etc variant>, "4K DCI", <any fps>)` currently
+always raises `BMDVerificationError` on this camera. No code change has been made to
+special-case or paper over this — it's recorded as a real, camera-specific protocol
+limitation in `commands.recording_format`'s provenance notes and the `"4K DCI"`
+resolution's `_comment` in `payloads/models/POCKET_6K_PRO_v8.6.json`. Whether the
+camera has *any* way to reach ProRes/4K DCI (a different dimension_enum candidate not
+yet tried, a different write ordering, or a genuine firmware restriction) is still
+open; no further candidates have been searched yet, mirroring where the G2's own
+4K DCI/ProRes search was left before its proxy workaround was found (§7-§9).
+
+All three settings families remain `CANDIDATE` on this camera — this finding blocks
+promoting `recording_format` (and by extension the ProRes/4K DCI combination of
+`video_format`) to `VERIFIED` via `change_codec.py`, since that script's ProRes/4K DCI
+combo cannot currently pass. A `VERIFIED` promotion for the combinations that do work
+(BRAW paths, and any ProRes/resolution pair reachable directly via a `dimension_enum`
+without needing the `recording_format` retarget step) is a separate, still-unattempted
+step.

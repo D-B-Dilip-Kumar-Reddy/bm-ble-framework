@@ -382,6 +382,20 @@ within ~150ms of the *next* send being issued almost certainly belongs to the
 *previous* one) rather than assuming window boundaries and echo ownership always
 line up — see `docs/settings.md` §15 for a worked example.
 
+That same lens-burst timing pattern also explained the *first* failure of the PRO's
+`CameraSession` round trip, but not its second, deeper one (`docs/settings.md` §16): a
+default 3s `echo_timeout_s` raised a false-negative `BMDVerificationError` on a
+`set_video_format` write that had genuinely succeeded, just late. Raising the timeout
+to 6s fixed that false negative but uncovered a real, camera-specific protocol
+limitation underneath — `set_recording_format` cannot retarget resolution to 4K DCI
+while ProRes is the active codec on this camera, confirmed 2/2 from independently
+different starting states with both prior orchestration steps (`video_format`,
+`codec_quality`) cleanly confirmed first. A worked lesson for future models: when a
+verification failure disappears after raising the timeout, don't stop there — a wider
+timeout can retire one hypothesis (timing) while leaving a second, unrelated failure
+mode (a genuine no-op/limitation) exposed underneath it. Confirm the write actually
+lands, not just that *something* echoed.
+
 ## Testing
 
 `tests/unit/test_camera_profile.py` covers: every `KNOWN_PROFILES` JSON
