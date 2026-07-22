@@ -43,9 +43,12 @@ round trips — so unlike the G2, the two-step proxy workaround never actually r
 ProRes/4K DCI here. A same-day addendum to §16 then confirmed via passive capture that
 ProRes/4K DCI is nonetheless a real, representable state on this camera (reached by
 hand through the body menu) — narrowing the gap to this codebase's write path rather
-than a camera-side refusal, but not yet closing it. This blocks promoting the PRO's
-settings families to `VERIFIED` until that combination is either fixed or explicitly
-excluded.
+than a camera-side refusal, but not yet closing it. A follow-up exhaustive
+`dimension_enum` sweep (`tools/control/sweep_dimension_enum.py`, `0x00`-`0x16`) then
+found no enum in that range reaches ProRes/4K DCI either — the same negative result
+the G2's own exhaustive search got, weakening the "still-undiscovered enum nearby"
+hypothesis on both cameras. This blocks promoting the PRO's settings families to
+`VERIFIED` until the combination is either fixed or explicitly excluded.
 
 ## Provenance and evidence status
 
@@ -1407,3 +1410,38 @@ now with higher expected payoff since the target is proven reachable — plus a 
 cheap check first: resending `dimension_enum 0x08` (BRAW's known 4K DCI value) while
 *currently in ProRes* rather than BRAW, in case the enum's meaning turns out to be
 context-dependent rather than a fixed global table.
+
+**Update, same day: the `0x00`-`0x16` sweep is exhausted — no match, matching the G2's
+own exhausted result in this range.** `tools/control/sweep_dimension_enum.py --fps 25
+--target-resolution "4K DCI" --target-codec ProRes` swept the 15 untried candidates
+left after excluding the 8 already-known enums (`0x01, 0x02, 0x04, 0x05, 0x07, 0x09,
+0x0A, 0x0B, 0x0C, 0x0E, 0x10, 0x11, 0x15, 0x16`, plus `0x00`). 14 of 15 produced **zero**
+`recording_format`/`codec_quality` reports at all — not even a stale duplicate, only the
+ambient `0x09/0x00` storage telemetry every window shows regardless of any write. That's
+a clean negative, the same "no camera change" signature the G2's own exhausted
+`0x01`-`0x16` search got for its own untried candidates (§7).
+
+The one exception, `0x00`, reported `(fps=24, 1920x1080, flags=0x00)` with
+`codec_quality (codec_id=2, variant_id=0)` — ProRes/HQ/HD/24fps. Two things mark this as
+a false positive rather than a genuine response: the write requested `fps=25` but the
+report shows `fps=24`, and the reported state exactly matches an unrelated passive
+capture from ~25 minutes earlier in the same session (the `prores_hd_to_4kdci` capture
+above, which recorded the camera already sitting at ProRes/HQ/HD/24fps) — consistent
+with leftover connect-burst state rather than a fresh transition caused by this write.
+Moot for the ProRes/4K DCI goal either way, since HD/ProRes already has a confirmed
+enum (`0x03`) — not worth chasing as a second path to the same resolution.
+
+**Consequence:** the PRO's `0x00`-`0x16` `dimension_enum` space is now exhausted with
+the same negative result as the G2's, weakening the "a still-undiscovered enum in this
+range" hypothesis on both cameras rather than just one. Candidate next steps, roughly
+in order of promise:
+
+1. **Sweep beyond `0x16`** — neither camera's search has covered this
+   (`sweep_dimension_enum.py --range 0x17 0x1F ...` or similar; trivial with the tool
+   now that it exists).
+2. **Retry `recording_format`'s retarget write with `data_type=0x02`** instead of the
+   claimed write byte `0x82` (the same spec discrepancy already documented in §3) — a
+   more promising lead now that the enum-search branch is weaker evidence than before.
+3. **Investigate `video_format`'s two "unexplained trailing zero" elements** as a
+   possible second axis alongside `dimension_enum` — never tested with a nonzero value
+   on either camera.
