@@ -40,8 +40,12 @@ demonstrably takes effect. §16 (2026-07-22) documents a second, more serious
 PRO-specific finding: `set_recording_format` cannot retarget resolution to 4K DCI while
 ProRes is the active codec on this camera — confirmed 2/2 via real `CameraSession`
 round trips — so unlike the G2, the two-step proxy workaround never actually reaches
-ProRes/4K DCI here. This blocks promoting the PRO's settings families to `VERIFIED`
-until that combination is either fixed or explicitly excluded.
+ProRes/4K DCI here. A same-day addendum to §16 then confirmed via passive capture that
+ProRes/4K DCI is nonetheless a real, representable state on this camera (reached by
+hand through the body menu) — narrowing the gap to this codebase's write path rather
+than a camera-side refusal, but not yet closing it. This blocks promoting the PRO's
+settings families to `VERIFIED` until that combination is either fixed or explicitly
+excluded.
 
 ## Provenance and evidence status
 
@@ -1370,3 +1374,36 @@ combo cannot currently pass. A `VERIFIED` promotion for the combinations that do
 (BRAW paths, and any ProRes/resolution pair reachable directly via a `dimension_enum`
 without needing the `recording_format` retarget step) is a separate, still-unattempted
 step.
+
+**Update, same day: the target state itself is confirmed real — the gap is in our
+write path, not the camera.** Three independent passive captures
+(`tools/sniffers/sniffer_settings.py --actions prores_uhd_to_4kdci` and
+`prores_hd_to_4kdci`) of the operator manually switching the body's own menu from
+ProRes/UHD or ProRes/HD into ProRes/4K DCI each caught:
+
+```
+FF 0E 00 00 01 09 02 02 18 00 18 00 00 10 70 08 10 00
+  category=0x01 param=0x09  ->  fps=24, width=4096, height=2160, frame_flags=0x10
+
+FF 06 00 00 0A 00 01 02 02 00
+  category=0x0A param=0x00  ->  codec_id=2 (ProRes), variant_id=0 (HQ)
+```
+
+landing in the same window, right next to each other — the camera itself, confirmed
+via both watched channels, genuinely holding **ProRes/HQ, 4K DCI, 24fps**. This is the
+exact wire shape already expected for that state, and it rules out the alternative
+explanation that the camera's firmware simply refuses the combination outright: it
+plainly does not. What it rules *in* is that the failure documented above is specific
+to how this codebase tries to reach that state over BLE (a still-undiscovered
+`dimension_enum`, wrong write framing for this particular transition, or a missing
+intermediate step) — not a hard camera-side wall.
+
+This doesn't hand over a working write, though: a body-menu change never touches
+`OUTGOING_CONTROL` at all — it's internal to the camera, which simply reports the new
+state on `INCOMING_CONTROL` afterward the same way any other change does. These were
+pure listen-only captures with no TX to replay. The next concrete step this points to
+is the exhaustive `dimension_enum` sweep flagged as still-undone above (§16, "Second"),
+now with higher expected payoff since the target is proven reachable — plus a quick,
+cheap check first: resending `dimension_enum 0x08` (BRAW's known 4K DCI value) while
+*currently in ProRes* rather than BRAW, in case the enum's meaning turns out to be
+context-dependent rather than a fixed global table.

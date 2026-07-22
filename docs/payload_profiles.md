@@ -396,6 +396,18 @@ timeout can retire one hypothesis (timing) while leaving a second, unrelated fai
 mode (a genuine no-op/limitation) exposed underneath it. Confirm the write actually
 lands, not just that *something* echoed.
 
+A follow-up worked out a second lesson from the same gap: when a target state seems
+unreachable via active writes, check whether it's reachable at all before concluding
+it's a firmware limitation. Sniffing the operator manually reaching ProRes/4K DCI
+through the camera's own body menu (`docs/settings.md` §16 addendum) — a purely
+passive capture, no `OUTGOING_CONTROL` write involved — caught the camera reporting
+exactly that state on the wire. That doesn't hand over a working write (a body-menu
+change never goes through the characteristic our writes use), but it does distinguish
+two very different failure modes that look identical from a `BMDVerificationError`
+alone: "the camera refuses this combination" versus "our own write path doesn't reach
+a combination the camera plainly supports." Worth doing before writing off a gap as a
+hard camera-side wall.
+
 ## Testing
 
 `tests/unit/test_camera_profile.py` covers: every `KNOWN_PROFILES` JSON
