@@ -1230,3 +1230,29 @@ instead (new, uninvestigated protocol surface: `0x0A/0x01`, `0x01/0x10`, `0x04/0
 `0x03/0x00`, `0x0A/0x05`, `0x09/0x08`) and produced no usable data; `fps_modes."25"`
 is still missing and needs a re-run, ideally sweeping fewer actions at once so each
 window has a better chance of catching the report before it closes.
+
+**Update, same day: the re-run landed all eight.** The identical sweep, run again,
+caught a genuine `recording_format` report in every one of the eight windows this
+time (all at the currently-active 4K DCI resolution) — a clean, fully consistent
+dataset, including the `25` entry that was actually needed:
+
+| fps label | `fps_int` | `frame_flags` |
+|---|---|---|
+| `23.98` | 24 | `0x13` (19, NTSC) |
+| `24` | 24 | `0x10` (16, exact) |
+| `25` | 25 | `0x10` (16, exact) |
+| `29.97` | 30 | `0x13` (19, NTSC) |
+| `30` | 30 | `0x10` (16, exact) |
+| `50` | 50 | `0x10` (16, exact — at 4K DCI; see the `"50"` entry's own note on the resolution-dependence already flagged) |
+| `59.94` | 60 | `0x13` (19, NTSC) |
+| `60` | 60 | `0x10` (16, exact) |
+
+Every NTSC/exact pair shares the same `fps_int` (24/24, 30/30, 60/60) and is only
+distinguished by `frame_flags` — `0x13` for the NTSC-drop member, `0x10` for the exact
+member — exactly the G2's own convention, and `29.97`'s values now independently
+reconfirmed twice (once from the earlier partial sweep, once from this full one, both
+identical). All eight are transcribed into `fps_modes`; `m_rate` stays inferred by the
+G2's pattern (`1` for the three NTSC entries, `0` for the rest) rather than observed —
+no `video_format` write has been sent at any of these fps values yet. The command that
+originally motivated this whole sweep now builds correctly:
+`send_settings_command.py --packet recording_format --resolution "4K DCI" --fps 25`.

@@ -360,13 +360,16 @@ use the identical numeric id on both cameras. Still independently confirmed per
 camera, never copied — the coincidence is a real finding about this camera family,
 not a shortcut for the next one.
 
-`fps_modes` filled in more slowly, though (`docs/settings.md` §15): an eight-action
+`fps_modes` filled in more slowly, though (`docs/settings.md` §15): a first eight-action
 sniffer sweep meant to capture every fps at once only caught one genuine
 `recording_format` report (`"29.97"`) — the other seven windows, including the
 specific one that was actually needed (`"25"`), closed before the report arrived and
 caught unrelated ambient bursts instead. A worked reminder that a passive sweep isn't
 guaranteed to land every action in one run — check what actually got captured (not
-just what was attempted) before assuming a whole batch of `--actions` succeeded.
+just what was attempted) before assuming a whole batch of `--actions` succeeded. A
+second run of the identical sweep landed all eight cleanly, filling out the full
+table — sometimes a re-run is simpler than restructuring the capture into smaller
+batches.
 
 ## Testing
 

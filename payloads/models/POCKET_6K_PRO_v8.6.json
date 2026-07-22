@@ -163,17 +163,53 @@
     }
   },
   "fps_modes": {
-    "50": {
-      "fps_int": 50,
+    "23.98": {
+      "fps_int": 24,
+      "m_rate": 1,
+      "frame_flags": 19,
+      "_comment": "CANDIDATE (fps_modes has no per-entry provenance field in the schema). fps_int and frame_flags directly observed on the wire (tools/sniffers/sniffer_settings.py --actions fps_23_98..fps_60, tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260722T113812.json). frame_flags=19 (0x13) is the exact NTSC-drop-frame signature POCKET_6K_G2_v7.9's own '23.98' entry uses; note '24' below shares this same fps_int=24 but reports frame_flags=16 instead — flags, not fps_int, is what disambiguates the NTSC/exact pair. m_rate=1 is inferred by the G2's matching pattern (every NTSC-style fps there uses m_rate=1), not yet independently observed via a video_format send on this camera."
+    },
+    "24": {
+      "fps_int": 24,
       "m_rate": 0,
-      "frame_flags": 0,
-      "_comment": "CANDIDATE (fps_modes has no per-entry provenance field in the schema). fps_int directly observed on the wire (passive recording_format 0x01/0x09 reports, tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260721T171924.json). frame_flags is genuinely resolution-dependent at this fps on real captures (0x00 for HD/UHD, 0x10 for 4K DCI — same 'windowed bit' pattern already flagged for the G2, docs/settings.md) but this table only holds one value per fps; 0 chosen as the 2-of-3-resolutions default — revisit if a recording_format write at 4K DCI needs the 0x10 variant. m_rate=0 is an untested candidate (video_format has never been sent yet) — reasonable for a round, non-NTSC rate but not confirmed."
+      "frame_flags": 16,
+      "_comment": "CANDIDATE. Directly observed on the wire, same capture as '23.98' above — see that entry's comment for the NTSC/exact fps_int-collision note."
+    },
+    "25": {
+      "fps_int": 25,
+      "m_rate": 0,
+      "frame_flags": 16,
+      "_comment": "CANDIDATE. Directly observed on the wire (tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260722T113812.json). No NTSC counterpart in the standard fps set, so no fps_int collision here."
     },
     "29.97": {
       "fps_int": 30,
       "m_rate": 1,
       "frame_flags": 19,
-      "_comment": "CANDIDATE. fps_int and frame_flags directly observed on the wire (tools/sniffers/sniffer_settings.py --actions fps_29_97, tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260722T112548.json — the only one of eight swept fps actions whose window happened to catch a recording_format 0x01/0x09 report; the rest, including fps_25, missed it and need a re-run). frame_flags=19 (0x13) is the exact NTSC-drop-frame signature POCKET_6K_G2_v7.9's own '23.98' entry uses. m_rate=1 is inferred by that same pattern (every NTSC-style fps on the G2 uses m_rate=1), not yet independently observed via a video_format send on this camera."
+      "_comment": "CANDIDATE. fps_int and frame_flags directly observed on the wire, confirmed twice now: first in tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260722T112548.json (the only one of eight fps actions that landed that day), then reconfirmed identically in the full clean sweep tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260722T113812.json. frame_flags=19 (0x13) is the exact NTSC-drop-frame signature POCKET_6K_G2_v7.9's own '23.98' entry uses; '30' below shares this fps_int=30 but reports frame_flags=16 instead. m_rate=1 is inferred by that same G2 pattern, not yet independently observed via a video_format send on this camera."
+    },
+    "30": {
+      "fps_int": 30,
+      "m_rate": 0,
+      "frame_flags": 16,
+      "_comment": "CANDIDATE. Directly observed on the wire, same capture as '29.97' above — see that entry's comment for the NTSC/exact fps_int-collision note."
+    },
+    "50": {
+      "fps_int": 50,
+      "m_rate": 0,
+      "frame_flags": 16,
+      "_comment": "CANDIDATE. fps_int first observed in tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260721T171924.json. frame_flags is genuinely resolution-dependent at this fps on real captures (0x00 for HD/UHD, 0x10 for 4K DCI — same 'windowed bit' pattern already flagged for the G2, docs/settings.md); 0x10 (16) is used here since the fuller 2026-07-22 sweep (tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260722T113812.json) landed this value at 4K DCI, the resolution every other fps_modes entry above was also captured at — revisit if a recording_format write at HD/UHD needs the 0x00 variant instead. m_rate=0 is an untested candidate (video_format has never been sent at this fps), reasonable for a round, non-NTSC rate but not confirmed."
+    },
+    "59.94": {
+      "fps_int": 60,
+      "m_rate": 1,
+      "frame_flags": 19,
+      "_comment": "CANDIDATE. Directly observed on the wire (tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260722T113812.json). frame_flags=19 (0x13) is the NTSC-drop-frame signature; '60' below shares this fps_int=60 but reports frame_flags=16 instead. m_rate=1 inferred by the G2's matching pattern, not yet independently confirmed via a video_format send here."
+    },
+    "60": {
+      "fps_int": 60,
+      "m_rate": 0,
+      "frame_flags": 16,
+      "_comment": "CANDIDATE. Directly observed on the wire, same capture as '59.94' above — see that entry's comment for the NTSC/exact fps_int-collision note."
     }
   },
   "storage": {
