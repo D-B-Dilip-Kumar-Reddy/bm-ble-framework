@@ -240,7 +240,7 @@ Populate this table as categories are confirmed from sniffer sessions. Each cate
 | `0x0A` (param `0x01`) | Recording (record start/stop) | `protocol/categories/recording.py` |
 | `0x0A` (param `0x00`) | Codec + quality variant — VERIFIED on `POCKET_6K_G2 v7.9` (2026-07-20: `CameraSession.set_codec_quality()` genuine real-hardware write+echo cycle); does NOT switch BRAW↔ProRes (see `docs/settings.md`). Same category/parameter and payload shape independently confirmed on `POCKET_6K_PRO v8.6` too — a real `CameraSession.set_camera_format()` write+echo cycle to ProRes/422 also confirmed cleanly there (2026-07-22, `docs/settings.md` §16), but the block stays CANDIDATE pending §16's blocking `recording_format` gap | `protocol/categories/settings.py` |
 | `0x01` (param `0x00`) | Video format (FORMAT packet) — VERIFIED on `POCKET_6K_G2 v7.9` (2026-07-20: `CameraSession.set_video_format()` 2/2 real-hardware round trip); dimension_enum locks resolution + codec family, the actual BRAW↔ProRes switch. Never appears in notifications itself — enums need active probing (`docs/settings.md` §7–§8). Same coordinates confirmed working on `POCKET_6K_PRO v8.6` via an active `dimension_enum` sweep and, for the UHD/ProRes proxy resolution specifically, via a real `CameraSession` write+echo cycle too (2026-07-22, `docs/settings.md` §16) — still CANDIDATE there pending §16's blocking gap; every enum value found matches the G2's number for the same resolution (`docs/settings.md` §15) — and on that camera, the on-screen display doesn't reflect the change until a power cycle even though the write took effect | `protocol/categories/settings.py` |
-| `0x01` (param `0x09`) | Recording format (fps/sensor-fps/width/height/flags, int16 ×5) — VERIFIED on `POCKET_6K_G2 v7.9` (2026-07-20: `CameraSession.set_recording_format()` real-hardware write+echo cycle with the `0x82` write byte accepted); the camera's own reports still use data-type byte `0x02`. Same category/parameter and payload shape independently confirmed on `POCKET_6K_PRO v8.6` too (still CANDIDATE there); on that camera this write never confirms a resolution retarget to 4K DCI while ProRes is the active codec, 2/2 real `CameraSession` round trips (2026-07-22, `docs/settings.md` §16) — a genuine, model-specific limitation, not a timing artifact | `protocol/categories/settings.py` |
+| `0x01` (param `0x09`) | Recording format (fps/sensor-fps/width/height/flags, int16 ×5) — VERIFIED on `POCKET_6K_G2 v7.9` (2026-07-20: `CameraSession.set_recording_format()` real-hardware write+echo cycle with the `0x82` write byte accepted); the camera's own reports still use data-type byte `0x02`. Same category/parameter and payload shape independently confirmed on `POCKET_6K_PRO v8.6` too (still CANDIDATE there); on that camera this write never confirms a resolution retarget to 4K DCI while ProRes is the active codec, 2/2 real `CameraSession` round trips (2026-07-22, `docs/settings.md` §16) — not a timing artifact, but also not a proven camera-side refusal: a passive capture of the camera reaching that exact state through its own body menu (§16 addendum) shows it genuinely holds and reports ProRes/4K DCI, so the gap is in this codebase's write path, not the camera | `protocol/categories/settings.py` |
 | `0x09` (param `0x01`) | Storage write-margin signal — CANDIDATE, not confirmed causation, see `docs/recording.md` (category `0x09` is the same ambient-telemetry category `TIMECODE` param `0x04` already lives in) | `protocol/categories/storage.py` |
 
 ### Data types (`protocol/types.py`)
@@ -503,8 +503,13 @@ one is already present, to point at a different camera).
     on `POCKET_6K_PRO v8.6`, the equivalent proxy workaround's second step
     (`set_recording_format` retargeting resolution within the proxied-to codec) never
     confirms for ProRes/4K DCI, confirmed 2/2 via real `CameraSession` round trips —
-    a genuine, camera-specific limitation, not a G2 pattern to assume elsewhere (see
-    `docs/settings.md` §16).
+    not a G2 pattern to assume elsewhere (see `docs/settings.md` §16). A passive
+    capture of the camera reaching the same state through its own body menu then
+    confirmed the target state itself is real and correctly held/reported by the
+    camera (§16 addendum) — so this is a gap in the write path this codebase uses,
+    not proof the camera-side combination is unsupported. Don't assume a retarget
+    failure like this means "unreachable" without checking whether the camera can
+    be observed in that state at all.
 11. **Transcribe confirmed values into the profile** — `commands.codec_quality` /
     `commands.video_format` / `commands.recording_format`, plus the `codecs` /
     `resolutions` / `fps_modes` lookup tables. Nothing may be copied from another model's
