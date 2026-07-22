@@ -1214,3 +1214,19 @@ surface, unrelated to settings, not investigated further here) — so this mappi
 rests on the operator's direct on-screen read, not yet a wire-verified write+echo
 round trip. That gap, and the full `CameraSession` promotion, remain the two open
 items for `POCKET_6K_PRO v8.6`'s settings families.
+
+**Update, 2026-07-22: one `fps_modes` entry beyond `50` confirmed, from an eight-way
+sweep that mostly missed.** `tools/sniffers/sniffer_settings.py --actions
+fps_23_98,fps_24,fps_25,fps_29_97,fps_30,fps_50,fps_59_94,fps_60` was run to fill in
+the rest of the fps table (`25` in particular, needed to unblock a
+`recording_format --fps 25` redundant-write probe that the profile couldn't build
+yet). Only one of the eight windows actually caught a `recording_format` (`0x01/0x09`)
+report — `fps_29_97`: `fps_int=30, frame_flags=0x13 (19)`, the identical NTSC-drop
+signature the G2's own `"23.98"` entry uses (`fps_int` rounded up, `frame_flags=19`).
+Added as `fps_modes."29.97"`; `m_rate=1` is inferred by that same G2 pattern, not yet
+independently observed via a `video_format` send on this camera. The other seven
+windows — including `fps_25`, the one actually needed — caught unrelated bursts
+instead (new, uninvestigated protocol surface: `0x0A/0x01`, `0x01/0x10`, `0x04/0x07`,
+`0x03/0x00`, `0x0A/0x05`, `0x09/0x08`) and produced no usable data; `fps_modes."25"`
+is still missing and needs a re-run, ideally sweeping fewer actions at once so each
+window has a better chance of catching the report before it closes.
