@@ -1256,3 +1256,20 @@ G2's pattern (`1` for the three NTSC entries, `0` for the rest) rather than obse
 no `video_format` write has been sent at any of these fps values yet. The command that
 originally motivated this whole sweep now builds correctly:
 `send_settings_command.py --packet recording_format --resolution "4K DCI" --fps 25`.
+
+**Update, same day: that command run for real, with `--repeat 2` — first genuine
+`recording_format` write+echo cycle on this camera, and another lens-burst timing
+wrinkle.** Real change (2.8K 17:9/50fps → 4K DCI/25fps, BRAW 8:1 unchanged). Send 1's
+window caught only the lens-metadata burst again — no `0x01/0x09` — but send 2's
+window opened with one arriving within ~150ms of send 2 being issued, far too fast to
+be a genuine response to send 2 itself. Read as send 1's real echo, delivered late
+(past send 1's 3-second window) by the same burst-congestion pattern that's dominated
+several recent captures on this camera: decoded `(fps_int, width, height,
+frame_flags)=(25, 4096, 2160, 0x10)`, an exact match for the request and for
+`fps_modes."25"` — a stronger, active-send confirmation of that entry on top of the
+passive sweep. No second, fresh `0x01/0x09` appeared anywhere else in send 2's window
+— consistent with `recording_format` sharing the same no-echo-on-redundant-write
+behavior already established for this family (§11, §14) and for `codec_quality` here.
+`commands.recording_format`'s provenance now records both the passive and this active
+confirmation; still `CANDIDATE`, not `VERIFIED` — that still needs a `CameraSession`
+round trip, not a raw `send_settings_command.py` send.

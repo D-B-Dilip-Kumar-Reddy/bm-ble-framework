@@ -75,11 +75,12 @@
       "reserved": 1,
       "provenance": {
         "status": "CANDIDATE",
-        "method": "passive sniffer capture (tools/sniffers/sniffer_settings.py, 0x01/0x09 CAMERA_REPORT, five little-endian int16 elements — same shape as POCKET_6K_G2_v7.9)",
+        "method": "passive sniffer capture (tools/sniffers/sniffer_settings.py, 0x01/0x09 CAMERA_REPORT, five little-endian int16 elements — same shape as POCKET_6K_G2_v7.9), plus an active send+echo (tools/control/send_settings_command.py --packet recording_format --resolution \"4K DCI\" --fps 25 --repeat 2, 2026-07-22)",
         "capture_refs": [
-          "tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260721T171924.json"
+          "tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260721T171924.json",
+          "tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260722T114850.json"
         ],
-        "notes": "category/parameter directly observed on the wire. data_type/reserved for WRITES mirror the G2's convention (its own reports use data_type 0x02, not the claimed write byte 0x82 — same discrepancy documented for the G2, docs/settings.md §3) — untested for writes on this camera, no active send attempted yet."
+        "notes": "category/parameter directly observed on the wire. data_type/reserved for WRITES mirror the G2's convention (its own reports use data_type 0x02, not the claimed write byte 0x82 — same discrepancy documented for the G2, docs/settings.md §3). The 2026-07-22 --repeat 2 send (real change: 2.8K 17:9/50fps -> 4K DCI/25fps, BRAW 8:1 unchanged) confirmed a genuine write+echo cycle for the first time — TX matched, and the echoed (fps_int, width, height, frame_flags)=(25, 4096, 2160, 0x10) matched both the request and fps_modes.\"25\" exactly, though timing was ambiguous (see docs/settings.md §15): the echo arrived right as send 2 was issued, meaning it was send 1's own report delivered after send 1's capture window had already closed (the lens-metadata burst on category 0x0C has repeatedly dominated recent capture windows on this camera and delayed genuine settings echoes past their window) — not proof send 2 (redundant) echoed on its own. No second/fresh 0x01/0x09 report appeared anywhere in send 2's window, consistent with the same no-echo-on-redundant-write behavior already confirmed for this family via the G2 and via codec_quality here."
       }
     }
   },
@@ -179,7 +180,7 @@
       "fps_int": 25,
       "m_rate": 0,
       "frame_flags": 16,
-      "_comment": "CANDIDATE. Directly observed on the wire (tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260722T113812.json). No NTSC counterpart in the standard fps set, so no fps_int collision here."
+      "_comment": "CANDIDATE. Directly observed on the wire (tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260722T113812.json). No NTSC counterpart in the standard fps set, so no fps_int collision here. Cross-confirmed 2026-07-22 by an active recording_format --fps 25 send whose echo reported this exact (fps_int, frame_flags) pair — see commands.recording_format's provenance."
     },
     "29.97": {
       "fps_int": 30,

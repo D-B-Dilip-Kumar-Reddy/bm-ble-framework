@@ -371,6 +371,17 @@ second run of the identical sweep landed all eight cleanly, filling out the full
 table — sometimes a re-run is simpler than restructuring the capture into smaller
 batches.
 
+The PRO's captures have also surfaced a recurring nuisance worth naming here: a
+lens-metadata burst on category `0x0C` (params `0x00`–`0x0F` — lens name, aperture,
+focal length, a focus-distance readout) has repeatedly dominated `send_settings_command.py`'s
+3-second capture windows, delaying the genuine settings echo past the window it
+belongs to and into the *next* one when `--repeat` chains multiple sends together.
+When reading a `--repeat` capture on this camera, check whether a report's arrival
+timing is plausible for the send it's nominally windowed under (a report landing
+within ~150ms of the *next* send being issued almost certainly belongs to the
+*previous* one) rather than assuming window boundaries and echo ownership always
+line up — see `docs/settings.md` §15 for a worked example.
+
 ## Testing
 
 `tests/unit/test_camera_profile.py` covers: every `KNOWN_PROFILES` JSON
