@@ -499,7 +499,14 @@ one is already present, to point at a different camera).
     candidate until every needed (resolution, codec) pair has a confirmed enum, or the
     search is exhausted for a pair like the G2's 4K DCI/ProRes (see `docs/settings.md`
     §7-§9 for that precedent and the two-step `set_camera_format` proxy workaround it
-    needs when a gap can't be closed). **The workaround is not guaranteed to generalize:**
+    needs when a gap can't be closed). For an **exhaustive** sweep across many untried
+    candidates in one connected session — e.g. hunting a still-missing enum like
+    ProRes/4K DCI — use `tools/control/sweep_dimension_enum.py` instead of repeating
+    single-candidate sends by hand: it decodes each result from the wire automatically
+    (`--target-resolution`/`--target-codec`) rather than requiring the operator to read
+    the on-screen display, which is known-unreliable on at least one camera (see below).
+    See `docs/active_camera_control.md` for the full writeup.
+    **The G2's proxy workaround is not guaranteed to generalize:**
     on `POCKET_6K_PRO v8.6`, the equivalent proxy workaround's second step
     (`set_recording_format` retargeting resolution within the proxied-to codec) never
     confirms for ProRes/4K DCI, confirmed 2/2 via real `CameraSession` round trips —

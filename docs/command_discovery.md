@@ -41,6 +41,16 @@ For those, seed the coordinates and value tables from a
 profile as CANDIDATE, and confirm by sending the fully-formed packet with
 `tools/control/send_settings_command.py` instead.
 
+For the specific case of sweeping many `video_format` `dimension_enum`
+candidates against one already-known (category, parameter, data_type) —
+this tool's per-candidate re-scan/re-connect and operator-eyeball match
+detection don't scale to an exhaustive search — `tools/control/
+sweep_dimension_enum.py` is the sibling tool: one connected session, every
+candidate decoded straight off the wire (`recording_format`/`codec_quality`
+reports), with automated match detection against a target resolution/codec.
+See `docs/active_camera_control.md`'s section on it and `docs/settings.md`
+§16 for the case that motivated it.
+
 ---
 
 ## Module split: pure logic vs interactive driver

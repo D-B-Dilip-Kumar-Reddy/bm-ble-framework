@@ -171,6 +171,62 @@ that family reports unconditionally and needs no such guard.
 
 ---
 
+## `tools/control/sweep_dimension_enum.py`
+
+Added 2026-07-22 to make `video_format`'s `--dimension-enum` probe mode
+(above) practical to run exhaustively. Sending one candidate at a time via
+`send_settings_command.py` means re-scanning and reconnecting for every
+value (~15-20s of overhead each) and leaves match detection to the
+operator watching the camera body — unreliable on at least one camera:
+`POCKET_6K_PRO v8.6`'s on-screen display does not live-update after a
+`video_format` write until power-cycled, even though the write
+demonstrably takes effect (`docs/settings.md` §15), so an operator
+watching the screen during a sweep sees nothing change on every single
+candidate, match or not.
+
+This tool connects **once** and sends every candidate `dimension_enum` in
+the sweep into its own labeled capture window (reusing
+`run_send_and_capture` exactly like `send_settings_command.py` and
+`discover_command.py` do), then decodes each window's `recording_format`
+(`0x01/0x09`) and `codec_quality` (`0x0A/0x00`) reports straight from the
+wire via `protocol/categories/settings.py`'s existing `decode_recording_format`
+/`decode_codec_quality` — the same evidence this repo already treats as
+ground truth elsewhere, not the on-screen display. Given
+`--target-resolution` (and optionally `--target-codec`), it flags a match
+automatically:
+
+```
+python tools/control/sweep_dimension_enum.py \
+    --model-key POCKET_6K_PRO --firmware v8.6 \
+    --fps 25 --target-resolution "4K DCI" --target-codec ProRes
+```
+
+With no `--enums`/`--range`, the default sweep range is `0x00`-`0x16`
+(matching the range the G2's own exhaustive 4K DCI/ProRes search covered,
+`docs/settings.md` §7-§8), minus every `dimension_enum` value already
+present in the profile's `resolutions` table — no point resending a value
+whose target is already known; `--include-known` overrides this. Like
+`discover_command.py`'s sweep, this is typed-yes gated **once** for the
+whole plan (not per candidate) — reviewing the printed candidate list
+before confirming is the operator's chance to trim it with
+`--enums`/`--range`/`--include-known` first, since every candidate is a
+real, unverified write. `--stop-on-match` (default on) asks whether to
+stop as soon as a match is found rather than continuing to burn through
+the rest of the range; `--restore-enum` optionally sends one more write
+at the end to leave the camera in a known state. If the profile hasn't
+reverse-engineered `recording_format`/`codec_quality` yet (early Phase 3),
+automated match detection is disabled and the tool falls back to raw-hex
+capture evidence only, same as this file's other tools in that situation.
+
+Motivating case: `docs/settings.md` §16 — `POCKET_6K_PRO v8.6` has no known
+`dimension_enum` for ProRes/4K DCI, and a passive capture confirmed the
+camera genuinely holds and reports that state when reached by hand through
+the body menu, so the state is real and an exhaustive sweep is the most
+promising way to find whatever `dimension_enum` (if any) reaches it
+directly through this codebase's own writes.
+
+---
+
 ## `tools/control/discover_command.py`
 
 The second consumer of `run_send_and_capture`, for the opposite situation:
