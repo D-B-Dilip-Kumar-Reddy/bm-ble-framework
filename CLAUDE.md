@@ -404,6 +404,8 @@ For every write command:
 
 The echo must be buffered *before* the write is issued. A router that only starts listening after the write will race against the camera's response.
 
+**Known risk on `POCKET_6K_PRO v8.6` (with a lens attached), unconfirmed on the G2:** a lens-metadata burst (category `0x0C`, params `0x00`–`0x0F` — lens name, aperture, focal length, a focus-distance readout) has repeatedly dominated capture windows during settings work, delaying a genuine settings echo past the window/timeout it belongs to (see `docs/settings.md` §15 for a worked example — a `recording_format` echo arrived in the *next* send's capture window instead of its own). Since this burst competes for the same BLE indication queue a real `CameraSession` write's echo would, it could plausibly delay that echo past the default `echo_timeout_s` (3 s) too, in production, not just in `tools/control/send_settings_command.py`'s fixed-window tooling — a real write could raise `BMDVerificationError` from an echo that was only late, not missing. Not yet confirmed against an actual `CameraSession` round trip on the PRO (no `KNOWN_PROFILES` entry or production use yet); worth checking for if `set_recording_format`/`set_codec_quality`/`set_video_format` verification looks flaky on this camera once it's added.
+
 ---
 
 ## Workflow: Adding Support for a New Camera (Reverse-Engineering Procedure)
