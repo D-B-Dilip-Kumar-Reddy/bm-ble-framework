@@ -154,6 +154,12 @@ already-verified command echo when it's a redundant no-op" (see
 no equivalent flag — a discovery sweep's candidates are, by construction,
 rarely repeats of the same value, so the redundant-write question doesn't
 arise here the way it does when replaying one known command twice.
+`send_settings_command.py` also gained a `--data-type NAME` override
+(2026-07-23, `docs/settings.md` §3/§16) for probing the CANDIDATE-vs-spec
+data-type-byte discrepancy on `recording_format` and the other settings
+families — an unrelated discovery axis (wire byte, not command bytes),
+noted here only because the hook that requires touching this file on any
+`tools/control/*` change applies to it too.
 
 ---
 

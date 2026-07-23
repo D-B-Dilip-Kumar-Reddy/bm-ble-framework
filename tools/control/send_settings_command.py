@@ -67,6 +67,47 @@ no-op guard needed); `(none observed)` on the second window only
 reproduces the `codec_quality` finding for this family too (a no-op guard
 belongs there, mirroring `last_known_codec_variant`).
 
+DATA_TYPE OVERRIDE (`--data-type`, added 2026-07-23, see docs/settings.md
+§3/§4/§16): `recording_format` writes have always used wire data-type byte
+`0x82` (`DataType.INT16_ARRAY`) — a CANDIDATE value transcribed from an
+external reverse-engineering document, not part of the official BMD spec.
+The camera's own REPORT packets for that exact category/parameter always
+use the spec-official `0x02` (`DataType.INT16`) instead — a documented
+discrepancy (§3), flagged as an open hypothesis since §4.2 ("if `0x82` is
+rejected, try the write with `0x02`"). It didn't matter on
+`POCKET_6K_G2 v7.9` — `0x82` was empirically confirmed accepted there
+(§10) — but on `POCKET_6K_PRO v8.6`, a `recording_format` write
+retargeting resolution to 4K DCI while ProRes is active never confirms at
+all (§16), even though the target state is independently proven real.
+`--data-type NAME` (any `DataType` member name, e.g. `INT16`) overrides
+whichever `spec.data_type` `build_command()` would otherwise use for the
+selected `--packet` — generic across all three families, not just
+`recording_format`, since this discrepancy is a property of the wire byte
+itself, not of one packet family. Default: unset, uses the profile's own
+value unchanged, so every existing invocation of this tool is byte-for-byte
+identical to before this flag existed. `INT16` and `INT16_ARRAY` map to the
+identical struct format and byte width in `protocol/types.py`, so this
+changes only packet header byte 6, never the payload encoding or length —
+a discovery-grade experiment on what the camera *accepts*, not a
+payload/shape change. The override is recorded in the send's label (and
+so in the saved capture JSON), e.g. `data_type=INT16(0x02 override;
+profile default INT16_ARRAY/0x82)`, so a later reviewer can tell at a
+glance which captures used a non-profile byte:
+
+    # §16's open hypothesis: does the PRO accept the retarget with 0x02
+    # instead of the claimed 0x82?
+    python tools/control/send_settings_command.py \\
+        --model-key POCKET_6K_PRO --firmware v8.6 \\
+        --packet recording_format --resolution "4K DCI" --fps 25 \\
+        --data-type INT16
+
+If real-hardware evidence shows the camera accepts and confirms this,
+that's grounds for a *separate*, evidence-gated follow-up — promoting
+`payloads/models/POCKET_6K_PRO_v8.6.json`'s
+`commands.recording_format.data_type` from `INT16_ARRAY` to `INT16` with
+updated provenance. This flag only makes the experiment possible; it does
+not itself change any profile.
+
 Usage:
     python tools/control/send_settings_command.py --model-key POCKET_6K_G2 --firmware v7.9 \\
         --packet recording_format --resolution "4K DCI" --fps 25
@@ -88,12 +129,13 @@ from capture import (  # noqa: E402
 )
 
 from bmd_ble.camera_controller import BMDCameraController  # noqa: E402
-from bmd_ble.camera_profile import CameraProfile  # noqa: E402
+from bmd_ble.camera_profile import CameraProfile, CommandSpec  # noqa: E402
 from bmd_ble.protocol.categories.settings import (  # noqa: E402
     encode_codec_quality,
     encode_recording_format,
     encode_video_format,
 )
+from bmd_ble.protocol.types import DataType  # noqa: E402
 from bmd_ble.scanner import scan_for_camera  # noqa: E402
 
 PACKET_CHOICES = ("codec_quality", "video_format", "recording_format")
@@ -106,6 +148,34 @@ def _require_flags(args: argparse.Namespace, needed: tuple[str, ...]) -> None:
         raise SystemExit(f"--packet {args.packet} requires {flags}")
 
 
+def resolve_data_type(spec: CommandSpec, args: argparse.Namespace) -> DataType:
+    """The data_type byte to encode with: `--data-type` if given (an explicit
+    escape-hatch override for one-off discovery-grade sends — see the module
+    docstring's DATA_TYPE OVERRIDE section), else the profile's own
+    `spec.data_type` unchanged. Generic across all three packet families
+    because every CommandSpec carries this field identically — the
+    CANDIDATE-vs-spec wire-byte discrepancy this probes (docs/settings.md §3)
+    isn't specific to any one family."""
+    if args.data_type is not None:
+        return DataType[args.data_type]
+    return spec.data_type
+
+
+def _data_type_override_suffix(
+    resolved: DataType, spec: CommandSpec, args: argparse.Namespace
+) -> str:
+    """Label suffix noting a `--data-type` override, so it's visible both on
+    the console and in the saved capture JSON (`label` flows straight into
+    `run_send_and_capture` -> `save_capture`) — empty string when unused, so
+    the label is byte-for-byte unchanged from before this flag existed."""
+    if args.data_type is None:
+        return ""
+    return (
+        f" data_type={resolved.name}(0x{int(resolved):02X} override; "
+        f"profile default {spec.data_type.name}/0x{int(spec.data_type):02X})"
+    )
+
+
 def build_command(profile: CameraProfile, args: argparse.Namespace) -> tuple[str, bytes]:
     """Build (label, command_bytes) for the requested packet family, entirely
     from the profile — raises (via require_*) when the profile lacks the
@@ -114,11 +184,13 @@ def build_command(profile: CameraProfile, args: argparse.Namespace) -> tuple[str
         _require_flags(args, ("codec", "variant"))
         spec = profile.require_command("codec_quality")
         codec = profile.require_codec(args.codec, args.variant)
+        resolved_data_type = resolve_data_type(spec, args)
         label = f"codec_quality {args.codec} {args.variant}"
+        label += _data_type_override_suffix(resolved_data_type, spec, args)
         return label, encode_codec_quality(
             category=spec.category,
             parameter=spec.parameter,
-            data_type=spec.data_type,
+            data_type=resolved_data_type,
             codec_id=codec.id,
             variant_id=codec.variants[args.variant],
             reserved=spec.reserved,
@@ -127,6 +199,7 @@ def build_command(profile: CameraProfile, args: argparse.Namespace) -> tuple[str
     if args.packet == "video_format":
         _require_flags(args, ("fps",))
         spec = profile.require_command("video_format")
+        resolved_data_type = resolve_data_type(spec, args)
         fps = profile.require_fps_mode(args.fps)
         if args.dimension_enum is not None:
             # Probe mode: send a candidate enum that is NOT in the profile
@@ -150,10 +223,11 @@ def build_command(profile: CameraProfile, args: argparse.Namespace) -> tuple[str
                     f"actively with --dimension-enum (see docs/settings.md)."
                 )
             label = f"video_format {args.resolution} {args.codec} {args.fps}"
+        label += _data_type_override_suffix(resolved_data_type, spec, args)
         return label, encode_video_format(
             category=spec.category,
             parameter=spec.parameter,
-            data_type=spec.data_type,
+            data_type=resolved_data_type,
             fps_int=fps.fps_int,
             m_rate=fps.m_rate,
             dimension_enum=dimension_enum,
@@ -162,14 +236,16 @@ def build_command(profile: CameraProfile, args: argparse.Namespace) -> tuple[str
 
     _require_flags(args, ("resolution", "fps"))
     spec = profile.require_command("recording_format")
+    resolved_data_type = resolve_data_type(spec, args)
     resolution = profile.require_resolution(args.resolution)
     fps = profile.require_fps_mode(args.fps)
     sensor = profile.require_fps_mode(args.sensor_fps) if args.sensor_fps else fps
     label = f"recording_format {args.resolution} {args.fps}"
+    label += _data_type_override_suffix(resolved_data_type, spec, args)
     return label, encode_recording_format(
         category=spec.category,
         parameter=spec.parameter,
-        data_type=spec.data_type,
+        data_type=resolved_data_type,
         fps_int=fps.fps_int,
         sensor_fps_int=sensor.fps_int,
         width=resolution.width,
@@ -284,6 +360,19 @@ def parse_args() -> argparse.Namespace:
             "notifications, so an active probe is the only way. Watch the camera and note "
             "what it switches to; then add the confirmed enum to the profile's resolutions "
             "table."
+        ),
+    )
+    parser.add_argument(
+        "--data-type",
+        choices=[t.name for t in DataType],
+        default=None,
+        help=(
+            "Override the wire data_type byte for this send instead of using the "
+            "profile's own value — generic across all three --packet families. "
+            "Discovery-grade: use it to probe the CANDIDATE-vs-spec data-type-byte "
+            "discrepancy (see the module docstring's DATA_TYPE OVERRIDE section, "
+            "docs/settings.md §3/§4/§16), e.g. --data-type INT16 to try 0x02 instead "
+            "of the claimed write byte 0x82. Default: unset, profile's value unchanged."
         ),
     )
     parser.add_argument(

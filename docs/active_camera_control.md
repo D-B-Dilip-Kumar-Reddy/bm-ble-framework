@@ -169,6 +169,40 @@ summary reproduces the `codec_quality` finding for this family too (a
 mirroring `last_known_codec_variant`); a normal echo on both windows means
 that family reports unconditionally and needs no such guard.
 
+**`--data-type NAME` — probe the CANDIDATE-vs-spec data-type discrepancy.**
+Added 2026-07-23 (`docs/settings.md` §3/§4/§16). The `recording_format`
+write byte (`0x82`/`INT16_ARRAY`) has never matched the camera's own
+REPORT byte for the same category/parameter (`0x02`/`INT16`) — flagged as
+an open hypothesis since §4.2 ("if `0x82` is rejected, try `0x02`") and
+given a concrete motivating failure by §16: `POCKET_6K_PRO v8.6` never
+confirms a `recording_format` retarget to 4K DCI while ProRes is active,
+2/2 real round trips, even though the target state is independently
+proven real via passive capture. `--data-type NAME` (any `DataType`
+member name, e.g. `INT16`) overrides `build_command()`'s data_type for
+whichever `--packet` is selected — generic across all three families, not
+just `recording_format`, since the discrepancy this flag probes is a
+property of the wire byte itself. Default: unset, uses the profile's own
+value unchanged, so every existing invocation stays byte-for-byte
+identical to before this flag existed. `INT16` and `INT16_ARRAY` share the
+identical struct format/byte width (`protocol/types.py`), so this changes
+only packet header byte 6, never the payload encoding or length. The
+override is recorded in the saved capture's label
+(`data_type=INT16(0x02 override; profile default INT16_ARRAY/0x82)`) so a
+later reviewer can tell at a glance which captures used a non-profile
+byte:
+
+```
+python tools/control/send_settings_command.py \
+    --model-key POCKET_6K_PRO --firmware v8.6 \
+    --packet recording_format --resolution "4K DCI" --fps 25 \
+    --data-type INT16
+```
+
+If this is confirmed accepted on real hardware, promoting
+`payloads/models/POCKET_6K_PRO_v8.6.json`'s
+`commands.recording_format.data_type` to `INT16` is a separate,
+evidence-gated follow-up — this flag only makes the experiment possible.
+
 ---
 
 ## `tools/control/sweep_dimension_enum.py`
