@@ -408,6 +408,17 @@ alone: "the camera refuses this combination" versus "our own write path doesn't 
 a combination the camera plainly supports." Worth doing before writing off a gap as a
 hard camera-side wall.
 
+A third lesson came from actually running the exhaustive sweep this pointed to
+(`tools/control/sweep_dimension_enum.py`, `docs/settings.md` §16): two full 16-value
+`dimension_enum` ranges (`0x00`-`0x16`, `0x17`-`0x1F`) on the PRO both came back
+completely empty for ProRes/4K DCI, mirroring the G2's own exhausted `0x01`-`0x16`
+search. A negative result repeated across two cameras and two ranges is itself
+evidence, not just an absence of it — it's what justified re-ranking the next-step
+hypotheses (retrying `recording_format` with a different `data_type` byte,
+`video_format`'s unexplained trailing elements) above "sweep further" once both had
+come back clean. Don't read a well-run exhaustive negative sweep as inconclusive
+just because it didn't find the answer — it narrows where the answer can be.
+
 ## Testing
 
 `tests/unit/test_camera_profile.py` covers: every `KNOWN_PROFILES` JSON

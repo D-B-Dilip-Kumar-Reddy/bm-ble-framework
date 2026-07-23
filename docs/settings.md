@@ -43,12 +43,14 @@ round trips — so unlike the G2, the two-step proxy workaround never actually r
 ProRes/4K DCI here. A same-day addendum to §16 then confirmed via passive capture that
 ProRes/4K DCI is nonetheless a real, representable state on this camera (reached by
 hand through the body menu) — narrowing the gap to this codebase's write path rather
-than a camera-side refusal, but not yet closing it. A follow-up exhaustive
-`dimension_enum` sweep (`tools/control/sweep_dimension_enum.py`, `0x00`-`0x16`) then
-found no enum in that range reaches ProRes/4K DCI either — the same negative result
-the G2's own exhaustive search got, weakening the "still-undiscovered enum nearby"
-hypothesis on both cameras. This blocks promoting the PRO's settings families to
-`VERIFIED` until the combination is either fixed or explicitly excluded.
+than a camera-side refusal, but not yet closing it. Two follow-up exhaustive
+`dimension_enum` sweeps (`tools/control/sweep_dimension_enum.py`, `0x00`-`0x16` then
+`0x17`-`0x1F` — 32 values total) then found no enum in either range reaches ProRes/4K
+DCI — the same negative result the G2's own exhaustive search got, weakening the
+"still-undiscovered enum nearby" hypothesis on both cameras enough that further blind
+`dimension_enum` guessing is now a weaker lead than the alternatives (see §16). This
+blocks promoting the PRO's settings families to `VERIFIED` until the combination is
+either fixed or explicitly excluded.
 
 ## Provenance and evidence status
 
@@ -1445,3 +1447,21 @@ in order of promise:
 3. **Investigate `video_format`'s two "unexplained trailing zero" elements** as a
    possible second axis alongside `dimension_enum` — never tested with a nonzero value
    on either camera.
+
+**Update, 2026-07-23: `0x17`-`0x1F` swept too — still no match, 32 values now
+exhausted.** `tools/control/sweep_dimension_enum.py --range 0x17 0x1F --fps 25
+--target-resolution "4K DCI" --target-codec ProRes` covered the next 9 candidates.
+All 9 produced **zero** `recording_format`/`codec_quality` reports — not even a
+questionable one this time, unlike the `0x00` false positive in the prior range —
+only the ambient `0x09/0x00` storage telemetry. `0x00`-`0x1F` (32 values) is now fully
+exhausted on this camera with no ProRes/4K DCI match anywhere in it.
+
+This further weakens candidate 1 above (sweeping wider) as the most promising next
+step: two full 16-value ranges in a row have produced nothing, on top of the G2's own
+exhausted `0x01`-`0x16` search finding nothing either. `dimension_enum` is a single
+byte, so the space isn't unbounded, but continuing to guess further into `0x20`+
+without new evidence is a weaker bet than it was before this run. **Candidates 2 and 3
+above — retrying `recording_format` with `data_type=0x02`, and testing
+`video_format`'s unexplained trailing elements with a nonzero value — are now the
+leading hypotheses**, since both target a different axis of the packet than the one
+just exhausted twice.
