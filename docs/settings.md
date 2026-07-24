@@ -48,9 +48,13 @@ than a camera-side refusal, but not yet closing it. Two follow-up exhaustive
 `0x17`-`0x1F` — 32 values total) then found no enum in either range reaches ProRes/4K
 DCI — the same negative result the G2's own exhaustive search got, weakening the
 "still-undiscovered enum nearby" hypothesis on both cameras enough that further blind
-`dimension_enum` guessing is now a weaker lead than the alternatives (see §16). This
-blocks promoting the PRO's settings families to `VERIFIED` until the combination is
-either fixed or explicitly excluded.
+`dimension_enum` guessing is now a weaker lead than the alternatives (see §16). A
+follow-up retry of `recording_format`'s retarget write with data-type byte `0x02`
+instead of `0x82` (§16, 2026-07-23/24) also came back empty over a full 8s window —
+ruling that hypothesis out too. Only `video_format`'s unexplained trailing elements
+remain untried from the original candidate list. This blocks promoting the PRO's
+settings families to `VERIFIED` until the combination is either fixed or explicitly
+excluded.
 
 ## Provenance and evidence status
 
@@ -1465,3 +1469,29 @@ above — retrying `recording_format` with `data_type=0x02`, and testing
 `video_format`'s unexplained trailing elements with a nonzero value — are now the
 leading hypotheses**, since both target a different axis of the packet than the one
 just exhausted twice.
+
+**Update, 2026-07-23/24: candidate 2 (`data_type=0x02`) ruled out.**
+`tools/control/send_settings_command.py --packet recording_format --resolution
+"4K DCI" --fps 25 --data-type INT16` retried the exact same retarget write with wire
+data-type byte `0x02` (the camera's own report byte) instead of the claimed write
+byte `0x82`. The first attempt used the tool's default 3s window and was inconclusive
+— the lens-metadata burst dominated it, the same confound already documented
+elsewhere in this section. A follow-up with `--listen-seconds 8` settled it: the
+entire 8-second window contained exactly **one** `0x01/0x09` report — decoding to
+`(fps=24, width=1920, height=1080, flags=0)`, HD, the camera's pre-write state, not a
+match for the requested 4K DCI/25fps — followed by nothing but ambient `0x09/0x00`
+storage telemetry for the remaining ~5.5s. Zero fresh confirming reports over a full
+window is the exact same signature already established for `0x82`. **`data_type`
+(`0x02` vs `0x82`) is not the cause of this failure — ruled out.**
+
+This leaves candidate 3 — `video_format`'s two unexplained trailing zero elements —
+as the only untried lead from this list. Testing it needs a small tooling change
+first: `encode_video_format` hardcodes those two elements to `0, 0` and
+`send_settings_command.py` has no flag to override them (unlike `--dimension-enum`
+and now `--data-type`, both already exposed). Beyond that, the passive-capture
+evidence (this section's earlier addendum) remains the strongest lead of all: it's
+the only approach that has actually observed the camera *in* the target state, rather
+than probing blind — a closer look at exactly which channels report immediately
+around a body-menu-driven ProRes/4K DCI transition (not just `recording_format` and
+`codec_quality`, but everything else in that window) may turn up a detail the three
+ruled-out hypotheses above missed entirely.

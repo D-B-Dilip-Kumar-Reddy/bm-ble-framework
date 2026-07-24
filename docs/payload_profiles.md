@@ -419,6 +419,16 @@ hypotheses (retrying `recording_format` with a different `data_type` byte,
 come back clean. Don't read a well-run exhaustive negative sweep as inconclusive
 just because it didn't find the answer — it narrows where the answer can be.
 
+That re-ranking paid off immediately: retrying `recording_format`'s retarget write
+with `data_type=0x02` (`tools/control/send_settings_command.py --data-type INT16`,
+`docs/settings.md` §16) came back empty too — but only once tested with a long enough
+listen window. The first attempt, at the tool's default 3s, was genuinely
+inconclusive (the lens-metadata burst dominated it, same confound documented
+elsewhere in this file); only the `--listen-seconds 8` retry, with zero fresh reports
+across the full window, actually ruled the hypothesis out. A short window's silence
+and a long window's silence are not the same evidence on this camera — don't treat
+them as interchangeable when deciding whether a hypothesis is dead.
+
 ## Testing
 
 `tests/unit/test_camera_profile.py` covers: every `KNOWN_PROFILES` JSON
