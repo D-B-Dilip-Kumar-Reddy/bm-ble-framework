@@ -184,6 +184,57 @@ override is recorded in the send's label
 generous `--listen-seconds` matters here too given this camera's
 documented lens-burst timing confound.
 
+UPDATE (2026-07-24): tried on real hardware — an absolute-target OFFSET
+write (`--operation OFFSET` with the same values `--resolution "4K DCI"
+--fps 25` would produce under ASSIGN) got zero response over a 10s
+listen window: no `0x01/0x09` report, no report on any channel besides
+the ambient `0x09/0x00` storage telemetry that free-runs regardless of
+any write (see docs/settings.md §16). That is not itself proof `OFFSET`
+is unsupported here — `docs/protocol.md` §4 documents `OFFSET`'s spec
+meaning as "add the payload to the current value," so sending an
+*absolute* target as an `OFFSET` is a category error, not a faithful
+test of the hypothesis. See RAW PAYLOAD OVERRIDE below for the
+delta-payload test this motivates.
+
+RAW PAYLOAD OVERRIDE (`--raw-payload`, added 2026-07-24, see
+docs/settings.md §16 and docs/protocol.md §4): every override above
+changes one field of an otherwise profile-driven payload (a data-type
+byte, two trailing elements, the operation byte) while still building
+the rest of the payload from `--resolution`/`--codec`/`--fps` via the
+profile's lookup tables. Testing `OFFSET`'s documented "add to current
+value" semantics faithfully needs something none of those can do: a
+*delta* payload, not an absolute target — e.g. retargeting
+`recording_format` from UHD (3840x2160) to 4K DCI (4096x2160) via
+`OFFSET` means sending a width delta of `4096-3840=256`, not the
+absolute width `4096` that `--resolution "4K DCI"` would produce.
+`--raw-payload VALUE [VALUE ...]` (accepts `0x..` hex or decimal per
+element) bypasses `--resolution`/`--codec`/`--fps`/`--sensor-fps` and
+the profile's lookup tables entirely, encoding the literal sequence as
+the payload's elements in order — still reading category/parameter/
+reserved from the profile's command block for the selected `--packet`
+(protocol coordinates, not values under test) and still composing with
+`--data-type`/`--operation`. It calls `encode_assign_elements`
+(`protocol/codec.py`) directly — the same fully-generic encoder every
+`encode_*` wrapper in `protocol/categories/settings.py` already
+delegates to — so no protocol-layer changes were needed for this flag.
+Default: unset; every existing invocation of this tool is unaffected.
+
+    # The delta test OFFSET's documented semantics actually call for: a
+    # +256 width delta (UHD -> 4K DCI), not an absolute target
+    python tools/control/send_settings_command.py \\
+        --model-key POCKET_6K_PRO --firmware v8.6 \\
+        --packet recording_format --raw-payload 0 0 256 0 0 \\
+        --operation OFFSET --listen-seconds 10
+
+The five elements above match `recording_format`'s
+`[fps_int, sensor_fps_int, width, height, frame_flags]` shape — `0` for
+fps/sensor_fps/height/frame_flags (no change requested there), `256`
+for the width delta. `--raw-payload` works with any `--packet` family;
+its element count and per-index meaning are for the caller to get
+right, per that packet's own payload shape — this flag does no
+per-family validation, matching `--dimension-enum`'s and
+`--video-format-extra`'s existing stance.
+
 Usage:
     python tools/control/send_settings_command.py --model-key POCKET_6K_G2 --firmware v7.9 \\
         --packet recording_format --resolution "4K DCI" --fps 25
@@ -211,7 +262,7 @@ from bmd_ble.protocol.categories.settings import (  # noqa: E402
     encode_recording_format,
     encode_video_format,
 )
-from bmd_ble.protocol.codec import Operation  # noqa: E402
+from bmd_ble.protocol.codec import Operation, encode_assign_elements  # noqa: E402
 from bmd_ble.protocol.types import DataType  # noqa: E402
 from bmd_ble.scanner import scan_for_camera  # noqa: E402
 
@@ -296,10 +347,39 @@ def _operation_override_suffix(resolved: Operation, args: argparse.Namespace) ->
     )
 
 
+def _build_raw_payload_command(
+    profile: CameraProfile, args: argparse.Namespace
+) -> tuple[str, bytes]:
+    """Build (label, command_bytes) directly from `--raw-payload`'s literal
+    element values, bypassing the profile's codec/resolution/fps lookup
+    tables entirely — see the module docstring's RAW PAYLOAD OVERRIDE
+    section. Still reads category/parameter/reserved from the profile's
+    command block for `--packet` (protocol coordinates, not values under
+    test), and still composes with `--data-type`/`--operation`."""
+    spec = profile.require_command(args.packet)
+    resolved_data_type = resolve_data_type(spec, args)
+    resolved_operation = resolve_operation(args)
+    values = list(args.raw_payload)
+    label = f"{args.packet} raw_payload={values}"
+    label += _data_type_override_suffix(resolved_data_type, spec, args)
+    label += _operation_override_suffix(resolved_operation, args)
+    return label, encode_assign_elements(
+        category=spec.category,
+        parameter=spec.parameter,
+        data_type=resolved_data_type,
+        values=values,
+        reserved=spec.reserved,
+        operation=resolved_operation,
+    )
+
+
 def build_command(profile: CameraProfile, args: argparse.Namespace) -> tuple[str, bytes]:
     """Build (label, command_bytes) for the requested packet family, entirely
     from the profile — raises (via require_*) when the profile lacks the
     block or table entry, pointing at what to reverse-engineer first."""
+    if args.raw_payload is not None:
+        return _build_raw_payload_command(profile, args)
+
     if args.packet == "codec_quality":
         _require_flags(args, ("codec", "variant"))
         spec = profile.require_command("codec_quality")
@@ -534,6 +614,25 @@ def parse_args() -> argparse.Namespace:
             "write-capable operation, never tried (see the module docstring's "
             "OPERATION OVERRIDE section, docs/settings.md §16), e.g. --operation OFFSET. "
             "Default: unset, ASSIGN unchanged."
+        ),
+    )
+    parser.add_argument(
+        "--raw-payload",
+        nargs="+",
+        type=lambda s: int(s, 0),
+        default=None,
+        metavar="VALUE",
+        help=(
+            "Bypass --resolution/--codec/--fps/--sensor-fps and the profile's lookup "
+            "tables entirely, encoding this literal sequence of per-element values "
+            "(accepts 0x.. hex or decimal) as the payload for --packet, still using "
+            "that packet's category/parameter/reserved from the profile. "
+            "Discovery-grade: built for testing Operation.OFFSET's documented delta "
+            "semantics (see the module docstring's RAW PAYLOAD OVERRIDE section, "
+            "docs/protocol.md §4), e.g. --raw-payload 0 0 256 0 0 --operation OFFSET "
+            "to request a +256 width delta (UHD -> 4K DCI) instead of an absolute "
+            "target. Composes with --data-type/--operation. Default: unset, normal "
+            "per-packet resolution unchanged."
         ),
     )
     parser.add_argument(

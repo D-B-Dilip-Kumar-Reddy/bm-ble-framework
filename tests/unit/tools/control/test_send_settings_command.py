@@ -1,6 +1,7 @@
 """Unit tests for tools/control/send_settings_command.py's --repeat,
---data-type, --video-format-extra, and --operation flags — pure
-argument-parsing, action-list-building, and resolution/override logic only.
+--data-type, --video-format-extra, --operation, and --raw-payload flags —
+pure argument-parsing, action-list-building, and resolution/override logic
+only.
 
 No BLE, no input(), no hardware — matches tests/unit/'s "no hardware, full
 mocking" rule and tests/unit/tools/common/test_capture.py's sys.path
@@ -24,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "tools" / "control"
 import send_settings_command as ssc  # noqa: E402
 
 from bmd_ble.camera_profile import CameraProfile  # noqa: E402
-from bmd_ble.protocol.codec import Operation  # noqa: E402
+from bmd_ble.protocol.codec import Operation, encode_assign_elements  # noqa: E402
 from bmd_ble.protocol.types import DataType  # noqa: E402
 
 
@@ -44,6 +45,7 @@ def _args(**overrides) -> argparse.Namespace:
         data_type=None,
         video_format_extra=None,
         operation=None,
+        raw_payload=None,
     )
     defaults.update(overrides)
     return argparse.Namespace(**defaults)
@@ -436,3 +438,123 @@ class TestBuildCommandOperationOverride:
         assert command[7] == int(Operation.OFFSET)
         assert "extra=(1,0)" in label
         assert "operation=OFFSET" in label
+
+
+class TestParseArgsRawPayload:
+    def _parse(self, monkeypatch, extra: list[str]) -> object:
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "send_settings_command.py",
+                "--model-key",
+                "POCKET_6K_G2",
+                "--firmware",
+                "v7.9",
+                "--packet",
+                "recording_format",
+                *extra,
+            ],
+        )
+        return ssc.parse_args()
+
+    def test_defaults_to_none_when_not_passed(self, monkeypatch):
+        args = self._parse(monkeypatch, ["--resolution", "4K DCI", "--fps", "25"])
+
+        assert args.raw_payload is None
+
+    def test_explicit_values_are_parsed_as_ints(self, monkeypatch):
+        args = self._parse(monkeypatch, ["--raw-payload", "0", "0", "256", "0", "0"])
+
+        assert args.raw_payload == [0, 0, 256, 0, 0]
+
+    def test_accepts_hex_values(self, monkeypatch):
+        args = self._parse(monkeypatch, ["--raw-payload", "0x00", "0x100"])
+
+        assert args.raw_payload == [0x00, 0x100]
+
+    def test_no_values_raises_systemexit(self, monkeypatch):
+        with pytest.raises(SystemExit):
+            self._parse(monkeypatch, ["--raw-payload"])
+
+
+class TestBuildCommandRawPayload:
+    def test_matches_direct_encode_assign_elements_call(self):
+        profile = _g2_profile()
+        spec = profile.require_command("recording_format")
+        args = _args(packet="recording_format", raw_payload=[0, 0, 256, 0, 0])
+
+        label, command = ssc.build_command(profile, args)
+
+        expected = encode_assign_elements(
+            category=spec.category,
+            parameter=spec.parameter,
+            data_type=spec.data_type,
+            values=[0, 0, 256, 0, 0],
+            reserved=spec.reserved,
+            operation=Operation.ASSIGN,
+        )
+        assert command == expected
+        assert "raw_payload=[0, 0, 256, 0, 0]" in label
+
+    def test_bypasses_resolution_and_fps_lookup(self):
+        # No --resolution/--fps given at all — a raw-payload send must not
+        # need them, unlike every other recording_format build.
+        profile = _g2_profile()
+        args = _args(packet="recording_format", raw_payload=[1, 2, 3, 4, 5])
+
+        _label, command = ssc.build_command(profile, args)
+
+        spec = profile.require_command("recording_format")
+        assert command[4] == spec.category
+        assert command[5] == spec.parameter
+
+    def test_composes_with_operation_override(self):
+        profile = _g2_profile()
+        args = _args(
+            packet="recording_format",
+            raw_payload=[0, 0, 256, 0, 0],
+            operation="OFFSET",
+        )
+
+        label, command = ssc.build_command(profile, args)
+
+        assert command[7] == int(Operation.OFFSET)
+        assert "operation=OFFSET" in label
+
+    def test_composes_with_data_type_override(self):
+        profile = _g2_profile()
+        args = _args(
+            packet="recording_format",
+            raw_payload=[0, 0, 256, 0, 0],
+            data_type="INT16",
+        )
+
+        label, command = ssc.build_command(profile, args)
+
+        assert command[6] == int(DataType.INT16)
+        assert "data_type=INT16" in label
+
+    def test_takes_priority_over_per_packet_flags(self):
+        # Even if --resolution/--fps/--codec/--variant are also set, a
+        # given --raw-payload short-circuits build_command entirely.
+        profile = _g2_profile()
+        args = _args(
+            packet="codec_quality",
+            codec="BRAW",
+            variant="5:1",
+            raw_payload=[9, 9],
+        )
+
+        _label, command = ssc.build_command(profile, args)
+
+        spec = profile.require_command("codec_quality")
+        expected = encode_assign_elements(
+            category=spec.category,
+            parameter=spec.parameter,
+            data_type=spec.data_type,
+            values=[9, 9],
+            reserved=spec.reserved,
+            operation=Operation.ASSIGN,
+        )
+        assert command == expected

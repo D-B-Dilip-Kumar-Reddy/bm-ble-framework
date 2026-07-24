@@ -273,6 +273,45 @@ python tools/control/send_settings_command.py \
 Not yet tried on real hardware. As with the other probe flags, use a generous
 `--listen-seconds` given this camera's documented lens-burst timing confound.
 
+**Update (2026-07-24):** tried on real hardware — an absolute-target `OFFSET` write
+(`--operation OFFSET` with the same values `--resolution "4K DCI" --fps 25` produces
+under `ASSIGN`) got zero response over a 10s listen window: no `0x01/0x09` report, no
+report on any channel besides the ambient `0x09/0x00` storage telemetry (`docs/
+settings.md` §16). That doesn't itself rule `OFFSET` out — `docs/protocol.md` §4
+documents its spec meaning as "add the payload to the current value," so sending an
+*absolute* target as an `OFFSET` isn't a faithful test of that semantics. See
+`--raw-payload` below for the delta-payload test this motivates.
+
+**`--raw-payload VALUE [VALUE ...]` — send a literal payload, bypassing every
+lookup table.** Added 2026-07-24 (`docs/settings.md` §16, `docs/protocol.md` §4).
+Every override above still builds most of the payload from `--resolution`/`--codec`/
+`--fps` via the profile's lookup tables, changing only one field (data-type byte,
+trailing elements, operation byte). Testing `OFFSET`'s documented "add to current
+value" semantics needs something none of those can do: a *delta* payload, not an
+absolute target — retargeting `recording_format` from UHD (3840×2160) to 4K DCI
+(4096×2160) via `OFFSET` means sending a width delta of `4096-3840=256`, not the
+absolute width `4096`. `--raw-payload` (accepts `0x..` hex or decimal per element)
+bypasses `--resolution`/`--codec`/`--fps`/`--sensor-fps` and the lookup tables
+entirely, encoding the literal element sequence as the payload — still reading
+category/parameter/reserved from the profile's command block for `--packet`, and
+still composing with `--data-type`/`--operation`. It calls `encode_assign_elements`
+(`protocol/codec.py`) directly, the same generic encoder every `encode_*` wrapper in
+`protocol/categories/settings.py` already delegates to, so no protocol-layer changes
+were needed. Default: unset, every existing invocation unaffected:
+
+```
+python tools/control/send_settings_command.py \
+    --model-key POCKET_6K_PRO --firmware v8.6 \
+    --packet recording_format --raw-payload 0 0 256 0 0 \
+    --operation OFFSET --listen-seconds 10
+```
+
+The five elements match `recording_format`'s `[fps_int, sensor_fps_int, width,
+height, frame_flags]` shape — `0` for the fields with no requested change, `256` for
+the width delta. Not yet tried on real hardware. `--raw-payload` does no per-family
+validation of element count or meaning — that's on the caller, matching
+`--dimension-enum`'s and `--video-format-extra`'s existing stance.
+
 ---
 
 ## `tools/control/sweep_dimension_enum.py`

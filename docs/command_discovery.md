@@ -158,14 +158,20 @@ arise here the way it does when replaying one known command twice.
 (2026-07-23, `docs/settings.md` §3/§16, later ruled out on real hardware),
 a `--video-format-extra E1 E2` override (2026-07-24, `docs/settings.md`
 §16, also ruled out) for probing `video_format`'s unexplained trailing
-payload elements, and an `--operation NAME` override (2026-07-24,
-`docs/settings.md` §16, not yet tried on real hardware) for probing the
-untested `Operation.OFFSET` write — three unrelated discovery axes (wire
-byte, extra payload elements, operation byte — not command bytes), noted
-here only because the hook that requires touching this file on any
-`tools/control/*` change applies to them too. `discover_command.py` itself
-still has no equivalent: its `CandidateCommand.encode()` always uses
-`Operation.ASSIGN` via `encode_assign`'s (now overridable, but
+payload elements, an `--operation NAME` override (2026-07-24,
+`docs/settings.md` §16, tried on real hardware for the absolute-payload
+case and ruled out — see the next entry for why that's not the whole
+story) for probing the `Operation.OFFSET` write, and a `--raw-payload
+VALUE [VALUE ...]` override (2026-07-24, `docs/settings.md` §16, not yet
+tried on real hardware) that bypasses the profile's lookup tables
+entirely to send a literal element sequence — built specifically to test
+`OFFSET`'s documented delta semantics (`docs/protocol.md` §4), which an
+absolute-target payload can't do — four unrelated discovery axes (wire
+byte, extra payload elements, operation byte, raw payload — not command
+bytes), noted here only because the hook that requires touching this file
+on any `tools/control/*` change applies to them too. `discover_command.py`
+itself still has no equivalent: its `CandidateCommand.encode()` always
+uses `Operation.ASSIGN` via `encode_assign`'s (now overridable, but
 unused-by-default) `operation` parameter.
 
 ---

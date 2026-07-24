@@ -59,7 +59,12 @@ no match. A full-channel decode of the passive-capture evidence (§16, 2026-07-2
 then found nothing new either — no channel besides `recording_format` itself
 correlates with the transition — leaving `Operation.OFFSET` (never tried, unlike
 `ASSIGN` which every write above used) as the one remaining untested axis, now
-testable via `--operation` (§16). This
+testable via `--operation` (§16). An absolute-payload `OFFSET` test (§16,
+2026-07-24) came back with zero response too, but per the spec's documented "add
+to current value" semantics that's an unreliable test — the payload sent asked
+for an out-of-range absolute width rather than a faithful delta. `--raw-payload`
+(§16, 2026-07-24) now exists to send a genuine delta payload directly, bypassing
+the profile's lookup tables — not yet tried on real hardware. This
 blocks promoting the PRO's settings
 families to `VERIFIED` until the combination is either fixed or explicitly excluded.
 
@@ -1633,3 +1638,46 @@ values in this protocol have already diverged from the official spec's stated
 behavior before (`docs/protocol.md` §3) — but don't read a failure from that test
 alone as ruling OFFSET out entirely; the delta-based version hasn't been tried.
 Not yet tried on real hardware either way.
+
+**Update, 2026-07-24: the absolute-payload OFFSET test came back with zero
+response.** Ran exactly the command above (`--packet recording_format
+--resolution "4K DCI" --fps 25 --operation OFFSET`, `--listen-seconds 10`) against
+the PRO. TX confirmed the header carried the override correctly
+(`FF 0E 00 01 01 09 82 01 19 00 19 00 00 10 70 08 10 00` — operation byte `01`
+at offset 7, payload otherwise identical to the ASSIGN version). Over the full 10s
+window, only the ambient `0x09/0x00` storage telemetry and the usual lens-metadata/
+connect-burst packets appeared — **zero** `0x01/0x09` reports, the same
+"zero response" signature already seen for invalid `dimension_enum` candidates and
+`video_format` extras, not `recording_format`'s "accepted but unconfirmed"
+signature. As predicted in the correction above, this is not conclusive proof
+`OFFSET` is unsupported for this parameter — the payload sent was `width=4096`
+absolute, which per the spec's stated arithmetic means "request width
+`current + 4096`," almost certainly an out-of-range value the camera has every
+reason to silently reject regardless of whether `OFFSET` itself works. The delta
+test is the one that actually exercises the hypothesis.
+
+**Update, 2026-07-24: `--raw-payload` now exists for the delta test.**
+`send_settings_command.py` gained `--raw-payload VALUE [VALUE ...]` (accepts
+`0x..` hex or decimal per element), which bypasses `--resolution`/`--codec`/
+`--fps`/`--sensor-fps` and the profile's lookup tables entirely and encodes a
+literal element sequence as the payload — calling `encode_assign_elements`
+(`protocol/codec.py`) directly rather than going through
+`encode_recording_format`/`encode_video_format`/`encode_codec_quality`, so no
+protocol-layer changes were needed for this flag. It still reads
+category/parameter/reserved from the profile's command block, and still composes
+with `--data-type`/`--operation`. This makes the actual delta test possible for
+the first time:
+
+```
+python tools/control/send_settings_command.py \
+    --model-key POCKET_6K_PRO --firmware v8.6 \
+    --packet recording_format --raw-payload 0 0 256 0 0 \
+    --operation OFFSET --listen-seconds 10
+```
+
+`[0, 0, 256, 0, 0]` matches `recording_format`'s `[fps_int, sensor_fps_int, width,
+height, frame_flags]` shape — `0` for every field with no requested change, `256`
+for the width delta (`4096 - 3840`, UHD → 4K DCI). This is the first test that
+sends `OFFSET` a payload actually shaped like a delta rather than an absolute
+target, and the last untried variant of every hypothesis raised in this section.
+Not yet tried on real hardware.
