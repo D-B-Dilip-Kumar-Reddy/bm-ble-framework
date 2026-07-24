@@ -324,6 +324,16 @@ decode, `OFFSET` absolute payload, `OFFSET` delta payload) is now exhausted with
 confirming echo. See `docs/settings.md` §16 for the full write-up and the next
 diagnostic step under consideration.
 
+**Update (2026-07-24):** the follow-up isolating test — an `OFFSET` delta against
+`codec_quality` instead of `recording_format`
+(`--packet codec_quality --raw-payload 0 1 --operation OFFSET`), a family whose
+`ASSIGN` echo behavior is already well-characterized (fires on a real change,
+silent only on an exact no-op) — also got zero response over a full 10s window, TX
+independently confirmed correct. Since a `+1` variant delta is not a no-op, this
+rules out "`OFFSET` is refused specifically for `recording_format`" and points at
+`Operation.OFFSET` not being acted on by this camera's firmware at all, for either
+category/parameter tried so far. See `docs/settings.md` §16 for the full write-up.
+
 ---
 
 ## `tools/control/sweep_dimension_enum.py`

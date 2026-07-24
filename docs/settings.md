@@ -66,7 +66,11 @@ for an out-of-range absolute width rather than a faithful delta. `--raw-payload`
 (§16, 2026-07-24) then made a genuine in-range delta payload testable, bypassing
 the profile's lookup tables — and it got the identical zero-response signature
 (§16, 2026-07-24), which is stronger evidence than the absolute-payload result
-since the delta landed exactly in-range. **Every hypothesis raised in this
+since the delta landed exactly in-range. A follow-up isolating test then sent an
+`OFFSET` delta against `codec_quality` instead (§16, 2026-07-24) — a family whose
+`ASSIGN` echo behavior is already well-characterized — and got silence there too,
+pointing at `Operation.OFFSET` being unimplemented camera-wide rather than
+refused specifically for `recording_format`. **Every hypothesis raised in this
 investigation is now exhausted** with no confirming echo for the ProRes/4K DCI
 retarget on this camera. This
 blocks promoting the PRO's settings
@@ -1745,3 +1749,43 @@ explanations: a confirming echo there would mean `OFFSET` works in general and
 `recording_format` specifically refuses it; continued silence there too would
 point at `OFFSET` being unimplemented camera-wide. No code changes needed — the
 existing `--raw-payload`/`--operation` flags already support this.
+
+**Update, 2026-07-24: the isolating test came back silent too — `Operation.OFFSET`
+appears unimplemented camera-wide, not specific to `recording_format`.** Ran
+exactly the command above against the PRO. TX independently decoded and confirmed
+correct: header `category=0x0A, parameter=0x00, reserved=0` (`codec_quality`'s own
+reserved byte — distinct from `recording_format`'s `1`, confirming `--raw-payload`
+correctly reads the *selected* packet's own protocol coordinates from the profile,
+not a leftover from the prior family), `data_type=INT8`, `operation=OFFSET`,
+payload `[0, 1]` — a genuine `+1` variant delta, not a mis-encoding or an
+accidental no-op. Over the full 10s window: **zero** `0x0A/0x00` (`codec_quality`)
+reports — only the same connect-burst tail and ambient `0x09/0x00` telemetry every
+other `OFFSET` test has produced.
+
+This is the isolating result the test was designed to produce. `codec_quality`'s
+`ASSIGN` echo behavior is already well-characterized (§11): it fires reliably on a
+genuine applied change and stays silent only on an exact no-op. A `+1` variant
+delta from whatever variant was active is not a no-op — under `ASSIGN`, an
+equivalent genuine change reliably echoes. Getting silence here rules out
+"`OFFSET` is refused specifically for `recording_format`'s category/parameter" as
+an explanation and leaves the more general one: **`Operation.OFFSET` is not acted
+on by this camera's firmware at all**, for either category/parameter tested so
+far (`0x01/0x09` and `0x0A/0x00`). This isn't a hard proof of camera-wide
+non-implementation — only two of many possible category/parameter pairs have been
+tried — but it removes the "just this one write" explanation the earlier
+`recording_format`-only tests couldn't rule out on their own, and it means further
+`OFFSET` experiments against *other* families are unlikely to produce a different
+answer without some new distinguishing reason to expect one.
+
+**Where this leaves the ProRes/4K DCI gap:** every hypothesis this investigation
+raised — `dimension_enum` sweep, `data_type` byte, `video_format` trailing
+elements, full-channel passive decode, `OFFSET` absolute payload, `OFFSET` delta
+payload, and now the camera-wide-vs-parameter-specific isolation test — has come
+back with no confirming echo. The gap remains real, and remains isolated to this
+codebase's write path rather than a proven camera-side refusal (per the §16
+addendum's passive-capture evidence), but no write-side lever tried so far closes
+it. Continued brute-force probing of individual `OFFSET` targets is no longer a
+well-motivated next step on its own; a different kind of lead (a fresh sniffer
+capture strategy, a firmware-version-specific quirk, or simply documenting the gap
+as an accepted limitation of this codebase's write path on this camera/firmware)
+is what's left.
