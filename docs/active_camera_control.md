@@ -203,6 +203,38 @@ If this is confirmed accepted on real hardware, promoting
 `commands.recording_format.data_type` to `INT16` is a separate,
 evidence-gated follow-up — this flag only makes the experiment possible.
 
+**Update, 2026-07-23/24:** real hardware ruled this hypothesis out for the PRO's
+ProRes/4K DCI gap — `--data-type INT16` with `--listen-seconds 8` produced zero
+fresh confirming reports, the same signature already established for `0x82`
+(`docs/settings.md` §16). The write-byte axis is exhausted.
+
+**`--video-format-extra E1 E2` — probe `video_format`'s unexplained trailing
+elements.** Added 2026-07-24 (`docs/settings.md` §16). `video_format`'s payload is
+`[fps_int, m_rate, dimension_enum, extra1, extra2]` — every capture on either camera
+shows `extra1`/`extra2` as `0, 0` (hypothesis: the official spec's
+`interlaced`/`colorspace` video-mode elements), and `encode_video_format` always
+hardcoded them until now. With the `dimension_enum` sweep exhausted (`0x00`-`0x1F`)
+and the `recording_format` data-type hypothesis ruled out, these two bytes are the
+last untried lead from the original candidate list. `--video-format-extra E1 E2`
+(accepts `0x..` hex or decimal) overrides `build_command()`'s `extra1`/`extra2` for a
+`video_format` send — mirroring `--dimension-enum`/`--data-type`'s pattern exactly:
+default unset (every existing invocation stays byte-for-byte unchanged), and the
+override is recorded in the send's label
+(`extra=(1,0) override; profile default (0,0)`) for the same evidentiary
+traceability:
+
+```
+python tools/control/send_settings_command.py \
+    --model-key POCKET_6K_PRO --firmware v8.6 \
+    --packet video_format --resolution UHD --codec ProRes --fps 25 \
+    --video-format-extra 1 0
+```
+
+Not yet tried on real hardware — this makes candidate 3 testable, it isn't a result.
+As with the other probe flags, watch for a matching `recording_format`/
+`codec_quality` report rather than the on-screen display, and use a generous
+`--listen-seconds` given this camera's documented lens-burst timing confound.
+
 ---
 
 ## `tools/control/sweep_dimension_enum.py`

@@ -1,16 +1,16 @@
-"""Unit tests for tools/control/send_settings_command.py's --repeat and
---data-type flags — pure argument-parsing, action-list-building, and
-data_type-resolution logic only.
+"""Unit tests for tools/control/send_settings_command.py's --repeat,
+--data-type, and --video-format-extra flags — pure argument-parsing,
+action-list-building, and resolution/override logic only.
 
 No BLE, no input(), no hardware — matches tests/unit/'s "no hardware, full
 mocking" rule and tests/unit/tools/common/test_capture.py's sys.path
 pattern for importing a standalone (non-package) tools/ script.
 `CameraProfile.for_model()` reads local profile JSON only — no network/BLE
-— so it's used directly for the --data-type tests, matching
+— so it's used directly for these tests, matching
 tests/unit/tools/control/test_sweep_dimension_enum.py's precedent. The G2
 profile is used rather than the PRO's so these tests can't become
-collateral damage of the PRO's own recording_format.data_type value
-possibly changing later as a result of the experiment this flag enables.
+collateral damage of the PRO's own profile values possibly changing later
+as a result of the experiments these flags enable.
 """
 
 import argparse
@@ -41,6 +41,7 @@ def _args(**overrides) -> argparse.Namespace:
         sensor_fps=None,
         dimension_enum=None,
         data_type=None,
+        video_format_extra=None,
     )
     defaults.update(overrides)
     return argparse.Namespace(**defaults)
@@ -221,3 +222,97 @@ class TestBuildCommandDataTypeOverride:
             spec = profile.require_command(name)
             _label, command = ssc.build_command(profile, args)
             assert command[6] == int(spec.data_type)
+
+
+class TestParseArgsVideoFormatExtra:
+    def _parse(self, monkeypatch, extra: list[str]) -> object:
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "send_settings_command.py",
+                "--model-key",
+                "POCKET_6K_G2",
+                "--firmware",
+                "v7.9",
+                "--packet",
+                "video_format",
+                "--resolution",
+                "UHD",
+                "--codec",
+                "ProRes",
+                "--fps",
+                "25",
+                *extra,
+            ],
+        )
+        return ssc.parse_args()
+
+    def test_defaults_to_none_when_not_passed(self, monkeypatch):
+        args = self._parse(monkeypatch, [])
+
+        assert args.video_format_extra is None
+
+    def test_explicit_pair_is_parsed_as_two_ints(self, monkeypatch):
+        args = self._parse(monkeypatch, ["--video-format-extra", "1", "0"])
+
+        assert args.video_format_extra == [1, 0]
+
+    def test_accepts_hex_values(self, monkeypatch):
+        args = self._parse(monkeypatch, ["--video-format-extra", "0x0A", "0x0B"])
+
+        assert args.video_format_extra == [0x0A, 0x0B]
+
+    def test_missing_second_value_raises_systemexit(self, monkeypatch):
+        with pytest.raises(SystemExit):
+            self._parse(monkeypatch, ["--video-format-extra", "1"])
+
+
+class TestResolveVideoFormatExtra:
+    def test_returns_zero_pair_when_override_is_none(self):
+        assert ssc.resolve_video_format_extra(_args(video_format_extra=None)) == (0, 0)
+
+    def test_returns_overridden_pair_when_given(self):
+        assert ssc.resolve_video_format_extra(_args(video_format_extra=[1, 2])) == (1, 2)
+
+
+class TestBuildCommandVideoFormatExtraOverride:
+    def test_defaults_to_zero_trailing_elements(self):
+        profile = _g2_profile()
+        args = _args(packet="video_format", resolution="UHD", codec="ProRes", fps="25")
+
+        label, command = ssc.build_command(profile, args)
+
+        assert command[-2:] == b"\x00\x00"
+        assert "override" not in label
+
+    def test_override_writes_the_given_trailing_elements(self):
+        profile = _g2_profile()
+        args = _args(
+            packet="video_format",
+            resolution="UHD",
+            codec="ProRes",
+            fps="25",
+            video_format_extra=[1, 2],
+        )
+
+        label, command = ssc.build_command(profile, args)
+
+        assert command[-2:] == b"\x01\x02"
+        assert "extra=(1,2)" in label
+        assert "override" in label
+
+    def test_composes_with_dimension_enum_probe_mode(self):
+        profile = _g2_profile()
+        args = _args(
+            packet="video_format",
+            fps="25",
+            dimension_enum=0x08,
+            video_format_extra=[1, 0],
+        )
+
+        label, command = ssc.build_command(profile, args)
+
+        assert command[-2:] == b"\x01\x00"
+        assert "probe enum=0x08" in label
+        assert "extra=(1,0)" in label

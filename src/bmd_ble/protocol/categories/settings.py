@@ -19,11 +19,14 @@ THE THREE FAMILIES (see docs/settings.md for byte layouts and provenance)
   Observed to change the quality variant within the active codec family
   but NOT to switch BRAW <-> ProRes, even though it carries a codec id.
 - ``video_format`` — five int8 elements
-  ``[fps_int, m_rate, dimension_enum, 0, 0]``. The ``dimension_enum``
-  encodes resolution AND codec family together — this is the packet that
-  actually switches BRAW <-> ProRes. The two trailing zero elements are
-  unexplained (hypothesis: the official spec's video-mode ``interlaced``
-  and ``colorspace`` elements).
+  ``[fps_int, m_rate, dimension_enum, extra1, extra2]``. The
+  ``dimension_enum`` encodes resolution AND codec family together — this
+  is the packet that actually switches BRAW <-> ProRes. ``extra1``/
+  ``extra2`` default to ``0`` — every real capture so far shows zero —
+  and are unexplained (hypothesis: the official spec's video-mode
+  ``interlaced`` and ``colorspace`` elements); ``encode_video_format``
+  accepts nonzero overrides for discovery-grade probing of that
+  hypothesis.
 - ``recording_format`` — five little-endian int16 elements
   ``[fps_int, sensor_fps_int, width, height, frame_flags]``.
 
@@ -107,14 +110,20 @@ def encode_video_format(
     m_rate: int,
     dimension_enum: int,
     reserved: int = RESERVED_BYTE,
+    extra1: int = 0,
+    extra2: int = 0,
 ) -> bytes:
     """Encode a video-format (FORMAT) command packet.
 
-    Payload is ``[fps_int, m_rate, dimension_enum, 0, 0]`` — the two
-    trailing zero elements match every observation so far (hypothesis: the
-    official spec's ``interlaced`` and ``colorspace`` video-mode elements,
-    both zero for progressive YUV). ``dimension_enum`` locks resolution and
-    codec family together; all values come from ``CameraProfile``
+    Payload is ``[fps_int, m_rate, dimension_enum, extra1, extra2]`` —
+    ``extra1``/``extra2`` default to ``0``, matching every observation so
+    far (hypothesis: the official spec's ``interlaced`` and ``colorspace``
+    video-mode elements, both zero for progressive YUV). Overridable for
+    discovery-grade probing of that hypothesis (see
+    ``tools/control/send_settings_command.py --video-format-extra``,
+    docs/settings.md §16) — no caller in this codebase passes anything but
+    the default yet. ``dimension_enum`` locks resolution and codec family
+    together; all other values come from ``CameraProfile``
     (``commands.video_format`` plus the ``resolutions``/``fps_modes``
     tables).
     """
@@ -122,7 +131,7 @@ def encode_video_format(
         category=category,
         parameter=parameter,
         data_type=data_type,
-        values=[fps_int, m_rate, dimension_enum, 0, 0],
+        values=[fps_int, m_rate, dimension_enum, extra1, extra2],
         reserved=reserved,
     )
 

@@ -113,6 +113,32 @@ class TestEncodeVideoFormat:
             fps_int=60, m_rate=1, dimension_enum=0x13
         )
 
+    def test_extra_elements_default_to_zero(self):
+        packet = encode_video_format(
+            category=0x01,
+            parameter=0x00,
+            data_type=DataType.INT8,
+            fps_int=25,
+            m_rate=0,
+            dimension_enum=0x08,
+            reserved=0x01,
+        )
+        assert _hex(packet) == "FF 09 00 01 01 00 01 00 19 00 08 00 00"
+
+    def test_extra_elements_are_overridable(self):
+        packet = encode_video_format(
+            category=0x01,
+            parameter=0x00,
+            data_type=DataType.INT8,
+            fps_int=25,
+            m_rate=0,
+            dimension_enum=0x08,
+            reserved=0x01,
+            extra1=1,
+            extra2=2,
+        )
+        assert _hex(packet) == "FF 09 00 01 01 00 01 00 19 00 08 01 02"
+
 
 class TestEncodeRecordingFormat:
     def test_25fps_4k_dci_matches_documented_packet(self):

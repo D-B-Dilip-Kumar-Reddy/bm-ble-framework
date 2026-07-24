@@ -52,9 +52,9 @@ DCI — the same negative result the G2's own exhaustive search got, weakening t
 follow-up retry of `recording_format`'s retarget write with data-type byte `0x02`
 instead of `0x82` (§16, 2026-07-23/24) also came back empty over a full 8s window —
 ruling that hypothesis out too. Only `video_format`'s unexplained trailing elements
-remain untried from the original candidate list. This blocks promoting the PRO's
-settings families to `VERIFIED` until the combination is either fixed or explicitly
-excluded.
+remain untried from the original candidate list, and `--video-format-extra` (§16,
+2026-07-24) now makes that testable. This blocks promoting the PRO's settings
+families to `VERIFIED` until the combination is either fixed or explicitly excluded.
 
 ## Provenance and evidence status
 
@@ -1495,3 +1495,25 @@ than probing blind — a closer look at exactly which channels report immediatel
 around a body-menu-driven ProRes/4K DCI transition (not just `recording_format` and
 `codec_quality`, but everything else in that window) may turn up a detail the three
 ruled-out hypotheses above missed entirely.
+
+**Update, 2026-07-24: the trailing-elements tooling now exists.**
+`encode_video_format` (`protocol/categories/settings.py`) gained overridable
+`extra1`/`extra2` parameters (default `0, 0`, matching every real capture so far),
+and `send_settings_command.py` gained `--video-format-extra E1 E2`, mirroring
+`--dimension-enum`/`--data-type`'s discovery-grade probe pattern exactly — default
+unset, every existing invocation stays byte-for-byte unchanged, and the override is
+recorded in the send's label for evidentiary traceability:
+
+```
+python tools/control/send_settings_command.py \
+    --model-key POCKET_6K_PRO --firmware v8.6 \
+    --packet video_format --resolution UHD --codec ProRes --fps 25 \
+    --video-format-extra 1 0
+```
+
+Not yet tried on real hardware — this is candidate 3 finally made testable, not a
+result. As with the other probe flags, watch for a matching `recording_format`/
+`codec_quality` report rather than the on-screen display (unreliable on the PRO,
+§15), and start with a longer `--listen-seconds` (8+) given the lens-burst timing
+confound has produced a false negative on this exact camera before (this section,
+above).

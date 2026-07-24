@@ -108,6 +108,44 @@ that's grounds for a *separate*, evidence-gated follow-up — promoting
 updated provenance. This flag only makes the experiment possible; it does
 not itself change any profile.
 
+UPDATE (2026-07-23/24): real-hardware evidence ruled the `--data-type`
+hypothesis out for `POCKET_6K_PRO v8.6`'s ProRes/4K DCI gap — `--data-type
+INT16` with `--listen-seconds 8` produced zero fresh confirming reports,
+the same signature already established for `0x82` (see docs/settings.md
+§16). The write-byte axis is exhausted; see VIDEO_FORMAT TRAILING ELEMENTS
+below for what's left.
+
+VIDEO_FORMAT TRAILING ELEMENTS (`--video-format-extra`, added 2026-07-24,
+see docs/settings.md §16): `video_format`'s five-element payload is
+`[fps_int, m_rate, dimension_enum, extra1, extra2]` — every capture on
+either camera so far shows `extra1`/`extra2` as `0, 0` (hypothesis: the
+official spec's `interlaced`/`colorspace` video-mode elements, both zero
+for progressive YUV), and `encode_video_format` has always hardcoded them.
+With the `dimension_enum` search exhausted (`0x00`-`0x1F`, no ProRes/4K
+DCI match) and the `recording_format` data-type hypothesis ruled out
+above, these two unexplored bytes are the last untried lead from the
+original candidate list. `--video-format-extra E1 E2` (accepts `0x..` hex
+or decimal) overrides `build_command()`'s `extra1`/`extra2` for a
+`video_format` send, leaving every other packet family untouched.
+Default: unset, uses `(0, 0)` unchanged, so every existing invocation
+stays byte-for-byte identical to before this flag existed. Like
+`--dimension-enum` and `--data-type`, this is discovery-grade probing, not
+a value known to mean anything yet — watch for a resulting
+`recording_format`/`codec_quality` report matching the target instead of
+guessing from the on-screen display, per the same caveat `send_settings_
+command.py`'s other probe flags already carry:
+
+    # Does a nonzero extra1 unlock ProRes/4K DCI where dimension_enum and
+    # data_type alone couldn't?
+    python tools/control/send_settings_command.py \\
+        --model-key POCKET_6K_PRO --firmware v8.6 \\
+        --packet video_format --resolution UHD --codec ProRes --fps 25 \\
+        --video-format-extra 1 0
+
+The override is recorded in the send's label (and so in the saved capture
+JSON), e.g. `extra=(1,0) override; profile default (0,0)`, matching how
+`--data-type`'s override is recorded.
+
 Usage:
     python tools/control/send_settings_command.py --model-key POCKET_6K_G2 --firmware v7.9 \\
         --packet recording_format --resolution "4K DCI" --fps 25
@@ -176,6 +214,27 @@ def _data_type_override_suffix(
     )
 
 
+def resolve_video_format_extra(args: argparse.Namespace) -> tuple[int, int]:
+    """The (extra1, extra2) trailing-element pair to encode with:
+    `--video-format-extra E1 E2` if given (an explicit escape-hatch
+    override — see the module docstring's VIDEO_FORMAT TRAILING ELEMENTS
+    section), else `(0, 0)`, matching every real capture so far and every
+    invocation of this tool before this flag existed."""
+    if args.video_format_extra is not None:
+        return tuple(args.video_format_extra)
+    return (0, 0)
+
+
+def _video_format_extra_suffix(extra1: int, extra2: int, args: argparse.Namespace) -> str:
+    """Label suffix noting a `--video-format-extra` override — empty string
+    when unused, so the label is byte-for-byte unchanged from before this
+    flag existed. Mirrors `_data_type_override_suffix`'s evidence-visibility
+    role: this flows into the saved capture JSON via `label`."""
+    if args.video_format_extra is None:
+        return ""
+    return f" extra=({extra1},{extra2}) override; profile default (0,0)"
+
+
 def build_command(profile: CameraProfile, args: argparse.Namespace) -> tuple[str, bytes]:
     """Build (label, command_bytes) for the requested packet family, entirely
     from the profile — raises (via require_*) when the profile lacks the
@@ -223,7 +282,9 @@ def build_command(profile: CameraProfile, args: argparse.Namespace) -> tuple[str
                     f"actively with --dimension-enum (see docs/settings.md)."
                 )
             label = f"video_format {args.resolution} {args.codec} {args.fps}"
+        extra1, extra2 = resolve_video_format_extra(args)
         label += _data_type_override_suffix(resolved_data_type, spec, args)
+        label += _video_format_extra_suffix(extra1, extra2, args)
         return label, encode_video_format(
             category=spec.category,
             parameter=spec.parameter,
@@ -232,6 +293,8 @@ def build_command(profile: CameraProfile, args: argparse.Namespace) -> tuple[str
             m_rate=fps.m_rate,
             dimension_enum=dimension_enum,
             reserved=spec.reserved,
+            extra1=extra1,
+            extra2=extra2,
         )
 
     _require_flags(args, ("resolution", "fps"))
@@ -360,6 +423,20 @@ def parse_args() -> argparse.Namespace:
             "notifications, so an active probe is the only way. Watch the camera and note "
             "what it switches to; then add the confirmed enum to the profile's resolutions "
             "table."
+        ),
+    )
+    parser.add_argument(
+        "--video-format-extra",
+        nargs=2,
+        type=lambda s: int(s, 0),
+        default=None,
+        metavar=("EXTRA1", "EXTRA2"),
+        help=(
+            "video_format only: override the two trailing payload elements (accepts 0x.. "
+            "hex or decimal) instead of the default 0, 0. Discovery-grade: probes whether "
+            "these unexplained elements (see the module docstring's VIDEO_FORMAT TRAILING "
+            "ELEMENTS section, docs/settings.md §16) are the missing piece for a gap a "
+            "dimension_enum sweep can't close, e.g. --video-format-extra 1 0."
         ),
     )
     parser.add_argument(
