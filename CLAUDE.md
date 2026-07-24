@@ -542,6 +542,18 @@ one is already present, to point at a different camera).
     all three writes with echo verification. Passing this promotes all three families'
     `provenance.status` to `"VERIFIED"`.
 
+    This confirms one combination. Before trusting the profile's full `codecs`/
+    `resolutions`/`fps_modes` tables, run `tools/control/sweep_camera_format.py
+    --model-key <MODEL_KEY> --firmware <FIRMWARE> --dry-run` first to see the full
+    combination count, then a real (possibly narrowed) sweep — it runs
+    `set_camera_format()` across every combination the tables claim is supported and
+    flags any that never confirm, the same shape of gap `POCKET_6K_PRO v8.6`'s
+    ProRes/4K DCI combination turned out to be (`docs/settings.md` §16) after being
+    found by accident rather than checked systematically. An `unconfirmed` result is a
+    candidate for a `known_unreachable` entry, not an automatic one — it still needs
+    the same real-hardware follow-up that investigation took (see
+    `docs/active_camera_control.md`) before being written into the profile.
+
 ### Phase 4 — Finish
 
 14. Add the `(MODEL_KEY, FIRMWARE)` tuple to `KNOWN_PROFILES` in `camera_profile.py` —

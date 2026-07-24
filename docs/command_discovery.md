@@ -172,10 +172,25 @@ axes (wire byte, extra payload elements, operation byte, raw payload —
 not command bytes), noted here only because the hook that requires
 touching this file on any `tools/control/*` change applies to them too.
 Every hypothesis this investigation raised for the PRO's ProRes/4K DCI
-gap is now exhausted (`docs/settings.md` §16). `discover_command.py`
+gap is now exhausted (`docs/settings.md` §16) and accepted as a guarded
+software capability gap (`resolutions."4K DCI".known_unreachable.ProRes`,
+`docs/payload_profiles.md`). `discover_command.py`
 itself still has no equivalent: its `CandidateCommand.encode()` always
 uses `Operation.ASSIGN` via `encode_assign`'s (now overridable, but
 unused-by-default) `operation` parameter.
+
+A different kind of sibling tool, `tools/control/sweep_camera_format.py`
+(2026-07-24, `docs/active_camera_control.md`), exists precisely because that
+gap was found by accident rather than by systematic checking: it runs
+`CameraSession.set_camera_format()` — the real production API, not a raw
+protocol send like every tool above — across every `(codec, variant,
+resolution, fps)` combination a profile claims to support, to surface
+candidates for future `known_unreachable` entries before a caller hits one
+in production. Noted here only because the `tools/control/*` doc-sync hook
+applies to it too; it answers a different question than command discovery
+("does this already-populated command family actually work for every
+claimed combination", not "what command produces this effect" — no
+`CandidateCommand` sweep involved at all).
 
 ---
 

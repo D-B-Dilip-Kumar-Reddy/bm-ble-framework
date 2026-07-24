@@ -392,6 +392,93 @@ directly through this codebase's own writes.
 
 ---
 
+## `tools/control/sweep_camera_format.py`
+
+Added 2026-07-24, directly motivated by how the ProRes/4K DCI gap above was
+actually found: by accident, mid-investigation of something else, on a
+combination nobody had set out to test. Closing it took a full day of
+targeted hypothesis testing before being accepted as a genuine software
+capability gap (`resolutions.<name>.known_unreachable`, `docs/payload_profiles.md`)
+— and nothing in this codebase's tooling checked whether a similar gap
+exists on any of the profile's *other* combinations. A `POCKET_6K_PRO
+v8.6`-sized profile claims support for around 480 `(codec, variant,
+resolution, fps)` combinations; this tool is what makes checking all of
+them (or a chosen slice) practical instead of hoping the next gap surfaces
+by accident too.
+
+Unlike every other tool in this file, it runs `CameraSession.set_camera_format()`
+— the real production API — rather than building raw protocol packets
+directly. That is a deliberate precedent break (see the tool's own module
+docstring for the full rationale): its entire purpose is verifying the
+production code path end to end, including `set_camera_format`'s no-op
+guards, its `known_unreachable` precondition check, and its proxy-resolution
+logic — testing any of that at the raw protocol level would exercise a
+parallel implementation, not the one this tool exists to check.
+
+```
+# Always start here — preview the plan, no connection made:
+python tools/control/sweep_camera_format.py \
+    --model-key POCKET_6K_PRO --firmware v8.6 --dry-run
+
+# A practical, narrowed sweep (the full ~480-combination sweep is real,
+# but --resolutions/--codecs/--variants/--fps make it tractable to run in
+# focused slices):
+python tools/control/sweep_camera_format.py \
+    --model-key POCKET_6K_PRO --firmware v8.6 \
+    --resolutions "4K DCI,UHD" --codecs ProRes --fps 25,24
+```
+
+`enumerate_combinations` builds the combination list straight from the
+profile's `resolutions`/`codecs`/`fps_modes` tables — the same tables
+`set_camera_format` itself reads — in profile-declaration order (dict
+iteration order, matching JSON key order, so repeated runs produce the same
+plan). A `(codec, resolution)` pair already listed in that resolution's
+`known_unreachable` map is skipped by default, since its outcome is already
+known and would just raise `BMDUnsupportedError` immediately; `--include-known-unreachable`
+overrides this, e.g. to re-verify one after a suspected fix. Filters are
+validated against the profile up front (the same `require_resolution`/
+`require_codec`/`require_fps_mode` fail-loud contract as everywhere else in
+this codebase) — an unknown name in `--resolutions`/`--codecs`/`--fps`
+raises immediately rather than silently sweeping zero combinations.
+
+Each combination's `set_camera_format()` call is classified into one of four
+outcomes:
+
+| Outcome | Meaning |
+|---|---|
+| `confirmed` | Every step echo-verified (or correctly recognized as an already-satisfied no-op) — the combination genuinely works. |
+| `unsupported` | `BMDUnsupportedError` — the camera doesn't offer this codec at this resolution, or it's already a known software gap. |
+| `missing_data` | `ValueError` — profile data needed to attempt the write (usually a `dimension_enum`) hasn't been captured yet; not a confirmed failure, just an incomplete profile. |
+| `unconfirmed` | `BMDVerificationError` — the write was attempted but never confirmed. **This is the outcome that matters**: a genuine candidate for a new `known_unreachable` entry, the same shape of finding the ProRes/4K DCI investigation eventually confirmed by hand. |
+
+Like `sweep_dimension_enum.py` and `discover_command.py`, this is typed-yes
+gated **once** for the whole sweep — the confirmation prompt prints the full
+plan and a worst-case time estimate (`3 × echo_timeout_s + pause` per
+combination), since a full sweep is genuinely hundreds of real writes.
+`--dry-run` is the way to review a plan without that commitment at all. One
+failing combination never aborts the sweep — every combination is
+independent, and the whole point is a complete picture, not stopping at the
+first gap. A structured JSON report (reusing `tools/captures/`'s existing
+per-model directory convention, alongside — not through — `tools/common/capture.py`'s
+`save_capture`, since this tool's results aren't raw BLE notification
+captures) is saved at the end, and every `unconfirmed` result is called out
+in the console summary as a `known_unreachable` candidate.
+
+**This tool surfaces candidates — it does not write `known_unreachable`
+itself.** An `unconfirmed` result from one sweep run is exactly as strong as
+the very first `send_settings_command.py --packet recording_format` run
+that originally surfaced the ProRes/4K DCI gap — a lead, not a conclusion.
+Promoting one to the profile needs the same real-hardware follow-up that
+investigation eventually required before being accepted (`docs/settings.md`
+§16): repeat runs from a genuinely different starting state (ruling out a
+redundant no-op), the operator confirming on-screen state directly (ruling
+out an echo-only confirmation problem), and ideally testing whether the
+exact camera-reported value — not just *a* value — was tried, all before
+anyone edits the profile. Per CLAUDE.md design principle 6 (sniffer-first),
+that review is a human step this tool deliberately does not automate.
+
+---
+
 ## `tools/control/discover_command.py`
 
 The second consumer of `run_send_and_capture`, for the opposite situation:
