@@ -308,9 +308,21 @@ python tools/control/send_settings_command.py \
 
 The five elements match `recording_format`'s `[fps_int, sensor_fps_int, width,
 height, frame_flags]` shape — `0` for the fields with no requested change, `256` for
-the width delta. Not yet tried on real hardware. `--raw-payload` does no per-family
-validation of element count or meaning — that's on the caller, matching
-`--dimension-enum`'s and `--video-format-extra`'s existing stance.
+the width delta. `--raw-payload` does no per-family validation of element count or
+meaning — that's on the caller, matching `--dimension-enum`'s and
+`--video-format-extra`'s existing stance.
+
+**Update (2026-07-24):** tried on real hardware — same zero-response signature as
+the absolute-payload `OFFSET` test: no `0x01/0x09` report in a full 10s window, TX
+independently confirmed correct (`operation=0x01`, payload decodes to
+`(0, 0, 256, 0, 0)`). This result is stronger evidence than the absolute-payload
+test, since a `+256` width delta from UHD (3840) lands exactly in-range at 4096 —
+the "out-of-range absolute value" explanation for the earlier silence doesn't apply
+here. Every hypothesis raised for the PRO's ProRes/4K DCI gap (`dimension_enum`
+sweep, `data_type` byte, `video_format` trailing elements, full-channel passive
+decode, `OFFSET` absolute payload, `OFFSET` delta payload) is now exhausted with no
+confirming echo. See `docs/settings.md` §16 for the full write-up and the next
+diagnostic step under consideration.
 
 ---
 

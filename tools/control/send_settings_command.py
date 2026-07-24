@@ -235,6 +235,24 @@ right, per that packet's own payload shape — this flag does no
 per-family validation, matching `--dimension-enum`'s and
 `--video-format-extra`'s existing stance.
 
+UPDATE (2026-07-24): tried on real hardware — the delta payload
+(`--raw-payload 0 0 256 0 0 --operation OFFSET`, TX confirmed correct:
+header byte 7 = `0x01`, payload decodes to `(0, 0, 256, 0, 0)`) got the
+same zero-response signature as the absolute-payload test: no
+`0x01/0x09` report anywhere in a full 10s window, only ambient `0x09`
+telemetry and the usual connect-burst tail (see docs/settings.md §16).
+This is a stronger result than the absolute-payload test — a `+256`
+width delta from UHD (3840) lands exactly in-range at 4096, so the
+"out-of-range absolute value" explanation for that earlier silence
+doesn't apply here. Every hypothesis raised in this investigation
+(`dimension_enum` sweep, `data_type` byte, `video_format` trailing
+elements, full-channel passive decode, `OFFSET` absolute payload,
+`OFFSET` delta payload) is now exhausted with no confirming echo for
+the ProRes/4K DCI retarget. See docs/settings.md §16 for the full
+write-up and the next diagnostic step under consideration (isolating
+whether `OFFSET` is silently rejected for every category/parameter on
+this camera, or specific to `recording_format`).
+
 Usage:
     python tools/control/send_settings_command.py --model-key POCKET_6K_G2 --firmware v7.9 \\
         --packet recording_format --resolution "4K DCI" --fps 25

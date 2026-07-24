@@ -63,8 +63,12 @@ testable via `--operation` (§16). An absolute-payload `OFFSET` test (§16,
 2026-07-24) came back with zero response too, but per the spec's documented "add
 to current value" semantics that's an unreliable test — the payload sent asked
 for an out-of-range absolute width rather than a faithful delta. `--raw-payload`
-(§16, 2026-07-24) now exists to send a genuine delta payload directly, bypassing
-the profile's lookup tables — not yet tried on real hardware. This
+(§16, 2026-07-24) then made a genuine in-range delta payload testable, bypassing
+the profile's lookup tables — and it got the identical zero-response signature
+(§16, 2026-07-24), which is stronger evidence than the absolute-payload result
+since the delta landed exactly in-range. **Every hypothesis raised in this
+investigation is now exhausted** with no confirming echo for the ProRes/4K DCI
+retarget on this camera. This
 blocks promoting the PRO's settings
 families to `VERIFIED` until the combination is either fixed or explicitly excluded.
 
@@ -1681,3 +1685,63 @@ for the width delta (`4096 - 3840`, UHD → 4K DCI). This is the first test that
 sends `OFFSET` a payload actually shaped like a delta rather than an absolute
 target, and the last untried variant of every hypothesis raised in this section.
 Not yet tried on real hardware.
+
+**Update, 2026-07-24: the delta test came back with the same zero response — every
+hypothesis in this section is now exhausted.** Ran exactly the command above
+against the PRO with `--listen-seconds 10`. TX independently decoded and confirmed
+correct before trusting the result: header byte 6 = `0x82` (profile default, no
+`--data-type` given), byte 7 = `0x01` (`OFFSET`), payload decodes to
+`(0, 0, 256, 0, 0)` — exactly the intended delta, not a mis-encoding. Over the full
+10s window: **zero** `0x01/0x09` reports. The only notifications present were the
+usual connect-burst tail (`0x0C/0x00`-`0x0F` lens metadata, `0x0A` device-info
+strings), the ambient `0x09/0x00` storage telemetry, and one previously-unseen
+one-off packet — `0x09/0x08` (`INT8`, payload `[0, 1]`) — almost certainly more
+connect-burst noise sharing category `0x09` with the known storage signal, not a
+response to this write (it appeared as the very first packet in the window,
+before the send had any plausible time to produce a reaction).
+
+This result is meaningfully stronger than the absolute-payload test's. That
+earlier silence was explained away as a payload-shape problem: an absolute
+`width=4096` sent as an `OFFSET` requests `current + 4096`, almost certainly out
+of range, giving the camera an obvious reason to reject it regardless of whether
+`OFFSET` itself is supported. This delta test doesn't have that escape hatch — a
+`+256` width delta from UHD's `3840` lands exactly in-range at `4096`, the valid
+4K DCI width — and it still produced the same "zero response" signature already
+seen for invalid `dimension_enum` candidates and invalid `video_format` extras
+(not `recording_format`'s established "accepted but unconfirmed" signature for a
+genuinely-attempted retarget). The most direct reading: **`Operation.OFFSET`
+itself is not acted on for this write**, independent of whether the payload is
+absolute or a well-formed delta.
+
+One caveat worth stating plainly: this reading assumes the camera was actually at
+UHD (width `3840`) immediately before the send. If it wasn't, a `+256` delta
+wouldn't land on `4096` either, and the "in-range" framing above wouldn't hold.
+The operator's noted starting state was UHD, consistent with the intended test,
+but this wasn't independently re-confirmed by a fresh report inside this window
+(the last confirming `recording_format` report predates it) — a residual,
+un-eliminated possibility rather than a live concern.
+
+**Every hypothesis raised in this investigation is now exhausted**: the
+`dimension_enum` sweep (`0x00`-`0x1F`, two full ranges), the `data_type` byte
+retry (`0x02` vs `0x82`), `video_format`'s trailing elements, a full-channel
+passive decode of the transition, `OFFSET` with an absolute payload, and `OFFSET`
+with a genuine delta payload. None produced a confirming `0x01/0x09` report for
+ProRes/4K DCI on `POCKET_6K_PRO v8.6`, despite the passive-capture evidence
+(§16 addendum) proving the camera genuinely holds and reports that exact state
+when reached through its own body menu — the gap remains isolated to this
+codebase's write path, not a camera-side refusal of the combination, but nothing
+tried so far has closed it.
+
+**A next diagnostic step, not yet built or run:** every `OFFSET` test so far has
+targeted `recording_format` specifically. It's still an open question whether
+`Operation.OFFSET` is silently rejected camera-wide (a firmware-level
+non-implementation) or only for this particular category/parameter. Sending an
+`OFFSET` delta against a family with well-characterized `ASSIGN` echo behavior —
+e.g. `codec_quality`, whose "fires only on a genuine applied change, stays silent
+on a no-op" behavior is already confirmed on both cameras (§11) — via
+`--packet codec_quality --raw-payload 0 1 --operation OFFSET` (a `+1` variant
+delta, avoiding the ambiguous zero-delta no-op case) would isolate the two
+explanations: a confirming echo there would mean `OFFSET` works in general and
+`recording_format` specifically refuses it; continued silence there too would
+point at `OFFSET` being unimplemented camera-wide. No code changes needed — the
+existing `--raw-payload`/`--operation` flags already support this.
