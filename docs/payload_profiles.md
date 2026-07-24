@@ -521,7 +521,22 @@ that ambiguity for the price of asking. Do this whenever a write's failure mode
 is still ambiguous between refusal and confirmation loss, not just when a new
 value is being tried for the first time.
 
-## Testing
+The next round applied that same "re-read the evidence for an unexamined
+assumption" lesson to a second dimension: not just the fps value but the codec
+*variant*. Every active write attempt across the whole investigation had used
+whatever ProRes variant happened to be active at the time (`422`, then later
+`PXY`) without anyone checking it against the one variant the passive capture had
+actually reported (`HQ`). Retrying with the right variant needed one more
+discipline on top of "use the right value," though: the first attempt at it used
+the tool's default 3s listen window for the two setup steps and got no confirming
+echo for either — which meant the retry's own precondition was itself unverified,
+the same trap a `--repeat`-based no-op test could fall into by accident. Only the
+second attempt, with a long enough window to actually catch both setup echoes,
+turned this into a real test: the camera's state going into the final write was
+*confirmed by wire echo*, not merely requested, before trusting the final
+result. A negative result is only as strong as the precondition it was tested
+from — verify the setup step's own echo before treating a subsequent step's
+silence as meaningful, not just for the step under test.
 
 `tests/unit/test_camera_profile.py` covers: every `KNOWN_PROFILES` JSON
 validating and loading (including both profiles' `storage.write_margin_warning`

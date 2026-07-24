@@ -76,10 +76,16 @@ retarget with the *exact* `fps_int=24` the camera itself reports at that state
 sent from two genuinely different starting states 2/2, with the operator
 directly confirming the on-screen display never changed either time (§16,
 2026-07-24). That rules out both "wrong value" and "echo-only confirmation
-problem": the write is genuinely ignored, not just unconfirmed. **Every
-hypothesis raised in this investigation is now exhausted** with no confirming
-echo, and no on-screen change, for the ProRes/4K DCI retarget on this camera.
-This
+problem": the write is genuinely ignored, not just unconfirmed. A follow-up test
+then retried the retarget with the exact camera-reported codec *variant* too
+(ProRes HQ, not `422`/`PXY` as every earlier attempt had used) — this time with
+the ProRes/HQ/UHD/24fps precondition confirmed by genuine fresh wire echoes
+immediately beforehand, not just requested (§16, 2026-07-24). Still zero
+response, still no on-screen change. With resolution, fps, codec, variant, data
+type, and operation now all tried at their confirmed-correct values, **the
+write-value hypothesis space is exhausted** — no confirming echo, and no
+on-screen change, for the ProRes/4K DCI retarget on this camera, no matter what
+combination of correct values has been sent. This
 blocks promoting the PRO's settings
 families to `VERIFIED` until the combination is either fixed or explicitly excluded.
 
@@ -1847,4 +1853,62 @@ reachable, a silent camera-side refusal for a codec/resolution combination whose
 bitrate the card can't sustain would look exactly like everything observed here:
 no echo, no on-screen change, no error — while still leaving BRAW and every lower
 ProRes resolution/bitrate unaffected, matching this camera's behavior in every
-other test in this investigation. Not yet checked.
+other test in this investigation. The card was confirmed present and rated V60,
+which likely rules out the storage-speed explanation on its own merits (V60 is a
+fast class), but see the update below for why this line of inquiry was overtaken
+by a cleaner, more direct test before that could be fully chased down.
+
+**Update, 2026-07-24: the exact camera-reported codec *variant*, confirmed via
+genuine wire echoes immediately beforehand — still zero response, still no
+on-screen change. This is the terminal result for the write-value hypothesis
+space.** A re-check of exactly which ProRes variant was active during every prior
+active-write attempt in this investigation turned up something nobody had
+controlled for: the body-menu capture that first proved ProRes/4K DCI reachable
+reported the state as `codec_id=2, variant_id=0` — **ProRes HQ** — but every
+active write attempt so far had used a *different* variant: the original
+"KNOWN LIMITATION" runs used ProRes `422`, and the two `fps=24` runs above started
+from ProRes `PXY` (Proxy). Nobody had ever actually retried the retarget while the
+camera was confirmed at HQ specifically.
+
+Ran the three-step sequence explicitly setting HQ before the retarget, all three
+steps with `--listen-seconds 8`:
+
+```
+python tools/control/send_settings_command.py --model-key POCKET_6K_PRO --firmware v8.6 --packet video_format --resolution UHD --codec ProRes --fps 24 --listen-seconds 8
+python tools/control/send_settings_command.py --model-key POCKET_6K_PRO --firmware v8.6 --packet codec_quality --codec ProRes --variant HQ --listen-seconds 8
+python tools/control/send_settings_command.py --model-key POCKET_6K_PRO --firmware v8.6 --packet recording_format --resolution "4K DCI" --fps 24 --listen-seconds 8
+```
+
+Unlike the first attempt at this sequence (which used the tool's default 3s
+window for steps 1–2 and got no confirming echo for either, leaving the
+precondition unverified), this run's 8s windows caught genuine fresh echoes for
+both setup steps: step 1's `0x01/0x09` report decoded to `(24, 24, 3840, 2160,
+16)` — UHD/24fps, confirming the proxy write landed — and step 2's `0x0A/0x00`
+report decoded to `(codec_id=2, variant_id=0)` — a *fresh* HQ report, distinct
+from step 1's own leftover `(2, 1)`/`422` report still sitting in its connect-burst
+tail. Going into step 3, the camera's state was **definitively confirmed by wire
+echo, not inferred**: ProRes, HQ, UHD, 24fps — the exact codec/variant proven
+reachable at 4K DCI, and a genuinely different resolution than the target (not a
+no-op).
+
+Step 3 still produced **zero `0x01/0x09` reports** over the full 8s window, and
+the operator confirmed the on-screen display did not change. Every dimension of
+this write — resolution, fps, codec, variant, data type, operation — now exactly
+matches the camera's own self-reported target state, confirmed by genuine echo
+immediately beforehand, and it still did not land, on the wire or on the camera.
+
+This rules out the variant hypothesis cleanly and, combined with everything
+before it, closes the write-value hypothesis space entirely: `dimension_enum`,
+`data_type` byte, `video_format` trailing elements, full-channel passive decode,
+`Operation.OFFSET` (absolute, delta, and camera-wide isolation), the exact
+camera-reported fps, and now the exact camera-reported codec variant — every
+single parameter of the write has been tried at its confirmed-correct value, and
+none of it works. The remaining explanations are no longer about *what* this
+codebase sends — they're about whether this specific transition is reachable
+over BLE `OUTGOING_CONTROL` **at all**, by any means, on this camera/firmware.
+Two honest options from here: treat the storage/write-margin angle above as one
+last check before concluding that, or accept this as a genuine, well-evidenced
+capability gap in the BLE control surface for this specific transition — real,
+reachable through the camera's own body menu, but not through anything this
+codebase's writes can do — and document it as such rather than continuing to
+vary write parameters that have now been tried at their known-correct values.
