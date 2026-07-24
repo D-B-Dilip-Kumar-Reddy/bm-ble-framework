@@ -192,6 +192,14 @@ applies to it too; it answers a different question than command discovery
 claimed combination", not "what command produces this effect" — no
 `CandidateCommand` sweep involved at all).
 
+Its first real-hardware run (2026-07-24, `docs/settings.md` §17) found a
+genuine camera hardware limit (`POCKET_6K_PRO v8.6`'s `"6K"` resolution
+capped at 50fps, now `resolutions.6K.max_fps_int`, excluded from this
+tool's default sweep like `known_unreachable`) and a false negative in the
+tool's own default echo timeout (fixed by raising `--echo-timeout-seconds`
+from 3.0 to 6.0) — same doc-sync-hook note as above, no `CandidateCommand`
+involvement either.
+
 ---
 
 ## Worked example: recording on POCKET_6K_PRO v8.6

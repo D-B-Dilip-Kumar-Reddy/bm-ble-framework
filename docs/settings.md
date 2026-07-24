@@ -1938,3 +1938,89 @@ see `tools/control/sweep_camera_format.py` (`docs/active_camera_control.md`) —
 a systematic tool that runs `CameraSession.set_camera_format()` across every
 combination a profile claims to support and reports which ones actually
 confirm.
+
+---
+
+## 17. `POCKET_6K_PRO v8.6` — `sweep_camera_format.py`'s first production run (2026-07-24)
+
+`tools/control/sweep_camera_format.py` (§16's closing recommendation) ran
+against real hardware for the first time immediately after being built. Two
+runs, one connected session each:
+
+- **448 combinations, no filters**: 431 confirmed cleanly, 0 unsupported, 0
+  missing profile data, 17 unconfirmed. Most combinations completed in well
+  under a second.
+- **480 combinations, `--include-known-unreachable`**: 431 confirmed, **32
+  unsupported** — exactly the ProRes/4K DCI combinations (4 variants × 8
+  fps), correctly intercepted by the `known_unreachable` guard before any
+  write was attempted — 0 missing data, the identical 17 unconfirmed. 431 +
+  32 + 17 = 480, exact.
+
+The `known_unreachable` guard worked precisely as designed on its first
+real-world exercise. The 17 unconfirmed results split into two genuinely
+different findings once checked against the real camera and the operator's
+own eyes — neither is a "wrong write value" story like §16's investigation.
+
+### 17.1 — A real hardware fps ceiling: `POCKET_6K_PRO v8.6`'s `"6K"` tops out at 50
+
+16 of the 17: `BRAW <variant> 6K @ 59.94` and `@ 60`, for all 8 BRAW
+quality variants (Q0, Q5, 3:1, 5:1, 8:1, 12:1, Q1, Q3) — every other fps at
+6K (23.98, 24, 25, 29.97, 30, 50) confirmed cleanly for every variant. That
+is a systematic, codec-variant-independent pattern — the signature of a
+genuine sensor/readout bandwidth ceiling, not a per-variant write bug. The
+operator confirmed this directly: **the camera's own UI does not offer
+59.94/60fps as options at 6K either**, for any codec. Unlike §16's ProRes/4K
+DCI gap, this isn't a software write-path limitation — the camera itself
+cannot do this combination at all.
+
+That is a different kind of fact than `known_unreachable`, which explicitly
+means "the camera can, this codebase's writes can't." A new field,
+`resolutions.<name>.max_fps_int`, was added for it (`docs/payload_profiles.md`
+has the full design and the comparison table against `codecs`/`dimension_enums`/
+`known_unreachable`). `POCKET_6K_PRO_v8.6.json`'s `"6K"` entry now carries
+`max_fps_int: 50`, and `CameraSession.set_video_format`/`set_recording_format`
+both raise `BMDUnsupportedError` immediately for a requested fps above a
+resolution's ceiling — before any write, in either method independently
+(unlike `known_unreachable`, which only lives in `set_camera_format`'s
+orchestration, both of these take `(resolution, fps)` directly and needed
+their own check). `sweep_camera_format.py` excludes fps values above a
+resolution's ceiling from its default combination space for the same reason
+it excludes `known_unreachable` combinations (`--include-unsupported-fps`
+overrides this).
+
+This finding also retroactively supports a hypothesis already written into
+`POCKET_6K_PRO_v8.6.json`'s `"6K"` `_comment` from Phase 3 reverse
+engineering: `frame_flags` reports `0x00` at 6K versus `0x10` at every other
+resolution, hypothesized then as "full sensor readout" versus "windowed/
+cropped" — a full-sensor readout mode is exactly the kind of thing that
+would plausibly cap the achievable frame rate lower than a windowed/cropped
+one. Not proven by this finding alone, but consistent with it.
+
+### 17.2 — A false negative in the sweep tool's own default timeout, not a camera fact
+
+The 17th: `ProRes HQ HD @ 23.98`, reported `unconfirmed` in both runs, at
+3.1s against the sweep tool's then-default 3.0s `--echo-timeout-seconds`.
+**The operator confirmed the write had actually succeeded on the camera** —
+this was never a real gap at all. The 3.1s elapsed time is the tell: this is
+the same lens-metadata-burst confound documented in
+`docs/session_and_verification.md` and encountered repeatedly throughout
+§16's investigation (delaying a genuine echo past a too-short timeout),
+demonstrated here for the first time inside `sweep_camera_format.py`
+specifically rather than a single manual send.
+
+**Fix: the tool's default `--echo-timeout-seconds` was raised from 3.0 to
+6.0.** This has a smaller cost than it looks — the vast majority of
+combinations in both real runs completed in well under a second (they
+return the moment a genuine echo arrives, not after the full timeout), so a
+longer timeout only affects genuinely borderline/slow combinations like this
+one, not the whole sweep's runtime. No profile change was needed or made
+for this combination — `ProRes HQ HD @ 23.98` was never a
+`known_unreachable`/`max_fps_int` candidate, just a tool bug.
+
+**General lesson for reading any future sweep result**: an `unconfirmed`
+outcome is evidence about *that run*, not automatically evidence about the
+camera. Check whether the tooling's own timing assumptions could explain it
+— ideally by checking the camera's actual on-screen/UI state directly, the
+same operator-is-ground-truth discipline §16's investigation relied on
+throughout — before treating a result as a genuine `known_unreachable` or
+`max_fps_int` candidate.

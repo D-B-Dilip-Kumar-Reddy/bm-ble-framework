@@ -443,6 +443,15 @@ class TestSettingsSections:
         assert resolution.codecs == ("BRAW", "ProRes")
         assert resolution.dimension_enums == {"BRAW": 8}
         assert resolution.known_unreachable == {}
+        assert resolution.max_fps_int is None
+
+    def test_resolves_resolution_max_fps_int(self):
+        raw = make_valid_raw_with_settings()
+        raw["resolutions"]["4K DCI"]["max_fps_int"] = 50
+        profile = CameraProfile._from_raw("POCKET_6K_G2", "v7.9", raw)
+
+        resolution = profile.require_resolution("4K DCI")
+        assert resolution.max_fps_int == 50
 
     def test_resolves_resolution_known_unreachable(self):
         raw = make_valid_raw_with_settings()
@@ -527,6 +536,19 @@ class TestSettingsSections:
     def test_schema_rejects_known_unreachable_with_non_string_value(self):
         raw = make_valid_raw_with_settings()
         raw["resolutions"]["4K DCI"]["known_unreachable"] = {"ProRes": 123}
+
+        with pytest.raises(ValueError, match="schema validation"):
+            validate_profile(raw, source="test.json")
+
+    def test_schema_accepts_resolution_max_fps_int(self):
+        raw = make_valid_raw_with_settings()
+        raw["resolutions"]["4K DCI"]["max_fps_int"] = 50
+
+        validate_profile(raw, source="test.json")
+
+    def test_schema_rejects_max_fps_int_below_minimum(self):
+        raw = make_valid_raw_with_settings()
+        raw["resolutions"]["4K DCI"]["max_fps_int"] = 0
 
         with pytest.raises(ValueError, match="schema validation"):
             validate_profile(raw, source="test.json")

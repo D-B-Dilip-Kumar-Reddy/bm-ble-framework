@@ -366,6 +366,70 @@ still reviews the evidence before writing the field itself.
 
 ---
 
+## `resolutions.<name>.max_fps_int`: a camera gap, not a software gap
+
+Added 2026-07-24, the very first time `sweep_camera_format.py` ran against
+real hardware (`docs/settings.md`). Where `known_unreachable` means "the
+camera can do this, this codebase's writes can't reach it," `max_fps_int` is
+the opposite kind of fact: "the camera itself cannot do this at all" — a
+real sensor/readout bandwidth ceiling, not a write-path bug. `POCKET_6K_PRO
+v8.6`'s `"6K"` resolution is the first example: all 8 BRAW quality variants
+came back `unconfirmed` at 59.94/60fps (16/16, every other fps at 6K
+confirming cleanly for all 8) in the sweep's first production run, and the
+operator independently confirmed the camera's own UI doesn't offer those fps
+values at 6K either — not a confirmation problem, a capability the hardware
+doesn't have.
+
+```json
+"resolutions": {
+  "6K": {
+    "width": 6144,
+    "height": 3456,
+    "codecs": ["BRAW"],
+    "dimension_enums": { "BRAW": 19 },
+    "max_fps_int": 50
+  }
+}
+```
+
+`ResolutionSpec.max_fps_int` (`int | None`, defaulting to `None` — no known
+ceiling) is checked by `CameraSession.set_video_format` *and*
+`set_recording_format` before any write — both take `(resolution, fps)`
+directly and can be called independently of `set_camera_format`, unlike
+`known_unreachable`'s check, which only lives in the orchestration method.
+A requested fps whose `fps_int` exceeds the ceiling raises
+`BMDUnsupportedError` immediately, quoting the ceiling; a request exactly at
+the ceiling is allowed (inclusive, not exclusive). A third flavor of design
+principle 7's "explicit capability model," alongside `resolution_spec.codecs`
+and `known_unreachable` — see the table below for how the three compare.
+`sweep_camera_format.py` excludes fps values above a resolution's ceiling
+from its default combination space for the same reason it excludes
+`known_unreachable` combinations: re-sweeping a known limit just reproduces
+the same result (`--include-unsupported-fps` overrides this).
+
+| Field | Means | Camera can do it? | This codebase's writes can reach it? |
+|---|---|---|---|
+| `codecs` (absent codec) | Camera doesn't offer this codec at this resolution | No | N/A |
+| `dimension_enums` (codec present, enum absent) | Supported, enum not yet captured | Yes | Unknown — not yet tried |
+| `known_unreachable` | Every write-value hypothesis exhausted, none worked | Yes | No |
+| `max_fps_int` (fps above it) | Real hardware/sensor ceiling | No | N/A |
+
+**A second lesson from this same sweep, about the tooling rather than the
+profile**: one more result in that first run — `ProRes HQ HD @ 23.98` —
+turned out to be a false negative in `sweep_camera_format.py`'s *own*
+default timeout, not a camera fact at all. It reported `unconfirmed` at
+3.1s against a 3.0s default `--echo-timeout-seconds`, but the operator
+confirmed the write had genuinely succeeded on the camera — the same
+lens-metadata-burst confound documented in `docs/session_and_verification.md`,
+this time caught delaying an echo inside the sweep tool itself rather than a
+single manual send. The tool's default was raised to 6.0 as a direct result.
+Worth remembering for any future sweep tool: an `unconfirmed` result is
+evidence about *this run*, not automatically evidence about the camera —
+check whether the tooling's own timing assumptions could explain it before
+trusting it as a `known_unreachable`/`max_fps_int` candidate.
+
+---
+
 ## Adding a new command block
 
 1. Capture the command on the target camera/firmware

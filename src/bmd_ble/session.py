@@ -486,9 +486,12 @@ class CameraSession:
         This is the packet whose dimension_enum locks resolution AND codec
         family together — the only known way to switch BRAW <-> ProRes (see
         docs/settings.md). Raises BMDUnsupportedError when the profile says
-        the camera doesn't offer `codec` at `resolution`, and ValueError
-        when the combination is supported but its dimension_enum hasn't
-        been captured yet.
+        the camera doesn't offer `codec` at `resolution`, or when `fps`
+        exceeds `resolution`'s `max_fps_int` (a real hardware ceiling, e.g.
+        `POCKET_6K_PRO v8.6`'s '6K' topping out at 50 — confirmed absent
+        from the camera's own UI, not a software gap like
+        `known_unreachable`), and ValueError when the combination is
+        supported but its dimension_enum hasn't been captured yet.
 
         The echo channel for this family is unconfirmed: the camera may
         report on the command's own (category, parameter), on the
@@ -533,6 +536,17 @@ class CameraSession:
                 f"{self.profile.model_key} {self.profile.firmware} does not offer codec "
                 f"'{codec}' at '{resolution}' — supported there: "
                 f"{', '.join(resolution_spec.codecs)}"
+            )
+        if (
+            resolution_spec.max_fps_int is not None
+            and fps_spec.fps_int > resolution_spec.max_fps_int
+        ):
+            raise BMDUnsupportedError(
+                f"{self.profile.model_key} {self.profile.firmware} does not offer '{fps}' "
+                f"(fps_int={fps_spec.fps_int}) at '{resolution}' — this resolution's fps "
+                f"ceiling on this camera is {resolution_spec.max_fps_int} (a hardware "
+                f"limit, confirmed absent from the camera's own UI, not a software gap — "
+                f"see docs/settings.md)"
             )
         dimension_enum = resolution_spec.dimension_enums.get(codec)
         if dimension_enum is None:
@@ -624,7 +638,10 @@ class CameraSession:
     ) -> None:
         """Set resolution and frame rate via the recording-format packet
         (five int16 elements), raising BMDVerificationError unless confirmed
-        by echo.
+        by echo, or BMDUnsupportedError immediately when `fps` exceeds
+        `resolution`'s `max_fps_int` (a real hardware ceiling — see
+        `set_video_format`'s docstring for the same check and its
+        real-hardware precedent).
 
         `sensor_fps` defaults to `fps` (off-speed recording untested). This
         packet does not carry a codec — the camera applies the dimensions
@@ -649,6 +666,18 @@ class CameraSession:
         resolution_spec = self.profile.require_resolution(resolution)
         fps_spec = self.profile.require_fps_mode(fps)
         sensor_spec = self.profile.require_fps_mode(sensor_fps) if sensor_fps else fps_spec
+
+        if (
+            resolution_spec.max_fps_int is not None
+            and fps_spec.fps_int > resolution_spec.max_fps_int
+        ):
+            raise BMDUnsupportedError(
+                f"{self.profile.model_key} {self.profile.firmware} does not offer '{fps}' "
+                f"(fps_int={fps_spec.fps_int}) at '{resolution}' — this resolution's fps "
+                f"ceiling on this camera is {resolution_spec.max_fps_int} (a hardware "
+                f"limit, confirmed absent from the camera's own UI, not a software gap — "
+                f"see docs/settings.md)"
+            )
 
         if self.last_known_recording_format == (
             fps_spec.fps_int,

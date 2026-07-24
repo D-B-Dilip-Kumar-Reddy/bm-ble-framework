@@ -141,6 +141,12 @@ class ResolutionSpec:
     through its own body menu) but that this codebase's writes cannot reach
     over BLE despite exhausting every write-value hypothesis — a software
     gap, not a camera capability gap (see docs/settings.md).
+    ``max_fps_int`` is a different flavor again: the highest
+    ``fps_modes.<name>.fps_int`` this resolution supports on the camera
+    itself (a genuine hardware/sensor-readout ceiling, e.g.
+    ``POCKET_6K_PRO v8.6``'s '6K' topping out at 50 — confirmed absent from
+    the camera's own UI at 6K, not just unconfirmed by echo). ``None`` means
+    no known ceiling.
     """
 
     name: str
@@ -149,6 +155,7 @@ class ResolutionSpec:
     codecs: tuple[str, ...] = ()
     dimension_enums: dict[str, int] = field(default_factory=dict)
     known_unreachable: dict[str, str] = field(default_factory=dict)
+    max_fps_int: int | None = None
 
 
 @dataclass(frozen=True)
@@ -478,6 +485,7 @@ class CameraProfile:
                     for key, value in block.get("known_unreachable", {}).items()
                     if not key.startswith("_")
                 },
+                max_fps_int=block.get("max_fps_int"),
             )
 
         fps_modes: dict[str, FpsModeSpec] = {}

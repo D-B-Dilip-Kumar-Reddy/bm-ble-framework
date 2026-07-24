@@ -79,6 +79,44 @@ Each combination is a real settings write (echo-verified, same as every
 other CANDIDATE settings send in this codebase) — typed-yes gated once for
 the whole sweep, not per combination, given the count involved. Read the
 printed plan (or run with `--dry-run` first) before confirming.
+
+REAL-HARDWARE RESULTS (2026-07-24, `POCKET_6K_PRO v8.6`, first production run)
+--------------------------------------------------------------------------
+448 combinations, one connected session: 431 confirmed cleanly, 17
+unconfirmed. A follow-up run with `--include-known-unreachable` (480
+combinations) reproduced the identical 17, plus correctly classified all 32
+ProRes/4K DCI combinations as `unsupported` via the `known_unreachable`
+guard — no write attempted for any of them, exactly as designed. Full
+write-up: `docs/settings.md`.
+
+The 17 unconfirmed split into two genuinely different findings once checked
+against the real camera:
+
+- **16 were a false alarm at the reporting layer, not the write layer**:
+  every `BRAW <variant> 6K @ 59.94`/`@ 60` combination, for all 8 variants.
+  The operator confirmed these fps values aren't offered by the camera's own
+  UI at 6K at all — a real hardware ceiling, not a software write-path gap
+  like ProRes/4K DCI. This is now modeled as `resolutions.6K.max_fps_int`
+  (`docs/payload_profiles.md`) and excluded from this tool's default sweep
+  the same way `known_unreachable` combinations are (see
+  `--include-unsupported-fps` to re-sweep them anyway).
+- **1 was a genuine false negative in this tool's own default timeout**:
+  `ProRes HQ HD @ 23.98` reported `unconfirmed` at 3.1s against the
+  then-default 3.0s `--echo-timeout-seconds` — but the operator confirmed
+  the write had actually succeeded on the camera. This is the same
+  lens-metadata-burst confound documented elsewhere in this codebase
+  (`docs/session_and_verification.md`) delaying a genuine echo past a too-
+  short timeout, this time demonstrated in this tool specifically rather
+  than a single manual send. The default was raised from 3.0 to 6.0 as a
+  direct result — a fast default here risks exactly this false-negative
+  shape, and a full sweep's fast combinations (most complete in well under
+  a second) are unaffected by a longer timeout; only genuinely slow ones pay
+  for it.
+
+Net effect: the very first production run of this tool caught a real,
+previously-undocumented camera limitation (6K's fps ceiling) and a real bug
+in the tool's own default timeout, on the very first try — exactly the
+"catch it before a caller hits it in production" case this tool exists for.
 """
 
 from __future__ import annotations
@@ -118,6 +156,7 @@ def enumerate_combinations(
     variants: list[str] | None = None,
     fps_modes: list[str] | None = None,
     include_known_unreachable: bool = False,
+    include_unsupported_fps: bool = False,
 ) -> list[tuple[str, str, str, str]]:
     """Every (codec, variant, resolution, fps) combination the profile's
     lookup tables claim is supported, in profile-declaration order (matching
@@ -130,6 +169,12 @@ def enumerate_combinations(
     default (its outcome is already known — see docs/settings.md §16 for
     the ProRes/4K DCI precedent) unless `include_known_unreachable` is set,
     e.g. to re-verify one after a suspected fix.
+
+    An fps whose `fps_int` exceeds a resolution's `max_fps_int` (a real
+    hardware ceiling, not a software gap — see `docs/settings.md`'s 6K
+    fps-ceiling finding) is likewise skipped by default unless
+    `include_unsupported_fps` is set — re-sweeping a known camera limit
+    would just reproduce the same `unsupported` result every time.
     """
     resolution_names = resolutions if resolutions is not None else list(profile.resolutions)
     for name in resolution_names:
@@ -146,6 +191,13 @@ def enumerate_combinations(
     combos: list[tuple[str, str, str, str]] = []
     for resolution_name in resolution_names:
         resolution_spec = profile.require_resolution(resolution_name)
+        allowed_fps_names = fps_names
+        if not include_unsupported_fps and resolution_spec.max_fps_int is not None:
+            allowed_fps_names = [
+                fps_name
+                for fps_name in fps_names
+                if profile.require_fps_mode(fps_name).fps_int <= resolution_spec.max_fps_int
+            ]
         for codec_name in resolution_spec.codecs:
             if codec_filter is not None and codec_name not in codec_filter:
                 continue
@@ -155,7 +207,7 @@ def enumerate_combinations(
             for variant_name in codec_spec.variants:
                 if variant_filter is not None and variant_name not in variant_filter:
                     continue
-                for fps_name in fps_names:
+                for fps_name in allowed_fps_names:
                     combos.append((codec_name, variant_name, resolution_name, fps_name))
     return combos
 
@@ -167,8 +219,10 @@ class ComboResult:
     - "confirmed" — set_camera_format() completed, every step echo-verified
       (or correctly recognized as an already-satisfied no-op).
     - "unsupported" — BMDUnsupportedError: the camera doesn't offer this
-      codec at this resolution, or it's already a known software gap
-      (`known_unreachable`, if swept with --include-known-unreachable).
+      codec at this resolution, this fps exceeds the resolution's hardware
+      `max_fps_int` ceiling (if swept with --include-unsupported-fps), or
+      it's already a known software gap (`known_unreachable`, if swept with
+      --include-known-unreachable).
     - "missing_data" — ValueError: profile data needed to attempt the write
       hasn't been captured yet (usually a missing `dimension_enum`) — not a
       confirmed failure, just an incomplete profile.
@@ -304,6 +358,7 @@ async def run(args: argparse.Namespace) -> int:
         variants=_split(args.variants),
         fps_modes=_split(args.fps),
         include_known_unreachable=args.include_known_unreachable,
+        include_unsupported_fps=args.include_unsupported_fps,
     )
 
     if not combos:
@@ -384,6 +439,16 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--include-unsupported-fps",
+        action="store_true",
+        help=(
+            "Also sweep fps values above a resolution's known max_fps_int hardware ceiling "
+            "(e.g. POCKET_6K_PRO v8.6's 6K topping out at 50, see docs/settings.md). "
+            "Default: excluded, since those are a real camera limit, not a software gap, "
+            "and would just raise BMDUnsupportedError immediately."
+        ),
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Print the combination count and plan, then exit — no connection, no writes.",
@@ -391,8 +456,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--echo-timeout-seconds",
         type=float,
-        default=3.0,
-        help="Per-write echo timeout, passed to CameraSession. Default: 3.0",
+        default=6.0,
+        help=(
+            "Per-write echo timeout, passed to CameraSession. Default: 6.0 — deliberately "
+            "above CameraSession's own 3.0s default; see the module docstring's REAL-HARDWARE "
+            "RESULTS section for the false negative that motivated this."
+        ),
     )
     parser.add_argument(
         "--connect-settle-seconds",

@@ -447,7 +447,7 @@ outcomes:
 | Outcome | Meaning |
 |---|---|
 | `confirmed` | Every step echo-verified (or correctly recognized as an already-satisfied no-op) — the combination genuinely works. |
-| `unsupported` | `BMDUnsupportedError` — the camera doesn't offer this codec at this resolution, or it's already a known software gap. |
+| `unsupported` | `BMDUnsupportedError` — the camera doesn't offer this codec at this resolution, this fps exceeds a resolution's `max_fps_int` hardware ceiling, or it's already a known software gap. |
 | `missing_data` | `ValueError` — profile data needed to attempt the write (usually a `dimension_enum`) hasn't been captured yet; not a confirmed failure, just an incomplete profile. |
 | `unconfirmed` | `BMDVerificationError` — the write was attempted but never confirmed. **This is the outcome that matters**: a genuine candidate for a new `known_unreachable` entry, the same shape of finding the ProRes/4K DCI investigation eventually confirmed by hand. |
 
@@ -476,6 +476,24 @@ out an echo-only confirmation problem), and ideally testing whether the
 exact camera-reported value — not just *a* value — was tried, all before
 anyone edits the profile. Per CLAUDE.md design principle 6 (sniffer-first),
 that review is a human step this tool deliberately does not automate.
+
+**Real-hardware results, first production run (2026-07-24,
+`POCKET_6K_PRO v8.6`, `docs/settings.md` §17):** 448 combinations, one
+session — 431 confirmed, 17 unconfirmed. A follow-up `--include-known-unreachable`
+run (480 combinations) reproduced the identical 17 and correctly classified
+all 32 ProRes/4K DCI combinations as `unsupported` — the `known_unreachable`
+guard worked exactly as designed. The 17 unconfirmed split into two
+findings once checked against the real camera: 16 (`BRAW <every variant>
+6K @ 59.94`/`@ 60`) turned out to be a genuine hardware fps ceiling —
+confirmed absent from the camera's own UI at 6K, not a write bug — now
+modeled as `resolutions.6K.max_fps_int: 50` and excluded from this tool's
+default sweep (`--include-unsupported-fps` overrides this, mirroring
+`--include-known-unreachable`). The 17th (`ProRes HQ HD @ 23.98`) turned out
+to be a false negative in this tool's own default echo timeout (confirmed
+successful on-screen despite reporting `unconfirmed`) — the same
+lens-metadata-burst confound documented in `docs/session_and_verification.md`,
+which is why `--echo-timeout-seconds`'s default was raised from 3.0 to 6.0.
+Full write-up: `docs/settings.md` §17.
 
 ---
 

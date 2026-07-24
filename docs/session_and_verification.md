@@ -250,6 +250,26 @@ unreachable` says what this codebase's write path currently can't do to
 reach it — a combination can be in both `codecs` and `known_unreachable` at
 once, and always is when this check fires.
 
+**A different capability check lives directly in `set_video_format` and
+`set_recording_format` themselves, not just the orchestration method**:
+`resolution_spec.max_fps_int` (added 2026-07-24, see `docs/payload_profiles.md`)
+is a real hardware fps ceiling — `POCKET_6K_PRO v8.6`'s `"6K"` resolution
+tops out at 50, confirmed both by `sweep_camera_format.py`'s first
+production run (all 8 BRAW variants unconfirmed at 59.94/60fps, every other
+fps confirming cleanly) and independently by the operator checking the
+camera's own UI, which doesn't offer those fps values at 6K either. Both
+methods take `(resolution, fps)` directly and can be called without going
+through `set_camera_format` at all, so unlike `known_unreachable` (checked
+only in the orchestration method), this check lives in both — a requested
+fps whose `fps_int` exceeds the resolution's ceiling raises
+`BMDUnsupportedError` immediately, before any write, in either method
+independently. The two checks answer different questions and read
+differently in an error message on purpose: `known_unreachable` says the
+camera supports this but this codebase's writes can't reach it;
+`max_fps_int` says the camera itself doesn't support this combination at
+all — never write into `known_unreachable` something that's actually a
+`max_fps_int` case, or vice versa.
+
 ### Timecode tracking and clip duration
 
 `__aenter__` also subscribes `TIMECODE`, storing the latest decoded reading

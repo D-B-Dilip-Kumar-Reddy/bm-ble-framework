@@ -988,6 +988,66 @@ class TestSetVideoFormat:
         session._controller.write_outgoing_control.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_raises_unsupported_fps_before_writing(self):
+        """resolutions.<name>.max_fps_int is a real hardware ceiling (e.g.
+        POCKET_6K_PRO v8.6's 6K topping out at 50, docs/settings.md) — a
+        different flavor of capability check than known_unreachable, but
+        the same fail-fast-before-any-write contract."""
+        profile = make_settings_profile(
+            resolutions={
+                "4K DCI": {
+                    "width": 4096,
+                    "height": 2160,
+                    "codecs": ["BRAW", "ProRes"],
+                    "dimension_enums": {"BRAW": 8},
+                    "max_fps_int": 24,
+                },
+                "HD": {
+                    "width": 1920,
+                    "height": 1080,
+                    "codecs": ["ProRes"],
+                    "dimension_enums": {"ProRes": 3},
+                },
+            }
+        )
+        session = make_session(profile)
+
+        with pytest.raises(BMDUnsupportedError, match="does not offer '25'.*fps ceiling"):
+            await session.set_video_format("4K DCI", "BRAW", "25")
+
+        session._controller.write_outgoing_control.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_fps_at_the_ceiling_is_allowed(self):
+        """max_fps_int is inclusive — a request exactly at the ceiling
+        proceeds normally, not just requests strictly below it."""
+        profile = make_settings_profile(
+            resolutions={
+                "4K DCI": {
+                    "width": 4096,
+                    "height": 2160,
+                    "codecs": ["BRAW", "ProRes"],
+                    "dimension_enums": {"BRAW": 8},
+                    "max_fps_int": 24,
+                },
+            }
+        )
+        session = make_session(profile)
+
+        async def wait_for(category, parameter, timeout):
+            if (category, parameter) == (0x01, 0x00):
+                return MagicMock(category=0x01, parameter=0x00), bytes([24, 1, 8, 0, 0])
+            return None
+
+        session._router.wait_for = AsyncMock(side_effect=wait_for)
+
+        # fps_int for "23.98" is 24, exactly at the ceiling — must not raise
+        # BMDUnsupportedError.
+        await session.set_video_format("4K DCI", "BRAW", "23.98")
+
+        session._controller.write_outgoing_control.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_raises_before_writing_when_dimension_enum_uncaptured(self):
         session = make_session(make_settings_profile())
 
@@ -1067,6 +1127,53 @@ class TestSetVideoFormat:
 
 
 class TestSetRecordingFormat:
+    @pytest.mark.asyncio
+    async def test_raises_unsupported_fps_before_writing(self):
+        """Same max_fps_int hardware-ceiling check as set_video_format's
+        (docs/settings.md's 6K finding) — recording_format also takes
+        (resolution, fps) directly and can be called independently."""
+        profile = make_settings_profile(
+            resolutions={
+                "4K DCI": {
+                    "width": 4096,
+                    "height": 2160,
+                    "codecs": ["BRAW", "ProRes"],
+                    "dimension_enums": {"BRAW": 8},
+                    "max_fps_int": 24,
+                },
+            }
+        )
+        session = make_session(profile)
+
+        with pytest.raises(BMDUnsupportedError, match="does not offer '25'.*fps ceiling"):
+            await session.set_recording_format("4K DCI", "25")
+
+        session._controller.write_outgoing_control.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_fps_at_the_ceiling_is_allowed(self):
+        profile = make_settings_profile(
+            resolutions={
+                "4K DCI": {
+                    "width": 4096,
+                    "height": 2160,
+                    "codecs": ["BRAW", "ProRes"],
+                    "dimension_enums": {"BRAW": 8},
+                    "max_fps_int": 24,
+                },
+            }
+        )
+        session = make_session(profile)
+        session._router.wait_for.return_value = (
+            MagicMock(),
+            _recording_format_payload(24, 24, 4096, 2160, 19),
+        )
+
+        # fps_int for "23.98" is 24, exactly at the ceiling.
+        await session.set_recording_format("4K DCI", "23.98")
+
+        session._controller.write_outgoing_control.assert_awaited_once()
+
     @pytest.mark.asyncio
     async def test_succeeds_on_matching_echo(self):
         session = make_session(make_settings_profile())

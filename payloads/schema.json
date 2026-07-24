@@ -193,6 +193,12 @@
           "description": "Codec name -> evidence note, for a (codec, resolution) pair the camera demonstrably supports (confirmed reachable through its own body menu) but that this codebase's writes cannot reach over BLE OUTGOING_CONTROL despite exhausting every write-value hypothesis (resolution, fps, data type, operation, codec variant, all confirmed correct) — see docs/settings.md. This is a software capability gap, not a camera capability gap: never remove the codec from `codecs` above for an entry listed here. CameraSession.set_camera_format raises BMDUnsupportedError immediately, before any write, for a (codec, resolution) pair listed here.",
           "patternProperties": { "^_": {} },
           "additionalProperties": { "type": "string" }
+        },
+        "max_fps_int": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 255,
+          "description": "The highest fps_modes.<name>.fps_int this resolution supports at all, on the camera itself — a genuine hardware/sensor-readout ceiling (unlike known_unreachable, which is a software write-path gap for a combination the camera CAN do). Real example: POCKET_6K_PRO v8.6's '6K' resolution tops out at 50 — 59.94/60fps aren't offered by the camera's own UI at 6K for any codec, confirmed operator-side, not just absent from a write's echo (docs/settings.md). Absent means no known ceiling (every fps_modes entry is assumed available). CameraSession.set_video_format/set_recording_format raise BMDUnsupportedError immediately for a fps whose fps_int exceeds this, before any write."
         }
       },
       "patternProperties": { "^_": {} },

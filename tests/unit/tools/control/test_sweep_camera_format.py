@@ -113,6 +113,47 @@ class TestEnumerateCombinations:
         assert combos
         assert all(codec == "BRAW" for codec, _v, _r, _f in combos)
 
+    def test_excludes_fps_above_max_fps_int_by_default(self):
+        # PRO's real "6K" entry has max_fps_int=50 (docs/settings.md) —
+        # 59.94/60 (fps_int=60) must not appear by default.
+        profile = _pro_profile()
+
+        combos = scf.enumerate_combinations(profile, resolutions=["6K"])
+
+        swept_fps = {fps for _c, _v, _r, fps in combos}
+        assert "59.94" not in swept_fps
+        assert "60" not in swept_fps
+        assert "50" in swept_fps
+
+    def test_include_unsupported_fps_includes_it(self):
+        profile = _pro_profile()
+
+        combos = scf.enumerate_combinations(
+            profile, resolutions=["6K"], include_unsupported_fps=True
+        )
+
+        swept_fps = {fps for _c, _v, _r, fps in combos}
+        assert "59.94" in swept_fps
+        assert "60" in swept_fps
+
+    def test_max_fps_int_does_not_affect_resolutions_without_it(self):
+        # "4K DCI" has no max_fps_int in the real PRO profile — every fps
+        # (including 59.94/60) should still be swept there for BRAW.
+        profile = _pro_profile()
+
+        combos = scf.enumerate_combinations(profile, resolutions=["4K DCI"], codecs=["BRAW"])
+
+        swept_fps = {fps for _c, _v, _r, fps in combos}
+        assert "59.94" in swept_fps
+        assert "60" in swept_fps
+
+    def test_explicit_fps_filter_above_ceiling_yields_no_combos(self):
+        profile = _pro_profile()
+
+        combos = scf.enumerate_combinations(profile, resolutions=["6K"], fps_modes=["60"])
+
+        assert combos == []
+
     def test_unknown_resolution_filter_raises(self):
         profile = _g2_profile()
 
