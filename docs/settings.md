@@ -55,7 +55,10 @@ ruling that hypothesis out too. `video_format`'s unexplained trailing elements,
 probed via `--video-format-extra` (§16, 2026-07-24), fared no better — one pair
 confirmed the override mechanism is safe but still landed UHD, three others were
 silently rejected. All three original candidate hypotheses are now exhausted with
-no match; the passive-capture evidence (§16) is the strongest remaining lead. This
+no match. A full-channel decode of the passive-capture evidence (§16, 2026-07-24)
+then found nothing new either — no channel besides `recording_format` itself
+correlates with the transition — leaving `Operation.OFFSET` (never tried, unlike
+`ASSIGN` which every write above used) as the one remaining untested axis. This
 blocks promoting the PRO's settings
 families to `VERIFIED` until the combination is either fixed or explicitly excluded.
 
@@ -1553,3 +1556,43 @@ A closer look at every channel active in that capture window (not just
 whatever the lens-metadata burst and any other category carries — may hold a detail
 none of the three ruled-out write-parameter hypotheses could have found, since none
 of them could ever see past "did a matching report arrive or not."
+
+**Update, 2026-07-24: the full-channel decode found nothing new either.** Every
+notification across all three passive-capture windows (the `prores_uhd_to_4kdci`
+and `prores_hd_to_4kdci` captures referenced in `commands.recording_format`'s
+provenance) was decoded with `protocol/codec.py`'s own `decode_packet` — not just
+the two channels already extracted. Every `(category, parameter)` pair present
+falls into one of three buckets:
+
+- **The transition marker** — `0x01/0x09` (`recording_format`) is the *only*
+  channel whose value changes in step with the transition:
+  `(fps=24, w=1920, h=1080, flags=0)` before → `(fps=24, w=4096, h=2160, flags=0x10)`
+  after. `0x0A/0x00` (`codec_quality`) stays `[2, 0]` (ProRes/HQ) on both sides —
+  confirms the codec didn't change, but doesn't move with the transition either.
+- **Free-running telemetry** — `0x09/0x00` and `0x09/0x02` drift by small amounts
+  every ~1s in every window regardless of any activity (the storage write-margin
+  signal and a sibling counter, both already known ambient noise).
+- **One-time static dump** — everything else (`0x00/0x01`, `0x00/0x02`, `0x00/0x03`,
+  `0x00/0x07`, `0x01/0x02`, `0x01/0x07`, `0x01/0x08`, `0x01/0x0A`, `0x01/0x0B`,
+  `0x01/0x0E`, `0x01/0x0F`, `0x01/0x10`, `0x03/0x00`, `0x03/0x03`, `0x04/0x07`,
+  `0x09/0x01`, `0x09/0x05`–`0x08`, `0x0A/0x01`, `0x0A/0x05`, and the full
+  `0x0C/0x00`–`0x0F` lens-metadata burst) appears once near connect and never
+  changes within any window — camera capability, exposure, and lens info, not
+  resolution-related.
+
+No channel besides `recording_format` itself correlates with the transition. There
+is no hidden field, no extra category, nothing on the visible `INCOMING_CONTROL`
+surface that reveals *how* the camera internally applies the change — from the
+notification side, it's a complete black box. This was the strongest remaining
+lead from the original plan, and it's now exhausted too, the same way the three
+write-parameter hypotheses were.
+
+**One genuinely new, untried axis this leaves.** Every write attempted so far —
+across all three ruled-out hypotheses — used `Operation.ASSIGN` (`0x00`,
+`protocol/codec.py`'s `encode_assign`/`encode_assign_elements`). The packet
+header format documents a second write-capable operation, `OFFSET` (`0x01`,
+see `CLAUDE.md`'s packet structure section), never tried for any settings family
+on either camera. Untested, and it's unknown what OFFSET semantics would even mean
+for a resolution field — but it varies a genuinely different axis than value,
+data-type byte, or trailing elements, all of which are now exhausted. See below
+for the tooling this needs.

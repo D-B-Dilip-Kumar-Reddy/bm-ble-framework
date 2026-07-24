@@ -440,6 +440,15 @@ retry, trailing-elements probe), the passive-capture evidence — the only appro
 that has actually *observed* the camera in the target state, rather than guessing
 write parameters and inferring from silence — is what's left worth pursuing.
 
+That lead was followed all the way through and also came back empty: decoding
+every notification in the passive-capture windows (not just the two channels
+already extracted) found that `recording_format` is the only channel that moves
+with the transition — everything else is either free-running ambient telemetry or
+a one-time connect-burst dump, unrelated to resolution (`docs/settings.md` §16).
+Four candidate hypotheses now, not just three: every write tried so far used
+`Operation.ASSIGN`, leaving `Operation.OFFSET` — a different header byte, not a
+different value — as the one axis nothing has touched yet.
+
 ## Testing
 
 `tests/unit/test_camera_profile.py` covers: every `KNOWN_PROFILES` JSON
