@@ -442,6 +442,26 @@ class TestSettingsSections:
         assert (resolution.width, resolution.height) == (4096, 2160)
         assert resolution.codecs == ("BRAW", "ProRes")
         assert resolution.dimension_enums == {"BRAW": 8}
+        assert resolution.known_unreachable == {}
+
+    def test_resolves_resolution_known_unreachable(self):
+        raw = make_valid_raw_with_settings()
+        raw["resolutions"]["4K DCI"]["known_unreachable"] = {"ProRes": "evidence note"}
+        profile = CameraProfile._from_raw("POCKET_6K_G2", "v7.9", raw)
+
+        resolution = profile.require_resolution("4K DCI")
+        assert resolution.known_unreachable == {"ProRes": "evidence note"}
+
+    def test_known_unreachable_comment_keys_are_skipped(self):
+        raw = make_valid_raw_with_settings()
+        raw["resolutions"]["4K DCI"]["known_unreachable"] = {
+            "ProRes": "evidence note",
+            "_comment": "skip me",
+        }
+        profile = CameraProfile._from_raw("POCKET_6K_G2", "v7.9", raw)
+
+        resolution = profile.require_resolution("4K DCI")
+        assert resolution.known_unreachable == {"ProRes": "evidence note"}
 
     def test_resolves_fps_mode_spec(self):
         profile = CameraProfile._from_raw("POCKET_6K_G2", "v7.9", make_valid_raw_with_settings())
@@ -494,6 +514,19 @@ class TestSettingsSections:
     def test_schema_rejects_resolution_with_unknown_key(self):
         raw = make_valid_raw_with_settings()
         raw["resolutions"]["4K DCI"]["dimension_enum"] = 8  # not the plural key
+
+        with pytest.raises(ValueError, match="schema validation"):
+            validate_profile(raw, source="test.json")
+
+    def test_schema_accepts_resolution_known_unreachable(self):
+        raw = make_valid_raw_with_settings()
+        raw["resolutions"]["4K DCI"]["known_unreachable"] = {"ProRes": "evidence note"}
+
+        validate_profile(raw, source="test.json")
+
+    def test_schema_rejects_known_unreachable_with_non_string_value(self):
+        raw = make_valid_raw_with_settings()
+        raw["resolutions"]["4K DCI"]["known_unreachable"] = {"ProRes": 123}
 
         with pytest.raises(ValueError, match="schema validation"):
             validate_profile(raw, source="test.json")

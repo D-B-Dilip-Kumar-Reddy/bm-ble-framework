@@ -232,6 +232,24 @@ real resolution either way, since that packet encodes raw width/height
 rather than a codec-locked enum. Full design rationale and the real-hardware
 evidence behind the two-step workaround: `docs/settings.md` §9.
 
+**Before any of those three steps run, `set_camera_format` also checks the
+target resolution's `known_unreachable` map** (added 2026-07-24, see
+`docs/payload_profiles.md`): a codec listed there for that resolution is one
+the camera demonstrably supports (confirmed reachable through its own body
+menu) but that every write-value hypothesis this codebase has tried still
+cannot reach over BLE — `POCKET_6K_PRO v8.6`'s ProRes/4K DCI gap
+(`docs/settings.md` §16) is the first and so far only entry. If the
+requested `(codec, resolution)` pair is listed, this raises
+`BMDUnsupportedError` immediately, before connecting to any write path,
+quoting the profile's own evidence note — a fast, clear failure instead of
+burning a full three-step sequence (each with its own echo-timeout wait) on
+a combination already known to fail. This is deliberately a *separate* check
+from `resolution_spec.codecs`'s existing hardware-capability check just
+above it in the method: `codecs` says what the camera can do, `known_
+unreachable` says what this codebase's write path currently can't do to
+reach it — a combination can be in both `codecs` and `known_unreachable` at
+once, and always is when this check fires.
+
 ### Timecode tracking and clip duration
 
 `__aenter__` also subscribes `TIMECODE`, storing the latest decoded reading

@@ -85,7 +85,12 @@ response, still no on-screen change. With resolution, fps, codec, variant, data
 type, and operation now all tried at their confirmed-correct values, **the
 write-value hypothesis space is exhausted** — no confirming echo, and no
 on-screen change, for the ProRes/4K DCI retarget on this camera, no matter what
-combination of correct values has been sent. This
+combination of correct values has been sent. This gap is now **accepted and
+guarded in code** (2026-07-24): `resolutions."4K DCI".known_unreachable.ProRes`
+in the profile records the finding, and `CameraSession.set_camera_format` raises
+`BMDUnsupportedError` immediately for that combination rather than attempting a
+write known to fail (`docs/payload_profiles.md`, `docs/session_and_verification.md`).
+This still
 blocks promoting the PRO's settings
 families to `VERIFIED` until the combination is either fixed or explicitly excluded.
 
@@ -1912,3 +1917,24 @@ capability gap in the BLE control surface for this specific transition — real,
 reachable through the camera's own body menu, but not through anything this
 codebase's writes can do — and document it as such rather than continuing to
 vary write parameters that have now been tried at their known-correct values.
+
+**Accepted, 2026-07-24: this is now a documented, guarded software limitation,
+not an open investigation.** `resolutions."4K DCI".known_unreachable.ProRes` in
+`payloads/models/POCKET_6K_PRO_v8.6.json` records the finding (see
+`docs/payload_profiles.md` for the schema field's design), and
+`CameraSession.set_camera_format` checks it before any write, raising
+`BMDUnsupportedError` immediately for `(ProRes, "4K DCI")` on this profile
+instead of burning a doomed three-step write sequence (see
+`docs/session_and_verification.md`). This is deliberately framed as a *software*
+capability gap, not a camera capability gap — `"ProRes"` stays in this
+resolution's `codecs` list, since the camera genuinely supports the
+combination; `known_unreachable` records only that this codebase's current
+write path can't reach it, so the entry can be deleted the moment a future fix
+is found without touching anything else in the profile.
+
+To reduce the chance of a similar gap going unnoticed for as long as this one
+did on a *different* (codec, resolution, fps) combination, on either camera,
+see `tools/control/sweep_camera_format.py` (`docs/active_camera_control.md`) —
+a systematic tool that runs `CameraSession.set_camera_format()` across every
+combination a profile claims to support and reports which ones actually
+confirm.

@@ -754,9 +754,26 @@ class CameraSession:
              whatever family step 1 selected (confirmed on real hardware,
              docs/settings.md §4.2's third run).
 
-        This method adds no verification of its own beyond what each step
-        already does — a failure at any step raises `BMDVerificationError`
-        or `BMDUnsupportedError` from that step, and later steps don't run.
+        Before any step runs, this method also checks the target resolution's
+        `known_unreachable` map (`ResolutionSpec.known_unreachable`, profile
+        `resolutions.<name>.known_unreachable`) — a codec listed there is one
+        this camera demonstrably supports (confirmed reachable through its
+        own body menu) but that every write-value hypothesis this codebase
+        has tried still cannot reach over BLE (see docs/settings.md, e.g.
+        `POCKET_6K_PRO v8.6`'s ProRes/4K DCI gap, §16). If `codec` is listed
+        there, this raises `BMDUnsupportedError` immediately — before
+        connecting to any write path — rather than burning a full
+        `set_video_format`/`set_codec_quality`/`set_recording_format`
+        sequence (each with its own echo-timeout wait) on a combination
+        already known to fail. This is a software capability gap, not a
+        missing camera capability: it belongs in the profile precisely so
+        it can be removed the moment a fix is found, without touching this
+        method.
+
+        This method adds no other verification of its own beyond what each
+        step already does — a failure at any other step raises
+        `BMDVerificationError` or `BMDUnsupportedError` from that step, and
+        later steps don't run.
 
         Each step routinely lands the *next* step's target as a side
         effect — e.g. step 1's `video_format` write resets the codec
@@ -773,6 +790,13 @@ class CameraSession:
         """
         resolution_spec = self.profile.require_resolution(resolution)
         self.profile.require_codec(codec, variant)
+
+        unreachable_note = resolution_spec.known_unreachable.get(codec)
+        if unreachable_note is not None:
+            raise BMDUnsupportedError(
+                f"{self.profile.model_key} {self.profile.firmware}: ({codec}, {resolution}) "
+                f"is a known-unreachable combination over BLE — {unreachable_note}"
+            )
 
         if codec in resolution_spec.dimension_enums:
             format_resolution = resolution

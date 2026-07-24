@@ -187,6 +187,12 @@
           "description": "Codec name -> video_format dimension_enum byte. The enum encodes resolution AND codec family together, so it is keyed per codec.",
           "patternProperties": { "^_": {} },
           "additionalProperties": { "$ref": "#/$defs/byte" }
+        },
+        "known_unreachable": {
+          "type": "object",
+          "description": "Codec name -> evidence note, for a (codec, resolution) pair the camera demonstrably supports (confirmed reachable through its own body menu) but that this codebase's writes cannot reach over BLE OUTGOING_CONTROL despite exhausting every write-value hypothesis (resolution, fps, data type, operation, codec variant, all confirmed correct) — see docs/settings.md. This is a software capability gap, not a camera capability gap: never remove the codec from `codecs` above for an entry listed here. CameraSession.set_camera_format raises BMDUnsupportedError immediately, before any write, for a (codec, resolution) pair listed here.",
+          "patternProperties": { "^_": {} },
+          "additionalProperties": { "type": "string" }
         }
       },
       "patternProperties": { "^_": {} },

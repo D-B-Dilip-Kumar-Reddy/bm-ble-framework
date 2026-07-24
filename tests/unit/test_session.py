@@ -14,7 +14,7 @@ import pytest
 
 import bmd_ble.session as session_module
 from bmd_ble.camera_profile import CameraProfile
-from bmd_ble.exceptions import BMDVerificationError
+from bmd_ble.exceptions import BMDUnsupportedError, BMDVerificationError
 from bmd_ble.protocol.codec import CommandHeader, Operation, encode_packet
 from bmd_ble.protocol.types import DataType
 from bmd_ble.session import CameraSession
@@ -1283,3 +1283,83 @@ class TestSetCameraFormat:
             await session.set_camera_format("BRAW", "12:1", "4K DCI", "25")
 
         session.set_video_format.assert_not_awaited()
+
+
+class TestSetCameraFormatKnownUnreachable:
+    """A profile's resolutions.<name>.known_unreachable map (populated only
+    after real-hardware evidence exhausts every write-value hypothesis, e.g.
+    POCKET_6K_PRO v8.6's ProRes/4K DCI gap, docs/settings.md §16) must stop
+    set_camera_format before any write — not surface as a confusing
+    BMDVerificationError after burning a full echo-timeout sequence."""
+
+    @staticmethod
+    def _profile_with_known_unreachable() -> CameraProfile:
+        return make_settings_profile(
+            resolutions={
+                "4K DCI": {
+                    "width": 4096,
+                    "height": 2160,
+                    "codecs": ["BRAW", "ProRes"],
+                    "dimension_enums": {"BRAW": 8},
+                    "known_unreachable": {"ProRes": "evidence note for the test"},
+                },
+                "HD": {
+                    "width": 1920,
+                    "height": 1080,
+                    "codecs": ["ProRes"],
+                    "dimension_enums": {"ProRes": 3},
+                },
+            }
+        )
+
+    @pytest.mark.asyncio
+    async def test_raises_bmdunsupported_before_any_write(self):
+        session = make_session(self._profile_with_known_unreachable())
+        session.set_video_format = AsyncMock()
+        session.set_codec_quality = AsyncMock()
+        session.set_recording_format = AsyncMock()
+
+        with pytest.raises(BMDUnsupportedError, match="known-unreachable"):
+            await session.set_camera_format("ProRes", "HQ", "4K DCI", "25")
+
+        session.set_video_format.assert_not_awaited()
+        session.set_codec_quality.assert_not_awaited()
+        session.set_recording_format.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_error_message_includes_the_profile_evidence_note(self):
+        session = make_session(self._profile_with_known_unreachable())
+        session.set_video_format = AsyncMock()
+        session.set_codec_quality = AsyncMock()
+        session.set_recording_format = AsyncMock()
+
+        with pytest.raises(BMDUnsupportedError, match="evidence note for the test"):
+            await session.set_camera_format("ProRes", "HQ", "4K DCI", "25")
+
+    @pytest.mark.asyncio
+    async def test_unaffected_codec_at_the_same_resolution_proceeds_normally(self):
+        session = make_session(self._profile_with_known_unreachable())
+        session.set_video_format = AsyncMock()
+        session.set_codec_quality = AsyncMock()
+        session.set_recording_format = AsyncMock()
+
+        # BRAW isn't in known_unreachable for "4K DCI" — only ProRes is.
+        await session.set_camera_format("BRAW", "5:1", "4K DCI", "25")
+
+        session.set_video_format.assert_awaited_once_with("4K DCI", "BRAW", "25")
+        session.set_codec_quality.assert_awaited_once_with("BRAW", "5:1")
+        session.set_recording_format.assert_awaited_once_with("4K DCI", "25")
+
+    @pytest.mark.asyncio
+    async def test_same_codec_at_an_unaffected_resolution_proceeds_normally(self):
+        session = make_session(self._profile_with_known_unreachable())
+        session.set_video_format = AsyncMock()
+        session.set_codec_quality = AsyncMock()
+        session.set_recording_format = AsyncMock()
+
+        # ProRes is known_unreachable at "4K DCI" only, not at "HD".
+        await session.set_camera_format("ProRes", "HQ", "HD", "25")
+
+        session.set_video_format.assert_awaited_once_with("HD", "ProRes", "25")
+        session.set_codec_quality.assert_awaited_once_with("ProRes", "HQ")
+        session.set_recording_format.assert_awaited_once_with("HD", "25")

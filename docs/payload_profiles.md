@@ -310,6 +310,62 @@ this shape — see `docs/command_discovery.md`).
 
 ---
 
+## `resolutions.<name>.known_unreachable`: a software gap, not a camera gap
+
+Added 2026-07-24 after `POCKET_6K_PRO v8.6`'s ProRes/4K DCI investigation
+(`docs/settings.md` §16) reached a genuinely exhausted conclusion: the
+camera demonstrably supports the combination (confirmed reachable through
+its own body menu, and confirmed to genuinely hold and report that state
+once reached), but no BLE write this codebase can construct reaches it —
+every write-value hypothesis (resolution, fps, codec variant, data type,
+operation) was tried at its confirmed-correct value, with the precondition
+independently confirmed by wire echo, and none of it lands, not even
+on-screen.
+
+That is a different kind of fact than anything else in a profile.
+`dimension_enums` missing an entry means "supported, not yet captured" —
+optimistic, waiting on more sniffing. `known_unreachable` means "tried
+everything, still doesn't work" — a settled, evidence-backed conclusion
+that a `(codec, resolution)` pair the camera itself supports is currently
+unreachable through this codebase's write path specifically. Keeping the
+codec in `codecs` (never remove it) records what the camera can do;
+`known_unreachable` separately records what this codebase currently can't
+do to reach it — the schema's own description says as much, in case a
+future editor is tempted to "simplify" by dropping the codec from `codecs`
+instead.
+
+```json
+"resolutions": {
+  "4K DCI": {
+    "width": 4096,
+    "height": 2160,
+    "codecs": ["BRAW", "ProRes"],
+    "dimension_enums": { "BRAW": 8 },
+    "known_unreachable": {
+      "ProRes": "Accepted capability gap, 2026-07-24 (see docs/settings.md §16) ..."
+    }
+  }
+}
+```
+
+`ResolutionSpec.known_unreachable` (`dict[str, str]`, codec name -> evidence
+note, defaulting to `{}`) is checked by `CameraSession.set_camera_format`
+before any write: if the requested `codec` is listed for the target
+`resolution`, it raises `BMDUnsupportedError` immediately, quoting the
+profile's own note, instead of burning a full three-step write sequence
+(each with its own echo-timeout wait) on a combination already known to
+fail — a second flavor of design principle 7's "explicit capability model,"
+alongside `resolution_spec.codecs`'s existing hardware-capability check.
+This is intentionally *not* auto-populated by any tool: unlike
+`dimension_enums`, which a sweep can discover mechanically, entering
+something into `known_unreachable` means a real investigation was
+exhausted, not just that one sweep came back empty — see
+`tools/control/sweep_camera_format.py`'s own docs (`docs/active_camera_control.md`)
+for the systematic tool that surfaces *candidates* for this field; a human
+still reviews the evidence before writing the field itself.
+
+---
+
 ## Adding a new command block
 
 1. Capture the command on the target camera/firmware

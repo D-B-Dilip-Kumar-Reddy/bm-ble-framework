@@ -136,7 +136,11 @@ class ResolutionSpec:
     dimension_enum byte (the enum encodes resolution AND codec family
     together). A codec present in ``codecs`` but absent from
     ``dimension_enums`` is supported by the camera but its enum has not
-    been captured yet.
+    been captured yet. ``known_unreachable`` maps a codec name to an
+    evidence note for a combination the camera itself can reach (confirmed
+    through its own body menu) but that this codebase's writes cannot reach
+    over BLE despite exhausting every write-value hypothesis — a software
+    gap, not a camera capability gap (see docs/settings.md).
     """
 
     name: str
@@ -144,6 +148,7 @@ class ResolutionSpec:
     height: int
     codecs: tuple[str, ...] = ()
     dimension_enums: dict[str, int] = field(default_factory=dict)
+    known_unreachable: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -466,6 +471,11 @@ class CameraProfile:
                 dimension_enums={
                     key: value
                     for key, value in block.get("dimension_enums", {}).items()
+                    if not key.startswith("_")
+                },
+                known_unreachable={
+                    key: value
+                    for key, value in block.get("known_unreachable", {}).items()
                     if not key.startswith("_")
                 },
             )
