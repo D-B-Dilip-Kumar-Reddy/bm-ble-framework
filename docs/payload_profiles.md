@@ -460,6 +460,22 @@ which is the *delta* from the current state, not the target's own absolute
 value. Worth checking a flag's official semantics before assuming a
 value-preserving override composes cleanly with it.
 
+That distinction turned out to matter for reading the result correctly, not just
+for designing the test: the absolute-payload `OFFSET` attempt came back silent,
+but was rightly treated as inconclusive on `OFFSET` itself, since the payload it
+sent was almost certainly out of range (`current + 4096`) regardless of whether
+`OFFSET` works at all. `tools/control/send_settings_command.py --raw-payload`
+(`docs/settings.md` §16) then made the genuine delta payload sendable, and it
+came back silent too — but this time the payload was in-range by construction
+(a `+256` width delta from `3840` lands exactly on `4096`), so the "invalid
+value" excuse that covered the first silence doesn't cover the second. Two
+silent results are not automatically equal evidence: whether a negative result
+actually rules a hypothesis out depends on whether the input that produced it
+was a fair test of that hypothesis, not just on whether a response arrived. The
+weaker result (absolute payload) motivated building a stronger test rather than
+being trusted as the final word — worth doing whenever a "no response" result
+still has an unexamined alternate explanation available.
+
 ## Testing
 
 `tests/unit/test_camera_profile.py` covers: every `KNOWN_PROFILES` JSON
