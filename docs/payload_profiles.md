@@ -476,6 +476,24 @@ weaker result (absolute payload) motivated building a stronger test rather than
 being trusted as the final word — worth doing whenever a "no response" result
 still has an unexamined alternate explanation available.
 
+Even the in-range delta silence still left one alternate explanation open: maybe
+`OFFSET` works fine in general and it's specifically `recording_format`'s
+category/parameter that refuses it — a plausible reading given how many other
+`recording_format`-specific hypotheses had already failed in this same
+investigation. The fix was to hold the intervention (`Operation.OFFSET`) fixed
+and change the *target* to a family with independently well-characterized
+`ASSIGN` behavior — `codec_quality`, already known to echo reliably on a genuine
+change and stay silent only on an exact no-op (§11) — and send it a delta that
+was deliberately not a no-op (`+1`, not `+0`). Silence there too closed off the
+"just this one write" explanation, leaving the more general one standing:
+`OFFSET` isn't acted on by this camera's firmware at all, not merely refused for
+one parameter. The general shape of this move — when a negative result has two
+live explanations ("this specific target rejects it" vs. "the mechanism itself
+doesn't work"), hold the mechanism fixed and swap in a target whose baseline
+behavior is already known, rather than trying to reason your way to which
+explanation is more likely — is worth reaching for whenever a `docs/settings.md`
+investigation hits a silence that could mean more than one thing.
+
 ## Testing
 
 `tests/unit/test_camera_profile.py` covers: every `KNOWN_PROFILES` JSON
