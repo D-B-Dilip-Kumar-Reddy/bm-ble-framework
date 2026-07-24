@@ -235,6 +235,13 @@ As with the other probe flags, watch for a matching `recording_format`/
 `codec_quality` report rather than the on-screen display, and use a generous
 `--listen-seconds` given this camera's documented lens-burst timing confound.
 
+**Update, 2026-07-24:** tried against `(UHD, ProRes, 25fps)` with four `(extra1,
+extra2)` pairs. `(1, 0)` confirmed 2/2 — safe, but still landed UHD, not 4K DCI.
+`(2, 0)`, `(0, 1)`, and `(1, 1)` were each silently rejected over a full 10s window
+— the same signature the `dimension_enum` sweep's invalid candidates showed, not
+`recording_format`'s "accepted but unconfirmed" one. No support for this hypothesis
+either; see `docs/settings.md` §16 for the full write-up and what's left to try.
+
 ---
 
 ## `tools/control/sweep_dimension_enum.py`

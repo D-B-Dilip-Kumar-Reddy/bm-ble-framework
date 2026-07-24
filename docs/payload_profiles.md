@@ -429,6 +429,17 @@ across the full window, actually ruled the hypothesis out. A short window's sile
 and a long window's silence are not the same evidence on this camera — don't treat
 them as interchangeable when deciding whether a hypothesis is dead.
 
+The trailing-elements hypothesis (`--video-format-extra`, `docs/settings.md` §16)
+came back with the same negative verdict once actually tried: one pair proved the
+override mechanism safe (still landed the requested resolution, not a new one),
+three others were silently rejected — the same "invalid candidate" signature the
+`dimension_enum` sweep already established, distinct from `recording_format`'s
+"accepted but unconfirmed" signature. With all three original candidate hypotheses
+for the PRO's ProRes/4K DCI gap now exhausted (dimension_enum sweep, data_type
+retry, trailing-elements probe), the passive-capture evidence — the only approach
+that has actually *observed* the camera in the target state, rather than guessing
+write parameters and inferring from silence — is what's left worth pursuing.
+
 ## Testing
 
 `tests/unit/test_camera_profile.py` covers: every `KNOWN_PROFILES` JSON

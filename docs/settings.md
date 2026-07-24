@@ -51,9 +51,12 @@ DCI — the same negative result the G2's own exhaustive search got, weakening t
 `dimension_enum` guessing is now a weaker lead than the alternatives (see §16). A
 follow-up retry of `recording_format`'s retarget write with data-type byte `0x02`
 instead of `0x82` (§16, 2026-07-23/24) also came back empty over a full 8s window —
-ruling that hypothesis out too. Only `video_format`'s unexplained trailing elements
-remain untried from the original candidate list, and `--video-format-extra` (§16,
-2026-07-24) now makes that testable. This blocks promoting the PRO's settings
+ruling that hypothesis out too. `video_format`'s unexplained trailing elements,
+probed via `--video-format-extra` (§16, 2026-07-24), fared no better — one pair
+confirmed the override mechanism is safe but still landed UHD, three others were
+silently rejected. All three original candidate hypotheses are now exhausted with
+no match; the passive-capture evidence (§16) is the strongest remaining lead. This
+blocks promoting the PRO's settings
 families to `VERIFIED` until the combination is either fixed or explicitly excluded.
 
 ## Provenance and evidence status
@@ -1517,3 +1520,36 @@ result. As with the other probe flags, watch for a matching `recording_format`/
 §15), and start with a longer `--listen-seconds` (8+) given the lens-burst timing
 confound has produced a false negative on this exact camera before (this section,
 above).
+
+**Update, same day: probed on real hardware — no support for the hypothesis so
+far.** Four `(extra1, extra2)` pairs were tried, all against `(UHD, ProRes, 25fps,
+dimension_enum=6)` with `--listen-seconds 10`:
+
+| `(extra1, extra2)` | Result |
+|---|---|
+| `(1, 0)` | **Confirmed 2/2** — fresh `0x01/0x09` report, `width=3840` (UHD, exactly as requested), `codec_quality` unchanged (ProRes) both times |
+| `(2, 0)` | Zero response over the full 10s window |
+| `(0, 1)` | Zero response over the full 10s window |
+| `(1, 1)` | Zero response over the full 10s window |
+
+`(1, 0)` proves the override mechanism itself is safe — the camera accepts it and
+applies the *requested* enum's resolution exactly, no corruption or redirection —
+but it still landed UHD, not 4K DCI. The other three produced the same "silently
+rejected" signature already established for out-of-range `dimension_enum`
+candidates during the exhaustive sweep (§16 above) — not `recording_format`'s
+"accepted but unconfirmed" signature. That distinction matters: it suggests these
+three specific values are invalid to the camera outright (perhaps `extra1`/`extra2`
+only tolerate `0` or `1`, or only in certain combinations), not that they're
+quietly doing something interesting the tool can't see.
+
+**Consequence: this hypothesis has no supporting evidence either**, on top of the
+`dimension_enum` sweep and the `data_type` retry both coming back empty. All three
+candidates from the original ranked list (§16 above) have now been tried on real
+hardware with no match. The strongest remaining lead is no longer "guess another
+write parameter" — it's the passive-capture evidence from earlier in this section:
+the only approach that has actually *observed* the camera in the target state.
+A closer look at every channel active in that capture window (not just
+`recording_format`/`codec_quality`, the only two decoded so far) — including
+whatever the lens-metadata burst and any other category carries — may hold a detail
+none of the three ruled-out write-parameter hypotheses could have found, since none
+of them could ever see past "did a matching report arrive or not."
