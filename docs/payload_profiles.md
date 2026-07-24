@@ -449,6 +449,17 @@ Four candidate hypotheses now, not just three: every write tried so far used
 `Operation.ASSIGN`, leaving `Operation.OFFSET` — a different header byte, not a
 different value — as the one axis nothing has touched yet.
 
+`tools/control/send_settings_command.py --operation` (`docs/settings.md` §16)
+now makes that axis testable, but it surfaced a subtlety worth remembering for
+any future OFFSET-vs-ASSIGN experiment: `docs/protocol.md` §4 documents
+OFFSET's official meaning as "add the payload to the current value," not
+"assign it" — so reusing an existing write's absolute payload with
+`--operation OFFSET` tests something different from what the underlying
+hypothesis (can this specific target state be reached at all) actually needs,
+which is the *delta* from the current state, not the target's own absolute
+value. Worth checking a flag's official semantics before assuming a
+value-preserving override composes cleanly with it.
+
 ## Testing
 
 `tests/unit/test_camera_profile.py` covers: every `KNOWN_PROFILES` JSON

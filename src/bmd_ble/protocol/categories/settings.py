@@ -44,7 +44,13 @@ from __future__ import annotations
 import struct
 from dataclasses import dataclass
 
-from ..codec import RESERVED_BYTE, CommandHeader, encode_assign_elements, header_matches
+from ..codec import (
+    RESERVED_BYTE,
+    CommandHeader,
+    Operation,
+    encode_assign_elements,
+    header_matches,
+)
 from ..types import DATA_TYPE_BYTE_WIDTHS, DATA_TYPE_STRUCT_FORMATS, DataType
 
 # Element counts for the two five-element families. These are part of the
@@ -84,13 +90,17 @@ def encode_codec_quality(
     codec_id: int,
     variant_id: int,
     reserved: int = RESERVED_BYTE,
+    operation: Operation = Operation.ASSIGN,
 ) -> bytes:
     """Encode a codec/quality command packet (``[codec_id, variant_id]``).
 
     All arguments must come from a ``CameraProfile`` (``commands.codec_quality``
     block plus the ``codecs`` lookup table) — never invented. Note this
     family has been observed NOT to switch the codec family on real
-    hardware — see the module docstring.
+    hardware — see the module docstring. ``operation`` defaults to
+    ``Operation.ASSIGN``, matching every write sent so far; overridable for
+    discovery-grade probing (see ``tools/control/send_settings_command.py
+    --operation``, docs/settings.md §16).
     """
     return encode_assign_elements(
         category=category,
@@ -98,6 +108,7 @@ def encode_codec_quality(
         data_type=data_type,
         values=[codec_id, variant_id],
         reserved=reserved,
+        operation=operation,
     )
 
 
@@ -112,6 +123,7 @@ def encode_video_format(
     reserved: int = RESERVED_BYTE,
     extra1: int = 0,
     extra2: int = 0,
+    operation: Operation = Operation.ASSIGN,
 ) -> bytes:
     """Encode a video-format (FORMAT) command packet.
 
@@ -125,7 +137,8 @@ def encode_video_format(
     the default yet. ``dimension_enum`` locks resolution and codec family
     together; all other values come from ``CameraProfile``
     (``commands.video_format`` plus the ``resolutions``/``fps_modes``
-    tables).
+    tables). ``operation`` defaults to ``Operation.ASSIGN``; overridable for
+    the same discovery-grade reason (``--operation``, docs/settings.md §16).
     """
     return encode_assign_elements(
         category=category,
@@ -133,6 +146,7 @@ def encode_video_format(
         data_type=data_type,
         values=[fps_int, m_rate, dimension_enum, extra1, extra2],
         reserved=reserved,
+        operation=operation,
     )
 
 
@@ -147,12 +161,16 @@ def encode_recording_format(
     height: int,
     frame_flags: int,
     reserved: int = RESERVED_BYTE,
+    operation: Operation = Operation.ASSIGN,
 ) -> bytes:
     """Encode a recording-format command packet (five little-endian int16s).
 
     Payload is ``[fps_int, sensor_fps_int, width, height, frame_flags]``.
     All values come from ``CameraProfile`` (``commands.recording_format``
-    plus the ``resolutions``/``fps_modes`` tables).
+    plus the ``resolutions``/``fps_modes`` tables). ``operation`` defaults
+    to ``Operation.ASSIGN``, matching every write sent so far; overridable
+    for discovery-grade probing (see ``tools/control/send_settings_command.py
+    --operation``, docs/settings.md §16).
     """
     return encode_assign_elements(
         category=category,
@@ -160,6 +178,7 @@ def encode_recording_format(
         data_type=data_type,
         values=[fps_int, sensor_fps_int, width, height, frame_flags],
         reserved=reserved,
+        operation=operation,
     )
 
 

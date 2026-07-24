@@ -68,20 +68,26 @@ surfaced as-is on `CommandHeader.reserved` in case real hardware ever sends a
 non-zero value, which would otherwise be silently discarded.
 
 `encode_assign(*, category, parameter, data_type, value, reserved=RESERVED_BYTE,
-command_id=0x00)` builds a complete ASSIGN-operation command packet (header +
-little-endian payload) for any category/parameter — the codec now owns
-generic assign-packet building, still with zero category *semantics*: every
-value is caller-supplied, from a `CameraProfile` command block or from
+command_id=0x00, operation=Operation.ASSIGN)` builds a complete command packet
+(header + little-endian payload) for any category/parameter — the codec now
+owns generic assign-packet building, still with zero category *semantics*:
+every value is caller-supplied, from a `CameraProfile` command block or from
 `tools/control/discover_command.py`'s candidate sweep.
-`protocol/categories/recording.py`'s encoder delegates to it.
+`protocol/categories/recording.py`'s encoder delegates to it. Despite the
+function's name, `operation` (added 2026-07-24) defaults to but is not
+locked to `Operation.ASSIGN` — every caller in this codebase still passes
+only the default, but `tools/control/send_settings_command.py --operation`
+uses the override to probe `Operation.OFFSET`, never tried for any settings
+family (see `docs/settings.md` §16).
 
 `encode_assign_elements(*, category, parameter, data_type, values,
-reserved=RESERVED_BYTE, command_id=0x00)` is its multi-element sibling for
-parameters whose payload is a fixed sequence of same-typed values (a
-codec/variant id pair, the five-int16 recording-format struct, ...): each
-element is packed at the data type's per-element width, little-endian, in
-the order given. Same zero-semantics stance; consumed by
-`protocol/categories/settings.py` (see `docs/settings.md`).
+reserved=RESERVED_BYTE, command_id=0x00, operation=Operation.ASSIGN)` is its
+multi-element sibling for parameters whose payload is a fixed sequence of
+same-typed values (a codec/variant id pair, the five-int16 recording-format
+struct, ...): each element is packed at the data type's per-element width,
+little-endian, in the order given. Same zero-semantics stance and the same
+overridable `operation`; consumed by `protocol/categories/settings.py` (see
+`docs/settings.md`).
 
 ### `Operation`
 
@@ -100,6 +106,17 @@ showed every camera-originated `INCOMING_CONTROL` notification using this
 value — never seen on a controller-issued `ASSIGN` command. Its exact
 official spec meaning is unconfirmed; the name reflects what's been directly
 observed (see `docs/recording.md`, "The echo has been observed").
+
+`OFFSET` has never been sent by this codebase — every write, on every
+category/parameter, on both cameras, has used `ASSIGN`. `encode_assign`/
+`encode_assign_elements` gained an overridable `operation` parameter
+(2026-07-24, default `Operation.ASSIGN`, every existing caller unaffected)
+specifically to make `OFFSET` testable as a discovery-grade probe — see
+`tools/control/send_settings_command.py --operation` and `docs/settings.md`
+§16 for the reverse-engineering case that motivated it (a settings retarget
+that never confirms under `ASSIGN`, with every value-level hypothesis
+already exhausted). `OFFSET`'s semantics for any category/parameter remain
+unconfirmed.
 
 ---
 

@@ -146,6 +146,44 @@ The override is recorded in the send's label (and so in the saved capture
 JSON), e.g. `extra=(1,0) override; profile default (0,0)`, matching how
 `--data-type`'s override is recorded.
 
+UPDATE (2026-07-24): real-hardware evidence found no support for this
+hypothesis either. Four `(extra1, extra2)` pairs tried against
+`(UHD, ProRes, 25fps)`: `(1, 0)` confirmed 2/2 but still landed UHD, not
+4K DCI; `(2, 0)`, `(0, 1)`, and `(1, 1)` were each silently rejected — the
+same signature invalid `dimension_enum` candidates showed, not
+`recording_format`'s "accepted but unconfirmed" one (see docs/settings.md
+§16). All three original candidate hypotheses (dimension_enum sweep,
+data_type retry, trailing elements) are now exhausted; a full-channel
+decode of the passive-capture evidence found no hidden correlate either.
+See OPERATION OVERRIDE below for what's left to try.
+
+OPERATION OVERRIDE (`--operation`, added 2026-07-24, see docs/settings.md
+§16): every write attempted so far — across all three exhausted
+hypotheses above — used `Operation.ASSIGN` (packet header byte 7 = `0x00`,
+`protocol/codec.py`). The header format documents a second write-capable
+operation, `OFFSET` (`0x01`), never tried for any settings family on
+either camera; its semantics for a resolution/format field are unknown.
+`--operation NAME` (any `Operation` member name, e.g. `OFFSET`) overrides
+`build_command()`'s operation byte for whichever `--packet` is selected —
+generic across all three families, like the other override flags. Default:
+unset, uses `Operation.ASSIGN` unchanged, so every existing invocation
+stays byte-for-byte identical to before this flag existed. This is a
+different axis than any hypothesis tried before it: those all varied a
+*value* within an ASSIGN write; this varies the *operation* itself:
+
+    # The one axis nothing has touched yet: does the PRO accept an OFFSET
+    # write where ASSIGN never confirms?
+    python tools/control/send_settings_command.py \\
+        --model-key POCKET_6K_PRO --firmware v8.6 \\
+        --packet recording_format --resolution "4K DCI" --fps 25 \\
+        --operation OFFSET
+
+Not yet tried on real hardware. As with the other probe flags, the
+override is recorded in the send's label
+(`operation=OFFSET(0x01 override; profile default ASSIGN/0x00)`), and a
+generous `--listen-seconds` matters here too given this camera's
+documented lens-burst timing confound.
+
 Usage:
     python tools/control/send_settings_command.py --model-key POCKET_6K_G2 --firmware v7.9 \\
         --packet recording_format --resolution "4K DCI" --fps 25
@@ -173,6 +211,7 @@ from bmd_ble.protocol.categories.settings import (  # noqa: E402
     encode_recording_format,
     encode_video_format,
 )
+from bmd_ble.protocol.codec import Operation  # noqa: E402
 from bmd_ble.protocol.types import DataType  # noqa: E402
 from bmd_ble.scanner import scan_for_camera  # noqa: E402
 
@@ -235,6 +274,28 @@ def _video_format_extra_suffix(extra1: int, extra2: int, args: argparse.Namespac
     return f" extra=({extra1},{extra2}) override; profile default (0,0)"
 
 
+def resolve_operation(args: argparse.Namespace) -> Operation:
+    """The operation byte to encode with: `--operation` if given (an explicit
+    escape-hatch override — see the module docstring's OPERATION OVERRIDE
+    section), else `Operation.ASSIGN`, matching every write this codebase has
+    ever sent, across all three packet families and every invocation of this
+    tool before this flag existed."""
+    if args.operation is not None:
+        return Operation[args.operation]
+    return Operation.ASSIGN
+
+
+def _operation_override_suffix(resolved: Operation, args: argparse.Namespace) -> str:
+    """Label suffix noting an `--operation` override — empty string when
+    unused, so the label is byte-for-byte unchanged from before this flag
+    existed. Mirrors the other override suffixes' evidence-visibility role."""
+    if args.operation is None:
+        return ""
+    return (
+        f" operation={resolved.name}(0x{int(resolved):02X} override; profile default ASSIGN/0x00)"
+    )
+
+
 def build_command(profile: CameraProfile, args: argparse.Namespace) -> tuple[str, bytes]:
     """Build (label, command_bytes) for the requested packet family, entirely
     from the profile — raises (via require_*) when the profile lacks the
@@ -244,8 +305,10 @@ def build_command(profile: CameraProfile, args: argparse.Namespace) -> tuple[str
         spec = profile.require_command("codec_quality")
         codec = profile.require_codec(args.codec, args.variant)
         resolved_data_type = resolve_data_type(spec, args)
+        resolved_operation = resolve_operation(args)
         label = f"codec_quality {args.codec} {args.variant}"
         label += _data_type_override_suffix(resolved_data_type, spec, args)
+        label += _operation_override_suffix(resolved_operation, args)
         return label, encode_codec_quality(
             category=spec.category,
             parameter=spec.parameter,
@@ -253,12 +316,14 @@ def build_command(profile: CameraProfile, args: argparse.Namespace) -> tuple[str
             codec_id=codec.id,
             variant_id=codec.variants[args.variant],
             reserved=spec.reserved,
+            operation=resolved_operation,
         )
 
     if args.packet == "video_format":
         _require_flags(args, ("fps",))
         spec = profile.require_command("video_format")
         resolved_data_type = resolve_data_type(spec, args)
+        resolved_operation = resolve_operation(args)
         fps = profile.require_fps_mode(args.fps)
         if args.dimension_enum is not None:
             # Probe mode: send a candidate enum that is NOT in the profile
@@ -285,6 +350,7 @@ def build_command(profile: CameraProfile, args: argparse.Namespace) -> tuple[str
         extra1, extra2 = resolve_video_format_extra(args)
         label += _data_type_override_suffix(resolved_data_type, spec, args)
         label += _video_format_extra_suffix(extra1, extra2, args)
+        label += _operation_override_suffix(resolved_operation, args)
         return label, encode_video_format(
             category=spec.category,
             parameter=spec.parameter,
@@ -295,16 +361,19 @@ def build_command(profile: CameraProfile, args: argparse.Namespace) -> tuple[str
             reserved=spec.reserved,
             extra1=extra1,
             extra2=extra2,
+            operation=resolved_operation,
         )
 
     _require_flags(args, ("resolution", "fps"))
     spec = profile.require_command("recording_format")
     resolved_data_type = resolve_data_type(spec, args)
+    resolved_operation = resolve_operation(args)
     resolution = profile.require_resolution(args.resolution)
     fps = profile.require_fps_mode(args.fps)
     sensor = profile.require_fps_mode(args.sensor_fps) if args.sensor_fps else fps
     label = f"recording_format {args.resolution} {args.fps}"
     label += _data_type_override_suffix(resolved_data_type, spec, args)
+    label += _operation_override_suffix(resolved_operation, args)
     return label, encode_recording_format(
         category=spec.category,
         parameter=spec.parameter,
@@ -315,6 +384,7 @@ def build_command(profile: CameraProfile, args: argparse.Namespace) -> tuple[str
         height=resolution.height,
         frame_flags=fps.frame_flags,
         reserved=spec.reserved,
+        operation=resolved_operation,
     )
 
 
@@ -450,6 +520,20 @@ def parse_args() -> argparse.Namespace:
             "discrepancy (see the module docstring's DATA_TYPE OVERRIDE section, "
             "docs/settings.md §3/§4/§16), e.g. --data-type INT16 to try 0x02 instead "
             "of the claimed write byte 0x82. Default: unset, profile's value unchanged."
+        ),
+    )
+    parser.add_argument(
+        "--operation",
+        choices=[o.name for o in Operation],
+        default=None,
+        help=(
+            "Override the wire operation byte (header byte 7) for this send instead of "
+            "using Operation.ASSIGN — generic across all three --packet families. "
+            "Discovery-grade: every write this codebase has ever sent used ASSIGN "
+            "(0x00); the header format documents OFFSET (0x01) as the other "
+            "write-capable operation, never tried (see the module docstring's "
+            "OPERATION OVERRIDE section, docs/settings.md §16), e.g. --operation OFFSET. "
+            "Default: unset, ASSIGN unchanged."
         ),
     )
     parser.add_argument(

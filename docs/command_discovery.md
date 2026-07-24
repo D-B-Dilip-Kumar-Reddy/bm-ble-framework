@@ -155,12 +155,18 @@ no equivalent flag — a discovery sweep's candidates are, by construction,
 rarely repeats of the same value, so the redundant-write question doesn't
 arise here the way it does when replaying one known command twice.
 `send_settings_command.py` also gained a `--data-type NAME` override
-(2026-07-23, `docs/settings.md` §3/§16, later ruled out on real hardware)
-and a `--video-format-extra E1 E2` override (2026-07-24, `docs/settings.md`
-§16) for probing `video_format`'s unexplained trailing payload elements —
-both unrelated discovery axes (wire byte, extra payload elements — not
-command bytes), noted here only because the hook that requires touching
-this file on any `tools/control/*` change applies to them too.
+(2026-07-23, `docs/settings.md` §3/§16, later ruled out on real hardware),
+a `--video-format-extra E1 E2` override (2026-07-24, `docs/settings.md`
+§16, also ruled out) for probing `video_format`'s unexplained trailing
+payload elements, and an `--operation NAME` override (2026-07-24,
+`docs/settings.md` §16, not yet tried on real hardware) for probing the
+untested `Operation.OFFSET` write — three unrelated discovery axes (wire
+byte, extra payload elements, operation byte — not command bytes), noted
+here only because the hook that requires touching this file on any
+`tools/control/*` change applies to them too. `discover_command.py` itself
+still has no equivalent: its `CandidateCommand.encode()` always uses
+`Operation.ASSIGN` via `encode_assign`'s (now overridable, but
+unused-by-default) `operation` parameter.
 
 ---
 

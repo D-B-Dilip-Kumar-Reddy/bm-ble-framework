@@ -1,6 +1,6 @@
 """Unit tests for tools/control/send_settings_command.py's --repeat,
---data-type, and --video-format-extra flags — pure argument-parsing,
-action-list-building, and resolution/override logic only.
+--data-type, --video-format-extra, and --operation flags — pure
+argument-parsing, action-list-building, and resolution/override logic only.
 
 No BLE, no input(), no hardware — matches tests/unit/'s "no hardware, full
 mocking" rule and tests/unit/tools/common/test_capture.py's sys.path
@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "tools" / "control"
 import send_settings_command as ssc  # noqa: E402
 
 from bmd_ble.camera_profile import CameraProfile  # noqa: E402
+from bmd_ble.protocol.codec import Operation  # noqa: E402
 from bmd_ble.protocol.types import DataType  # noqa: E402
 
 
@@ -42,6 +43,7 @@ def _args(**overrides) -> argparse.Namespace:
         dimension_enum=None,
         data_type=None,
         video_format_extra=None,
+        operation=None,
     )
     defaults.update(overrides)
     return argparse.Namespace(**defaults)
@@ -316,3 +318,121 @@ class TestBuildCommandVideoFormatExtraOverride:
         assert command[-2:] == b"\x01\x00"
         assert "probe enum=0x08" in label
         assert "extra=(1,0)" in label
+
+
+class TestParseArgsOperation:
+    def _parse(self, monkeypatch, extra: list[str]) -> object:
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "send_settings_command.py",
+                "--model-key",
+                "POCKET_6K_G2",
+                "--firmware",
+                "v7.9",
+                "--packet",
+                "codec_quality",
+                "--codec",
+                "BRAW",
+                "--variant",
+                "5:1",
+                *extra,
+            ],
+        )
+        return ssc.parse_args()
+
+    def test_defaults_to_none_when_not_passed(self, monkeypatch):
+        args = self._parse(monkeypatch, [])
+
+        assert args.operation is None
+
+    def test_explicit_operation_is_parsed_as_the_enum_name_string(self, monkeypatch):
+        args = self._parse(monkeypatch, ["--operation", "OFFSET"])
+
+        assert args.operation == "OFFSET"
+
+    def test_invalid_operation_choice_raises_systemexit(self, monkeypatch):
+        with pytest.raises(SystemExit):
+            self._parse(monkeypatch, ["--operation", "NOT_AN_OPERATION"])
+
+
+class TestResolveOperation:
+    def test_returns_assign_when_override_is_none(self):
+        assert ssc.resolve_operation(_args(operation=None)) == Operation.ASSIGN
+
+    def test_returns_overridden_operation_when_given(self):
+        assert ssc.resolve_operation(_args(operation="OFFSET")) == Operation.OFFSET
+
+
+class TestBuildCommandOperationOverride:
+    def test_recording_format_uses_assign_by_default(self):
+        profile = _g2_profile()
+        args = _args(packet="recording_format", resolution="4K DCI", fps="25")
+
+        label, command = ssc.build_command(profile, args)
+
+        assert command[7] == int(Operation.ASSIGN)
+        assert "operation=" not in label
+
+    def test_recording_format_operation_override_writes_offset(self):
+        profile = _g2_profile()
+        args = _args(packet="recording_format", resolution="4K DCI", fps="25", operation="OFFSET")
+
+        label, command = ssc.build_command(profile, args)
+
+        assert command[7] == int(Operation.OFFSET) == 0x01
+        assert "operation=OFFSET" in label
+        assert "override" in label
+
+    def test_video_format_operation_override_changes_wire_byte(self):
+        profile = _g2_profile()
+        args = _args(
+            packet="video_format",
+            resolution="UHD",
+            codec="ProRes",
+            fps="25",
+            operation="OFFSET",
+        )
+
+        _label, command = ssc.build_command(profile, args)
+
+        assert command[7] == int(Operation.OFFSET)
+
+    def test_codec_quality_operation_override_changes_wire_byte(self):
+        profile = _g2_profile()
+        args = _args(packet="codec_quality", codec="BRAW", variant="5:1", operation="OFFSET")
+
+        _label, command = ssc.build_command(profile, args)
+
+        assert command[7] == int(Operation.OFFSET)
+
+    def test_no_override_leaves_operation_byte_identical_to_pre_flag_behavior(self):
+        profile = _g2_profile()
+        cases = [
+            _args(packet="codec_quality", codec="BRAW", variant="5:1"),
+            _args(packet="video_format", resolution="UHD", codec="ProRes", fps="25"),
+            _args(packet="recording_format", resolution="4K DCI", fps="25"),
+        ]
+
+        for args in cases:
+            _label, command = ssc.build_command(profile, args)
+            assert command[7] == int(Operation.ASSIGN)
+
+    def test_composes_with_data_type_and_video_format_extra_overrides(self):
+        profile = _g2_profile()
+        args = _args(
+            packet="video_format",
+            resolution="UHD",
+            codec="ProRes",
+            fps="25",
+            video_format_extra=[1, 0],
+            operation="OFFSET",
+        )
+
+        label, command = ssc.build_command(profile, args)
+
+        assert command[-2:] == b"\x01\x00"
+        assert command[7] == int(Operation.OFFSET)
+        assert "extra=(1,0)" in label
+        assert "operation=OFFSET" in label

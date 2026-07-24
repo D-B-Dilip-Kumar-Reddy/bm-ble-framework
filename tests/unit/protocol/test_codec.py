@@ -240,6 +240,28 @@ class TestEncodeAssign:
         with pytest.raises(ValueError, match="Unsupported data type"):
             encode_assign(category=0x0A, parameter=0x01, data_type=DataType.STRING, value=1)
 
+    def test_operation_defaults_to_assign(self):
+        packet = encode_assign(category=0x0A, parameter=0x01, data_type=DataType.INT8, value=2)
+
+        assert packet[7] == int(Operation.ASSIGN)
+
+    def test_operation_is_overridable(self):
+        packet = encode_assign(
+            category=0x0A,
+            parameter=0x01,
+            data_type=DataType.INT8,
+            value=2,
+            operation=Operation.OFFSET,
+        )
+
+        assert packet[7] == int(Operation.OFFSET)
+        # Only the operation byte changes - everything else identical to ASSIGN.
+        assign_packet = encode_assign(
+            category=0x0A, parameter=0x01, data_type=DataType.INT8, value=2
+        )
+        assert packet[:7] == assign_packet[:7]
+        assert packet[8:] == assign_packet[8:]
+
 
 class TestEncodeAssignElements:
     """Tests for the multi-element ``encode_assign_elements``."""
@@ -292,3 +314,26 @@ class TestEncodeAssignElements:
             encode_assign_elements(
                 category=0x01, parameter=0x00, data_type=DataType.VOID, values=[1]
             )
+
+    def test_operation_defaults_to_assign(self):
+        packet = encode_assign_elements(
+            category=0x0A, parameter=0x00, data_type=DataType.INT8, values=[3, 3]
+        )
+
+        assert packet[7] == int(Operation.ASSIGN)
+
+    def test_operation_is_overridable(self):
+        packet = encode_assign_elements(
+            category=0x0A,
+            parameter=0x00,
+            data_type=DataType.INT8,
+            values=[3, 3],
+            operation=Operation.OFFSET,
+        )
+
+        assert packet[7] == int(Operation.OFFSET)
+        assign_packet = encode_assign_elements(
+            category=0x0A, parameter=0x00, data_type=DataType.INT8, values=[3, 3]
+        )
+        assert packet[:7] == assign_packet[:7]
+        assert packet[8:] == assign_packet[8:]

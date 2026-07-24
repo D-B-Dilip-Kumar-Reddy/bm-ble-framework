@@ -242,6 +242,37 @@ extra2)` pairs. `(1, 0)` confirmed 2/2 — safe, but still landed UHD, not 4K DC
 `recording_format`'s "accepted but unconfirmed" one. No support for this hypothesis
 either; see `docs/settings.md` §16 for the full write-up and what's left to try.
 
+All three original candidate hypotheses for the PRO's ProRes/4K DCI gap are now
+exhausted. A full-channel decode of the passive-capture evidence (`docs/settings.md`
+§16) — every notification in the body-menu-driven transition windows, not just
+`recording_format`/`codec_quality` — found nothing new either: no channel besides
+`recording_format` itself correlates with the transition. That was the strongest
+remaining lead, and it's exhausted too.
+
+**`--operation NAME` — probe the one untested wire axis left.** Added 2026-07-24
+(`docs/settings.md` §16). Every write attempted across all three exhausted
+hypotheses above used `Operation.ASSIGN` (packet header byte 7 = `0x00`,
+`protocol/codec.py`). The header format documents a second write-capable operation,
+`OFFSET` (`0x01`), never tried for any settings family on either camera — its
+semantics for a resolution/format field are unknown, but it varies a genuinely
+different axis than value, data-type byte, or trailing elements. `--operation NAME`
+(any `Operation` member name, e.g. `OFFSET`) overrides `build_command()`'s operation
+byte for whichever `--packet` is selected — generic across all three families, like
+the other override flags. Default: unset, uses `Operation.ASSIGN` unchanged, so
+every existing invocation stays byte-for-byte identical to before this flag existed.
+The override is recorded in the send's label
+(`operation=OFFSET(0x01 override; profile default ASSIGN/0x00)`):
+
+```
+python tools/control/send_settings_command.py \
+    --model-key POCKET_6K_PRO --firmware v8.6 \
+    --packet recording_format --resolution "4K DCI" --fps 25 \
+    --operation OFFSET
+```
+
+Not yet tried on real hardware. As with the other probe flags, use a generous
+`--listen-seconds` given this camera's documented lens-burst timing confound.
+
 ---
 
 ## `tools/control/sweep_dimension_enum.py`

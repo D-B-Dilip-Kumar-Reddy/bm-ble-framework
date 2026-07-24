@@ -68,6 +68,19 @@ class TestEncodeCodecQuality:
         assert header.operation is Operation.ASSIGN
         assert decode_codec_quality(payload, DataType.INT8) == (3, 4)
 
+    def test_operation_is_overridable(self):
+        packet = encode_codec_quality(
+            category=0x0A,
+            parameter=0x00,
+            data_type=DataType.INT8,
+            codec_id=3,
+            variant_id=3,
+            reserved=0x00,
+            operation=Operation.OFFSET,
+        )
+        header, _payload = decode_packet(packet)
+        assert header.operation is Operation.OFFSET
+
 
 class TestEncodeVideoFormat:
     def test_25fps_4k_dci_braw_matches_documented_packet(self):
@@ -139,6 +152,20 @@ class TestEncodeVideoFormat:
         )
         assert _hex(packet) == "FF 09 00 01 01 00 01 00 19 00 08 01 02"
 
+    def test_operation_is_overridable(self):
+        packet = encode_video_format(
+            category=0x01,
+            parameter=0x00,
+            data_type=DataType.INT8,
+            fps_int=25,
+            m_rate=0,
+            dimension_enum=0x08,
+            reserved=0x01,
+            operation=Operation.OFFSET,
+        )
+        header, _payload = decode_packet(packet)
+        assert header.operation is Operation.OFFSET
+
 
 class TestEncodeRecordingFormat:
     def test_25fps_4k_dci_matches_documented_packet(self):
@@ -189,6 +216,22 @@ class TestEncodeRecordingFormat:
         assert decode_recording_format(payload, DataType.INT16_ARRAY) == RecordingFormat(
             fps_int=50, sensor_fps_int=50, width=1920, height=1080, frame_flags=0x0010
         )
+
+    def test_operation_is_overridable(self):
+        packet = encode_recording_format(
+            category=0x01,
+            parameter=0x09,
+            data_type=DataType.INT16_ARRAY,
+            fps_int=25,
+            sensor_fps_int=25,
+            width=4096,
+            height=2160,
+            frame_flags=0x0010,
+            reserved=0x01,
+            operation=Operation.OFFSET,
+        )
+        header, _payload = decode_packet(packet)
+        assert header.operation is Operation.OFFSET
 
 
 class TestDecoders:

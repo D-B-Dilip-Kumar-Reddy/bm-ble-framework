@@ -58,7 +58,8 @@ silently rejected. All three original candidate hypotheses are now exhausted wit
 no match. A full-channel decode of the passive-capture evidence (§16, 2026-07-24)
 then found nothing new either — no channel besides `recording_format` itself
 correlates with the transition — leaving `Operation.OFFSET` (never tried, unlike
-`ASSIGN` which every write above used) as the one remaining untested axis. This
+`ASSIGN` which every write above used) as the one remaining untested axis, now
+testable via `--operation` (§16). This
 blocks promoting the PRO's settings
 families to `VERIFIED` until the combination is either fixed or explicitly excluded.
 
@@ -1596,3 +1597,39 @@ on either camera. Untested, and it's unknown what OFFSET semantics would even me
 for a resolution field — but it varies a genuinely different axis than value,
 data-type byte, or trailing elements, all of which are now exhausted. See below
 for the tooling this needs.
+
+**Update, 2026-07-24: the OFFSET tooling now exists — plus an important
+correction on how to use it.** `encode_assign`/`encode_assign_elements`
+(`protocol/codec.py`) and all three settings-family encoders
+(`encode_codec_quality`/`encode_video_format`/`encode_recording_format`) gained
+an overridable `operation` parameter (default `Operation.ASSIGN`, every existing
+caller unaffected), and `send_settings_command.py` gained `--operation NAME`,
+mirroring `--dimension-enum`/`--data-type`/`--video-format-extra`'s
+discovery-grade probe pattern exactly:
+
+```
+python tools/control/send_settings_command.py \
+    --model-key POCKET_6K_PRO --firmware v8.6 \
+    --packet recording_format --resolution "4K DCI" --fps 25 \
+    --operation OFFSET
+```
+
+**Read `docs/protocol.md` §4 before running this.** The official spec's stated
+meaning for `OFFSET` is "add the payload to the current value," not "assign it" —
+so the command above, which reuses `recording_format`'s normal *absolute* payload
+(`width=4096`), would ask the camera to add `4096` to whatever width is already
+active (e.g. `3840 + 4096 = 7936` from UHD), not set it to `4096`. That's a
+different, less meaningful test than the delta this hypothesis actually needs: a
+width delta of `4096 - 3840 = 256` (with height/fps deltas of `0`, since only
+width changes between UHD and 4K DCI). This tool always builds its payload from
+the profile's absolute `resolutions`/`fps_modes` tables — there's no delta-payload
+mode — so a faithful OFFSET test currently means picking (or, if needed, adding
+in a follow-up) a target whose absolute values already equal the intended delta,
+not just resending the 4K DCI target with `--operation OFFSET` and expecting
+the spec's stated arithmetic to land there. The first, simpler test (`--operation
+OFFSET` with the existing absolute payload) is still worth running — it answers
+whether the camera accepts `OFFSET` for this family at all, and some CANDIDATE
+values in this protocol have already diverged from the official spec's stated
+behavior before (`docs/protocol.md` §3) — but don't read a failure from that test
+alone as ruling OFFSET out entirely; the delta-based version hasn't been tried.
+Not yet tried on real hardware either way.

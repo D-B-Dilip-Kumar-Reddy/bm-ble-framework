@@ -192,7 +192,7 @@ fixed16 parameter is actually consumed.
 | Value | Name | Meaning | Evidence |
 |---|---|---|---|
 | `0x00` | ASSIGN | Set the parameter to the payload value | [spec]; used by every controller command captured so far [sniffer-verified] |
-| `0x01` | OFFSET | Add the payload to the current value (toggle for booleans) | [spec]; never yet observed over BLE |
+| `0x01` | OFFSET | Add the payload to the current value (toggle for booleans) | [spec]; never yet observed over BLE — probed for the first time via `tools/control/send_settings_command.py --operation OFFSET` (2026-07-24, `docs/settings.md` §16), not yet tried on real hardware. Per this spec meaning, testing it faithfully means sending the *delta* from the current value, not the same absolute target payload `ASSIGN` uses — e.g. retargeting `recording_format` from UHD to 4K DCI would need a width delta of `4096-3840=256`, not `4096` |
 | `0x02` | CAMERA_REPORT | Camera reporting a value on `INCOMING_CONTROL` | Not in the public spec. [sniffer-verified]: every camera-originated notification captured so far uses it. Stored per-command as `echo_operation` in profiles |
 
 ---

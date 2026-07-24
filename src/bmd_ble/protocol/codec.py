@@ -101,6 +101,7 @@ def encode_assign(
     value: int,
     reserved: int = RESERVED_BYTE,
     command_id: int = 0x00,
+    operation: Operation = Operation.ASSIGN,
 ) -> bytes:
     """Encode an ASSIGN-operation command packet for any category/parameter.
 
@@ -108,6 +109,12 @@ def encode_assign(
     category/parameter pair means. Callers supply every value from a
     `CameraProfile` command block (or, for `tools/control/discover_command.py`,
     from an operator-driven candidate sweep) — never hardcoded.
+
+    `operation` defaults to `Operation.ASSIGN`, matching every write this
+    codebase has ever sent. Overridable for discovery-grade probing of the
+    other write-capable operation, `OFFSET` (see
+    `tools/control/send_settings_command.py --operation`, docs/settings.md
+    §16) — no caller in this codebase passes anything but the default yet.
     """
     if data_type not in DATA_TYPE_STRUCT_FORMATS:
         raise ValueError(f"Unsupported data type for assign payload: {data_type!r}")
@@ -118,7 +125,7 @@ def encode_assign(
         category=category,
         parameter=parameter,
         data_type=data_type,
-        operation=Operation.ASSIGN,
+        operation=operation,
         reserved=reserved,
     )
     width = DATA_TYPE_BYTE_WIDTHS[data_type]
@@ -134,6 +141,7 @@ def encode_assign_elements(
     values: Sequence[int],
     reserved: int = RESERVED_BYTE,
     command_id: int = 0x00,
+    operation: Operation = Operation.ASSIGN,
 ) -> bytes:
     """Encode an ASSIGN command whose payload is several same-typed elements.
 
@@ -144,7 +152,8 @@ def encode_assign_elements(
 
     Semantics-free like the rest of this module: element meaning, count, and
     every value come from a `CameraProfile` command block plus its lookup
-    tables — never hardcoded here.
+    tables — never hardcoded here. `operation` defaults to `Operation.ASSIGN`
+    and is overridable for the same discovery-grade reason as `encode_assign`.
     """
     if data_type not in DATA_TYPE_STRUCT_FORMATS:
         raise ValueError(f"Unsupported data type for assign payload: {data_type!r}")
@@ -157,7 +166,7 @@ def encode_assign_elements(
         category=category,
         parameter=parameter,
         data_type=data_type,
-        operation=Operation.ASSIGN,
+        operation=operation,
         reserved=reserved,
     )
     width = DATA_TYPE_BYTE_WIDTHS[data_type]
