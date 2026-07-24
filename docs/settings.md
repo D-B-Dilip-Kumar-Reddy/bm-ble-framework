@@ -70,9 +70,16 @@ since the delta landed exactly in-range. A follow-up isolating test then sent an
 `OFFSET` delta against `codec_quality` instead (§16, 2026-07-24) — a family whose
 `ASSIGN` echo behavior is already well-characterized — and got silence there too,
 pointing at `Operation.OFFSET` being unimplemented camera-wide rather than
-refused specifically for `recording_format`. **Every hypothesis raised in this
-investigation is now exhausted** with no confirming echo for the ProRes/4K DCI
-retarget on this camera. This
+refused specifically for `recording_format`. A follow-up test then retried the
+retarget with the *exact* `fps_int=24` the camera itself reports at that state
+(every earlier write had used `25`) — byte-identical to the passive capture,
+sent from two genuinely different starting states 2/2, with the operator
+directly confirming the on-screen display never changed either time (§16,
+2026-07-24). That rules out both "wrong value" and "echo-only confirmation
+problem": the write is genuinely ignored, not just unconfirmed. **Every
+hypothesis raised in this investigation is now exhausted** with no confirming
+echo, and no on-screen change, for the ProRes/4K DCI retarget on this camera.
+This
 blocks promoting the PRO's settings
 families to `VERIFIED` until the combination is either fixed or explicitly excluded.
 
@@ -1789,3 +1796,55 @@ well-motivated next step on its own; a different kind of lead (a fresh sniffer
 capture strategy, a firmware-version-specific quirk, or simply documenting the gap
 as an accepted limitation of this codebase's write path on this camera/firmware)
 is what's left.
+
+**Update, 2026-07-24: a fresh angle — the exact camera-reported fps, retried twice
+from genuinely different starting states, with the operator watching the
+screen.** Every active write in this entire investigation had targeted `--fps 25`
+without anyone noticing that the §16 addendum's own passive capture — the camera
+reaching ProRes/4K DCI through its own body menu — reported that state as
+`fps_int=24, frame_flags=0x10`, not `25`. That's an exact match for the profile's
+existing `"24"` `fps_modes` entry (`fps_int=24, frame_flags=16`), never tried
+until now. `recording_format` doesn't even encode `m_rate` (that's `video_format`
+only), so this needed no new tooling — just:
+
+```
+python tools/control/send_settings_command.py \
+    --model-key POCKET_6K_PRO --firmware v8.6 \
+    --packet recording_format --resolution "4K DCI" --fps 24 --listen-seconds 8
+```
+
+TX independently decoded both times and confirmed identical to the passively
+observed target state exactly: `(fps_int=24, sensor_fps_int=24, width=4096,
+height=2160, frame_flags=16)`, sent as a normal `Operation.ASSIGN` write — no
+probe flags involved. Two runs, from two different, operator-confirmed starting
+states (ProRes proxied to UHD/25fps for the first run, ProRes proxied to HD/30fps
+for the second) — both genuinely different from the 4K DCI/24fps target, ruling
+out the redundant-no-op explanation that made the first, unwitnessed fps=24
+attempt ambiguous. Both runs: zero `0x01/0x09` reports over the full 8s window,
+the same silence as every other write in this investigation.
+
+Critically, this time the operator was asked directly and confirmed: **the
+camera's on-screen display did not change in either run.** That distinguishes two
+very different failure modes that a missing echo alone can't tell apart — "the
+write landed but wasn't confirmed" (an echo/timing problem, the same shape as the
+lens-burst confound documented elsewhere in this file) versus "the write was
+genuinely ignored" (a real refusal). A confirmed unchanged screen rules out the
+first: this is not a confirmation problem, the camera did not act on the write at
+all, even though the payload sent is now proven byte-identical to what the camera
+itself uses to report that exact state when it gets there some other way.
+
+This closes out the last "maybe we're sending the wrong value" hypothesis
+available: the value was correct — proven correct, taken directly from the
+camera's own mouth — and it still didn't work. Every explanation this
+investigation has tried so far has been about the *write itself* (which bytes, which
+operation, which data type). None of them were it. The most promising untried
+angle is no longer inside the packet at all: `POCKET_6K_PRO v8.6`'s known ambient
+storage telemetry (`0x09/0x01`'s "write margin" signal, `docs/recording.md`) has
+never been checked specifically around a ProRes/4K DCI attempt — if the SD card in
+use during these BLE-write attempts differs from (or is slower than) the one in
+use during the 2026-07-22 body-menu capture that first proved the target state
+reachable, a silent camera-side refusal for a codec/resolution combination whose
+bitrate the card can't sustain would look exactly like everything observed here:
+no echo, no on-screen change, no error — while still leaving BRAW and every lower
+ProRes resolution/bitrate unaffected, matching this camera's behavior in every
+other test in this investigation. Not yet checked.

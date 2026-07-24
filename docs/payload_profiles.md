@@ -494,6 +494,33 @@ behavior is already known, rather than trying to reason your way to which
 explanation is more likely — is worth reaching for whenever a `docs/settings.md`
 investigation hits a silence that could mean more than one thing.
 
+A late re-read of evidence already on hand supplied the next lesson, and it cost
+nothing to run: every active write in this whole investigation had targeted
+`fps=25`, but the passive capture that first proved ProRes/4K DCI reachable
+(gathered days earlier, `docs/settings.md` §16 addendum) had reported that state
+as `fps_int=24` the entire time — sitting right there in an already-written
+provenance note, unnoticed through four more rounds of hypothesis testing because
+attention stayed on *how* the write was framed (data type, operation, payload
+shape) rather than *what value* it targeted. Once tried, `fps=24` — the literal
+value taken from the camera's own report, not a guess — got the same silence
+every other attempt had. Worth remembering: when several rounds of testing keep
+producing the same silent result, it's worth periodically re-reading the earlier
+evidence for an unexamined assumption baked into every attempt, not just
+designing the next variation on the last one.
+
+That same round also answered a question no earlier silent result could: this
+time the operator was asked directly whether the camera's own screen changed,
+not just whether an echo arrived. It hadn't, in either of two runs from
+genuinely different starting states — turning "no echo" into "no echo *and* no
+observable effect," which rules out an echo/confirmation-timing explanation that
+a missing echo alone can never rule out on its own (the lens-burst confound
+documented elsewhere in this file is exactly that kind of explanation, and it's
+happened before). A missing echo is ambiguous between "didn't happen" and
+"happened but wasn't confirmed"; checking the on-screen state directly resolves
+that ambiguity for the price of asking. Do this whenever a write's failure mode
+is still ambiguous between refusal and confirmation loss, not just when a new
+value is being tried for the first time.
+
 ## Testing
 
 `tests/unit/test_camera_profile.py` covers: every `KNOWN_PROFILES` JSON
