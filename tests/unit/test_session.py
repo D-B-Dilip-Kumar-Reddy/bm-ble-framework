@@ -14,7 +14,7 @@ import pytest
 
 import bmd_ble.session as session_module
 from bmd_ble.camera_profile import CameraProfile
-from bmd_ble.exceptions import BMDVerificationError
+from bmd_ble.exceptions import BMDUnsupportedError, BMDVerificationError
 from bmd_ble.protocol.codec import CommandHeader, Operation, encode_packet
 from bmd_ble.protocol.types import DataType
 from bmd_ble.session import CameraSession
@@ -78,6 +78,22 @@ def _storage_packet(value: int, *, byte_offset: int = 1) -> bytearray:
     return bytearray(encode_packet(header, payload=bytes(payload)))
 
 
+def _codec_quality_packet(codec_id: int, variant_id: int) -> bytearray:
+    """A codec_quality-category CAMERA_REPORT, matching
+    `make_settings_profile`'s default block (category=0x0A/parameter=0x00/
+    INT8) — mirrors the real capture (e.g. `03 03` for BRAW 5:1)."""
+    header = CommandHeader(
+        destination=0xFF,
+        command_id=0x00,
+        reserved=0x00,
+        category=0x0A,
+        parameter=0x00,
+        data_type=DataType.INT8,
+        operation=Operation.CAMERA_REPORT,
+    )
+    return bytearray(encode_packet(header, payload=bytes([codec_id, variant_id])))
+
+
 def make_profile(
     recording_block: dict | str = "default", storage_block: dict | str = "default"
 ) -> CameraProfile:
@@ -130,6 +146,8 @@ def make_session(profile: CameraProfile) -> CameraSession:
     session._last_low_margin_at = None
     session._unexpected_stop_event = asyncio.Event()
     session._pending_command = False
+    session.last_known_codec_variant = None
+    session.last_known_recording_format = None
     return session
 
 
@@ -560,3 +578,895 @@ class TestObserveWriteMargin:
 
         assert session.is_recording is True
         assert session._last_low_margin_at is None
+
+
+def make_settings_profile(**overrides) -> CameraProfile:
+    """A real CameraProfile carrying the three CANDIDATE settings command
+    blocks plus the codecs/resolutions/fps_modes lookup tables they consume
+    (mirroring POCKET_6K_G2_v7.9.json — see docs/settings.md)."""
+    raw = {
+        "_meta": {"model": "Pocket 6K G2", "ble_name": "A:TEST"},
+        "commands": {
+            "codec_quality": {
+                "category": 0x0A,
+                "parameter": 0x00,
+                "data_type": "INT8",
+                "reserved": 0x00,
+            },
+            "video_format": {
+                "category": 0x01,
+                "parameter": 0x00,
+                "data_type": "INT8",
+                "reserved": 0x01,
+            },
+            "recording_format": {
+                "category": 0x01,
+                "parameter": 0x09,
+                "data_type": "INT16_ARRAY",
+                "reserved": 0x01,
+            },
+        },
+        "codecs": {
+            "BRAW": {"id": 3, "variants": {"Q0": 0, "5:1": 3}},
+            "ProRes": {"id": 2, "variants": {"HQ": 0}},
+        },
+        "resolutions": {
+            "4K DCI": {
+                "width": 4096,
+                "height": 2160,
+                "codecs": ["BRAW", "ProRes"],
+                "dimension_enums": {"BRAW": 8},
+            },
+            "HD": {
+                "width": 1920,
+                "height": 1080,
+                "codecs": ["ProRes"],
+                "dimension_enums": {"ProRes": 3},
+            },
+        },
+        "fps_modes": {
+            "25": {"fps_int": 25, "m_rate": 0, "frame_flags": 16},
+            "23.98": {"fps_int": 24, "m_rate": 1, "frame_flags": 19},
+        },
+    }
+    raw.update(overrides)
+    return CameraProfile._from_raw(MODEL_KEY, FIRMWARE, raw)
+
+
+def _recording_format_payload(fps: int, sensor_fps: int, width: int, height: int, flags: int):
+    import struct
+
+    return struct.pack("<5h", fps, sensor_fps, width, height, flags)
+
+
+def _recording_format_packet(
+    fps: int, sensor_fps: int, width: int, height: int, flags: int
+) -> bytearray:
+    """A recording_format-category CAMERA_REPORT, matching
+    `make_settings_profile`'s default block (category=0x01/parameter=0x09/
+    INT16_ARRAY) — mirrors the real capture's five little-endian int16
+    elements. This is also the exact (category, parameter) set_video_format's
+    mode-notify channel reports on."""
+    header = CommandHeader(
+        destination=0xFF,
+        command_id=0x00,
+        reserved=0x01,
+        category=0x01,
+        parameter=0x09,
+        data_type=DataType.INT16_ARRAY,
+        operation=Operation.CAMERA_REPORT,
+    )
+    payload = _recording_format_payload(fps, sensor_fps, width, height, flags)
+    return bytearray(encode_packet(header, payload))
+
+
+class TestObserveCodecQuality:
+    """`last_known_codec_variant` is notification-derived only (design
+    principle 4), like is_recording — never set from "we sent a command".
+    set_codec_quality's no-op guard depends on it being accurate."""
+
+    def test_updates_from_any_codec_quality_report(self):
+        session = make_session(make_settings_profile())
+
+        session._observe_codec_quality(_codec_quality_packet(3, 3))
+
+        assert session.last_known_codec_variant == (3, 3)
+
+    def test_later_report_overwrites_earlier_one(self):
+        session = make_session(make_settings_profile())
+        session._observe_codec_quality(_codec_quality_packet(3, 3))
+
+        session._observe_codec_quality(_codec_quality_packet(2, 0))
+
+        assert session.last_known_codec_variant == (2, 0)
+
+    def test_ignores_malformed_data(self):
+        session = make_session(make_settings_profile())
+
+        session._observe_codec_quality(bytearray([0x01, 0x02]))
+
+        assert session.last_known_codec_variant is None
+
+    def test_ignores_unrelated_notification(self):
+        session = make_session(make_settings_profile())
+
+        session._observe_codec_quality(_recording_packet(2))
+
+        assert session.last_known_codec_variant is None
+
+    def test_no_op_without_a_codec_quality_command_block(self):
+        session = make_session(make_profile())  # recording-only profile
+
+        session._observe_codec_quality(_codec_quality_packet(3, 3))
+
+        assert session.last_known_codec_variant is None
+
+    def test_wired_through_handle_incoming(self):
+        session = make_session(make_settings_profile())
+
+        session._handle_incoming(MagicMock(), _codec_quality_packet(2, 1))
+
+        assert session.last_known_codec_variant == (2, 1)
+
+
+class TestObserveRecordingFormat:
+    """`last_known_recording_format` is notification-derived only (design
+    principle 4), like is_recording and last_known_codec_variant. Both
+    set_recording_format's and set_video_format's no-op guards depend on it
+    being accurate — and since this is the exact (category, parameter)
+    set_video_format's mode-notify channel reports on, a video_format
+    write's own confirmation updates it too."""
+
+    def test_updates_from_any_recording_format_report(self):
+        session = make_session(make_settings_profile())
+
+        session._observe_recording_format(_recording_format_packet(25, 25, 4096, 2160, 16))
+
+        assert session.last_known_recording_format == (25, 4096, 2160)
+
+    def test_later_report_overwrites_earlier_one(self):
+        session = make_session(make_settings_profile())
+        session._observe_recording_format(_recording_format_packet(25, 25, 4096, 2160, 16))
+
+        session._observe_recording_format(_recording_format_packet(24, 24, 1920, 1080, 19))
+
+        assert session.last_known_recording_format == (24, 1920, 1080)
+
+    def test_ignores_malformed_data(self):
+        session = make_session(make_settings_profile())
+
+        session._observe_recording_format(bytearray([0x01, 0x02]))
+
+        assert session.last_known_recording_format is None
+
+    def test_ignores_unrelated_notification(self):
+        session = make_session(make_settings_profile())
+
+        session._observe_recording_format(_codec_quality_packet(3, 3))
+
+        assert session.last_known_recording_format is None
+
+    def test_no_op_without_a_recording_format_command_block(self):
+        session = make_session(make_profile())  # recording-only profile
+
+        session._observe_recording_format(_recording_format_packet(25, 25, 4096, 2160, 16))
+
+        assert session.last_known_recording_format is None
+
+    def test_wired_through_handle_incoming(self):
+        session = make_session(make_settings_profile())
+
+        session._handle_incoming(MagicMock(), _recording_format_packet(25, 25, 4096, 2160, 16))
+
+        assert session.last_known_recording_format == (25, 4096, 2160)
+
+
+class TestSetCodecQuality:
+    @pytest.mark.asyncio
+    async def test_succeeds_on_matching_echo(self):
+        session = make_session(make_settings_profile())
+        session._router.wait_for.return_value = (
+            MagicMock(category=0x0A, parameter=0x00),
+            bytes([3, 3]),
+        )
+
+        await session.set_codec_quality("BRAW", "5:1")
+
+        session._router.arm.assert_called_once_with(0x0A, 0x00)
+        session._controller.write_outgoing_control.assert_awaited_once()
+        session._router.wait_for.assert_awaited_once_with(0x0A, 0x00, timeout=2.0)
+
+    @pytest.mark.asyncio
+    async def test_sends_documented_packet_bytes(self):
+        session = make_session(make_settings_profile())
+        session._router.wait_for.return_value = (MagicMock(), bytes([2, 0]))
+
+        await session.set_codec_quality("ProRes", "HQ")
+
+        (sent,) = session._controller.write_outgoing_control.await_args.args
+        assert sent == bytes([0xFF, 0x06, 0x00, 0x00, 0x0A, 0x00, 0x01, 0x00, 0x02, 0x00])
+
+    @pytest.mark.asyncio
+    async def test_raises_when_no_echo_arrives(self):
+        session = make_session(make_settings_profile())
+        session._router.wait_for.return_value = None
+
+        with pytest.raises(BMDVerificationError, match="no echo received"):
+            await session.set_codec_quality("BRAW", "5:1")
+
+    @pytest.mark.asyncio
+    async def test_raises_when_echo_reports_other_codec(self):
+        """The documented codec_quality limitation: the camera keeps its
+        active codec family, so the echo disagrees with the request."""
+        session = make_session(make_settings_profile())
+        session._router.wait_for.return_value = (MagicMock(), bytes([3, 3]))
+
+        with pytest.raises(BMDVerificationError, match="set_video_format"):
+            await session.set_codec_quality("ProRes", "HQ")
+
+    @pytest.mark.asyncio
+    async def test_is_a_noop_when_already_at_the_target(self):
+        """Real-hardware regression (docs/settings.md §11): a video_format
+        switch resets the family's quality to a remembered value, and
+        requesting that same value again used to raise a spurious
+        BMDVerificationError. last_known_codec_variant (notification-
+        derived) lets this be recognized as already-satisfied instead."""
+        session = make_session(make_settings_profile())
+        session.last_known_codec_variant = (3, 3)  # BRAW, 5:1 — already known
+
+        await session.set_codec_quality("BRAW", "5:1")
+
+        session._controller.write_outgoing_control.assert_not_awaited()
+        session._router.arm.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_writes_normally_when_last_known_variant_differs(self):
+        session = make_session(make_settings_profile())
+        session.last_known_codec_variant = (2, 0)  # ProRes, HQ
+        session._router.wait_for.return_value = (MagicMock(), bytes([3, 3]))
+
+        await session.set_codec_quality("BRAW", "5:1")
+
+        session._controller.write_outgoing_control.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_writes_normally_when_nothing_known_yet(self):
+        session = make_session(make_settings_profile())
+        assert session.last_known_codec_variant is None
+        session._router.wait_for.return_value = (MagicMock(), bytes([3, 3]))
+
+        await session.set_codec_quality("BRAW", "5:1")
+
+        session._controller.write_outgoing_control.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_raises_before_writing_on_unknown_variant(self):
+        session = make_session(make_settings_profile())
+
+        with pytest.raises(ValueError, match="no variant '12:1'"):
+            await session.set_codec_quality("BRAW", "12:1")
+
+        session._controller.write_outgoing_control.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_raises_before_writing_when_block_missing(self):
+        session = make_session(make_profile())  # recording-only profile
+
+        with pytest.raises(ValueError, match="no 'codec_quality' command block"):
+            await session.set_codec_quality("BRAW", "5:1")
+
+        session._controller.write_outgoing_control.assert_not_awaited()
+
+
+class TestSetVideoFormat:
+    @pytest.mark.asyncio
+    async def test_succeeds_on_own_channel_echo(self):
+        session = make_session(make_settings_profile())
+
+        async def wait_for(category, parameter, timeout):
+            if (category, parameter) == (0x01, 0x00):
+                return MagicMock(category=0x01, parameter=0x00), bytes([25, 0, 8, 0, 0])
+            return None
+
+        session._router.wait_for = AsyncMock(side_effect=wait_for)
+
+        await session.set_video_format("4K DCI", "BRAW", "25")
+
+        armed = {call.args for call in session._router.arm.call_args_list}
+        assert armed == {(0x01, 0x00), (0x01, 0x09), (0x0A, 0x00)}
+        (sent,) = session._controller.write_outgoing_control.await_args.args
+        assert sent == bytes(
+            [0xFF, 0x09, 0x00, 0x01, 0x01, 0x00, 0x01, 0x00, 0x19, 0x00, 0x08, 0x00, 0x00]
+        )
+
+    @pytest.mark.asyncio
+    async def test_succeeds_on_mode_notify_echo(self):
+        """The echo channel is unconfirmed — a report on the
+        recording_format coordinates (1/9) also verifies the write."""
+        session = make_session(make_settings_profile())
+
+        async def wait_for(category, parameter, timeout):
+            if (category, parameter) == (0x01, 0x09):
+                return (
+                    MagicMock(category=0x01, parameter=0x09),
+                    _recording_format_payload(25, 25, 4096, 2160, 16),
+                )
+            return None
+
+        session._router.wait_for = AsyncMock(side_effect=wait_for)
+
+        await session.set_video_format("4K DCI", "BRAW", "25")
+
+    @pytest.mark.asyncio
+    async def test_succeeds_on_codec_quality_channel_echo(self):
+        """Real-hardware regression (docs/settings.md §10): a codec-only
+        switch (same resolution/fps, different family) leaves the
+        mode-notify payload byte-identical to what NotificationRouter
+        already saw, so it gets filtered as a stale duplicate — the
+        codec_quality channel (10/0) is what actually confirms the write
+        in that case."""
+        session = make_session(make_settings_profile())
+
+        async def wait_for(category, parameter, timeout):
+            if (category, parameter) == (0x0A, 0x00):
+                return MagicMock(category=0x0A, parameter=0x00), bytes([3, 3])  # BRAW, 5:1
+            return None
+
+        session._router.wait_for = AsyncMock(side_effect=wait_for)
+
+        await session.set_video_format("4K DCI", "BRAW", "25")
+
+    @pytest.mark.asyncio
+    async def test_raises_when_codec_quality_channel_reports_wrong_codec(self):
+        session = make_session(make_settings_profile())
+
+        async def wait_for(category, parameter, timeout):
+            if (category, parameter) == (0x0A, 0x00):
+                return MagicMock(category=0x0A, parameter=0x00), bytes([2, 0])  # ProRes, HQ
+            return None
+
+        session._router.wait_for = AsyncMock(side_effect=wait_for)
+
+        with pytest.raises(BMDVerificationError, match="codec_quality-channel reported"):
+            await session.set_video_format("4K DCI", "BRAW", "25")
+
+    @pytest.mark.asyncio
+    async def test_does_not_arm_codec_quality_channel_when_profile_lacks_it(self):
+        profile = make_settings_profile()
+        profile.commands.pop("codec_quality")
+        session = make_session(profile)
+
+        async def wait_for(category, parameter, timeout):
+            if (category, parameter) == (0x01, 0x09):
+                return (
+                    MagicMock(category=0x01, parameter=0x09),
+                    _recording_format_payload(25, 25, 4096, 2160, 16),
+                )
+            return None
+
+        session._router.wait_for = AsyncMock(side_effect=wait_for)
+
+        await session.set_video_format("4K DCI", "BRAW", "25")
+
+        armed = {call.args for call in session._router.arm.call_args_list}
+        assert armed == {(0x01, 0x00), (0x01, 0x09)}
+
+    @pytest.mark.asyncio
+    async def test_raises_when_no_channel_echoes(self):
+        session = make_session(make_settings_profile())
+        session._router.wait_for.return_value = None
+
+        with pytest.raises(BMDVerificationError, match="no echo received"):
+            await session.set_video_format("4K DCI", "BRAW", "25")
+
+    @pytest.mark.asyncio
+    async def test_raises_when_mode_notify_disagrees(self):
+        session = make_session(make_settings_profile())
+
+        async def wait_for(category, parameter, timeout):
+            if (category, parameter) == (0x01, 0x09):
+                return (
+                    MagicMock(category=0x01, parameter=0x09),
+                    _recording_format_payload(25, 25, 1920, 1080, 16),  # wrong resolution
+                )
+            return None
+
+        session._router.wait_for = AsyncMock(side_effect=wait_for)
+
+        with pytest.raises(BMDVerificationError, match="mode-notify reported"):
+            await session.set_video_format("4K DCI", "BRAW", "25")
+
+    @pytest.mark.asyncio
+    async def test_raises_unsupported_before_writing(self):
+        from bmd_ble.exceptions import BMDUnsupportedError
+
+        session = make_session(make_settings_profile())
+
+        with pytest.raises(BMDUnsupportedError, match="does not offer codec 'BRAW' at 'HD'"):
+            await session.set_video_format("HD", "BRAW", "25")
+
+        session._controller.write_outgoing_control.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_raises_unsupported_fps_before_writing(self):
+        """resolutions.<name>.max_fps_int is a real hardware ceiling (e.g.
+        POCKET_6K_PRO v8.6's 6K topping out at 50, docs/settings.md) — a
+        different flavor of capability check than known_unreachable, but
+        the same fail-fast-before-any-write contract."""
+        profile = make_settings_profile(
+            resolutions={
+                "4K DCI": {
+                    "width": 4096,
+                    "height": 2160,
+                    "codecs": ["BRAW", "ProRes"],
+                    "dimension_enums": {"BRAW": 8},
+                    "max_fps_int": 24,
+                },
+                "HD": {
+                    "width": 1920,
+                    "height": 1080,
+                    "codecs": ["ProRes"],
+                    "dimension_enums": {"ProRes": 3},
+                },
+            }
+        )
+        session = make_session(profile)
+
+        with pytest.raises(BMDUnsupportedError, match="does not offer '25'.*fps ceiling"):
+            await session.set_video_format("4K DCI", "BRAW", "25")
+
+        session._controller.write_outgoing_control.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_fps_at_the_ceiling_is_allowed(self):
+        """max_fps_int is inclusive — a request exactly at the ceiling
+        proceeds normally, not just requests strictly below it."""
+        profile = make_settings_profile(
+            resolutions={
+                "4K DCI": {
+                    "width": 4096,
+                    "height": 2160,
+                    "codecs": ["BRAW", "ProRes"],
+                    "dimension_enums": {"BRAW": 8},
+                    "max_fps_int": 24,
+                },
+            }
+        )
+        session = make_session(profile)
+
+        async def wait_for(category, parameter, timeout):
+            if (category, parameter) == (0x01, 0x00):
+                return MagicMock(category=0x01, parameter=0x00), bytes([24, 1, 8, 0, 0])
+            return None
+
+        session._router.wait_for = AsyncMock(side_effect=wait_for)
+
+        # fps_int for "23.98" is 24, exactly at the ceiling — must not raise
+        # BMDUnsupportedError.
+        await session.set_video_format("4K DCI", "BRAW", "23.98")
+
+        session._controller.write_outgoing_control.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_raises_before_writing_when_dimension_enum_uncaptured(self):
+        session = make_session(make_settings_profile())
+
+        with pytest.raises(ValueError, match="dimension_enum for '4K DCI' under 'ProRes'"):
+            await session.set_video_format("4K DCI", "ProRes", "25")
+
+        session._controller.write_outgoing_control.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_is_a_noop_when_family_and_format_already_known(self):
+        """Real-hardware regression (docs/settings.md §14, 7/7 --repeat 2
+        runs): requesting the (resolution, codec, fps) the camera is
+        already in produces no echo on any channel, mirroring
+        set_codec_quality's §11 finding. The guard reuses
+        last_known_codec_variant (codec family) and
+        last_known_recording_format (resolution+fps) rather than tracking a
+        third field."""
+        session = make_session(make_settings_profile())
+        session.last_known_codec_variant = (3, 3)  # BRAW, 5:1
+        session.last_known_recording_format = (25, 4096, 2160)  # 4K DCI, 25fps
+
+        await session.set_video_format("4K DCI", "BRAW", "25")
+
+        session._controller.write_outgoing_control.assert_not_awaited()
+        session._router.arm.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_writes_normally_when_only_codec_family_matches(self):
+        session = make_session(make_settings_profile())
+        session.last_known_codec_variant = (3, 3)  # BRAW — matches
+        session.last_known_recording_format = (25, 1920, 1080)  # wrong resolution
+
+        async def wait_for(category, parameter, timeout):
+            if (category, parameter) == (0x01, 0x00):
+                return MagicMock(category=0x01, parameter=0x00), bytes([25, 0, 8, 0, 0])
+            return None
+
+        session._router.wait_for = AsyncMock(side_effect=wait_for)
+
+        await session.set_video_format("4K DCI", "BRAW", "25")
+
+        session._controller.write_outgoing_control.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_writes_normally_when_only_format_matches(self):
+        session = make_session(make_settings_profile())
+        session.last_known_codec_variant = (2, 0)  # ProRes — wrong family
+        session.last_known_recording_format = (25, 4096, 2160)  # matches
+
+        async def wait_for(category, parameter, timeout):
+            if (category, parameter) == (0x01, 0x00):
+                return MagicMock(category=0x01, parameter=0x00), bytes([25, 0, 8, 0, 0])
+            return None
+
+        session._router.wait_for = AsyncMock(side_effect=wait_for)
+
+        await session.set_video_format("4K DCI", "BRAW", "25")
+
+        session._controller.write_outgoing_control.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_writes_normally_when_nothing_known_yet(self):
+        session = make_session(make_settings_profile())
+        assert session.last_known_codec_variant is None
+        assert session.last_known_recording_format is None
+
+        async def wait_for(category, parameter, timeout):
+            if (category, parameter) == (0x01, 0x00):
+                return MagicMock(category=0x01, parameter=0x00), bytes([25, 0, 8, 0, 0])
+            return None
+
+        session._router.wait_for = AsyncMock(side_effect=wait_for)
+
+        await session.set_video_format("4K DCI", "BRAW", "25")
+
+        session._controller.write_outgoing_control.assert_awaited_once()
+
+
+class TestSetRecordingFormat:
+    @pytest.mark.asyncio
+    async def test_raises_unsupported_fps_before_writing(self):
+        """Same max_fps_int hardware-ceiling check as set_video_format's
+        (docs/settings.md's 6K finding) — recording_format also takes
+        (resolution, fps) directly and can be called independently."""
+        profile = make_settings_profile(
+            resolutions={
+                "4K DCI": {
+                    "width": 4096,
+                    "height": 2160,
+                    "codecs": ["BRAW", "ProRes"],
+                    "dimension_enums": {"BRAW": 8},
+                    "max_fps_int": 24,
+                },
+            }
+        )
+        session = make_session(profile)
+
+        with pytest.raises(BMDUnsupportedError, match="does not offer '25'.*fps ceiling"):
+            await session.set_recording_format("4K DCI", "25")
+
+        session._controller.write_outgoing_control.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_fps_at_the_ceiling_is_allowed(self):
+        profile = make_settings_profile(
+            resolutions={
+                "4K DCI": {
+                    "width": 4096,
+                    "height": 2160,
+                    "codecs": ["BRAW", "ProRes"],
+                    "dimension_enums": {"BRAW": 8},
+                    "max_fps_int": 24,
+                },
+            }
+        )
+        session = make_session(profile)
+        session._router.wait_for.return_value = (
+            MagicMock(),
+            _recording_format_payload(24, 24, 4096, 2160, 19),
+        )
+
+        # fps_int for "23.98" is 24, exactly at the ceiling.
+        await session.set_recording_format("4K DCI", "23.98")
+
+        session._controller.write_outgoing_control.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_succeeds_on_matching_echo(self):
+        session = make_session(make_settings_profile())
+        session._router.wait_for.return_value = (
+            MagicMock(category=0x01, parameter=0x09),
+            _recording_format_payload(25, 25, 4096, 2160, 16),
+        )
+
+        await session.set_recording_format("4K DCI", "25")
+
+        session._router.arm.assert_called_once_with(0x01, 0x09)
+        (sent,) = session._controller.write_outgoing_control.await_args.args
+        assert sent == bytes.fromhex("FF 0E 00 01 01 09 82 00 19 00 19 00 00 10 70 08 10 00")
+
+    @pytest.mark.asyncio
+    async def test_ntsc_mode_uses_drop_frame_flags(self):
+        session = make_session(make_settings_profile())
+        session._router.wait_for.return_value = (
+            MagicMock(),
+            _recording_format_payload(24, 24, 4096, 2160, 19),
+        )
+
+        await session.set_recording_format("4K DCI", "23.98")
+
+        (sent,) = session._controller.write_outgoing_control.await_args.args
+        assert sent[8:] == _recording_format_payload(24, 24, 4096, 2160, 19)
+
+    @pytest.mark.asyncio
+    async def test_raises_when_no_echo_arrives(self):
+        session = make_session(make_settings_profile())
+        session._router.wait_for.return_value = None
+
+        with pytest.raises(BMDVerificationError, match="no echo received"):
+            await session.set_recording_format("4K DCI", "25")
+
+    @pytest.mark.asyncio
+    async def test_raises_when_echo_reports_wrong_resolution(self):
+        session = make_session(make_settings_profile())
+        session._router.wait_for.return_value = (
+            MagicMock(),
+            _recording_format_payload(25, 25, 1920, 1080, 16),
+        )
+
+        with pytest.raises(BMDVerificationError, match="echo reported"):
+            await session.set_recording_format("4K DCI", "25")
+
+    @pytest.mark.asyncio
+    async def test_is_a_noop_when_already_at_the_target(self):
+        """Real-hardware regression (docs/settings.md §14, 5/5 --repeat 2
+        runs): requesting the (resolution, fps) the camera is already at
+        produces no echo at all, mirroring set_codec_quality's §11 finding.
+        last_known_recording_format (notification-derived) lets this be
+        recognized as already-satisfied instead of raising."""
+        session = make_session(make_settings_profile())
+        session.last_known_recording_format = (25, 4096, 2160)  # 4K DCI, 25fps
+
+        await session.set_recording_format("4K DCI", "25")
+
+        session._controller.write_outgoing_control.assert_not_awaited()
+        session._router.arm.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_writes_normally_when_last_known_format_differs(self):
+        session = make_session(make_settings_profile())
+        session.last_known_recording_format = (25, 1920, 1080)  # HD, 25fps
+        session._router.wait_for.return_value = (
+            MagicMock(),
+            _recording_format_payload(25, 25, 4096, 2160, 16),
+        )
+
+        await session.set_recording_format("4K DCI", "25")
+
+        session._controller.write_outgoing_control.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_writes_normally_when_nothing_known_yet(self):
+        session = make_session(make_settings_profile())
+        assert session.last_known_recording_format is None
+        session._router.wait_for.return_value = (
+            MagicMock(),
+            _recording_format_payload(25, 25, 4096, 2160, 16),
+        )
+
+        await session.set_recording_format("4K DCI", "25")
+
+        session._controller.write_outgoing_control.assert_awaited_once()
+
+
+class TestClosestReachableResolution:
+    """Tests for the private proxy-selection helper set_camera_format uses."""
+
+    def test_picks_closest_available_resolution(self):
+        # 4K DCI has no ProRes dimension_enum in the fixture; HD is the only
+        # other ProRes-enabled resolution, so it's the (only, hence closest)
+        # candidate.
+        session = make_session(make_settings_profile())
+
+        assert session._closest_reachable_resolution("4K DCI", "ProRes") == "HD"
+
+    def test_returns_target_itself_when_it_already_has_the_enum(self):
+        session = make_session(make_settings_profile())
+
+        assert session._closest_reachable_resolution("4K DCI", "BRAW") == "4K DCI"
+
+    def test_raises_when_no_resolution_offers_the_codec(self):
+        session = make_session(make_settings_profile())
+
+        with pytest.raises(ValueError, match="No resolution with a known dimension_enum"):
+            session._closest_reachable_resolution("4K DCI", "H265")
+
+    def test_raises_naming_unknown_target_resolution(self):
+        session = make_session(make_settings_profile())
+
+        with pytest.raises(ValueError, match="no resolution 'UHD'"):
+            session._closest_reachable_resolution("UHD", "ProRes")
+
+
+class TestSetCameraFormat:
+    """Tests for the (codec, variant, resolution, fps) orchestration method.
+
+    These mock CameraSession's own set_video_format/set_codec_quality/
+    set_recording_format rather than the router+echo mechanics — each of
+    those is already thoroughly tested by its own TestSet* class above;
+    set_camera_format's job is purely to sequence them with the right
+    arguments (including the proxy-resolution substitution), which is what
+    these tests verify.
+    """
+
+    @pytest.mark.asyncio
+    async def test_direct_path_uses_target_resolution_for_video_format(self):
+        session = make_session(make_settings_profile())
+        session.set_video_format = AsyncMock()
+        session.set_codec_quality = AsyncMock()
+        session.set_recording_format = AsyncMock()
+
+        await session.set_camera_format("BRAW", "5:1", "4K DCI", "25")
+
+        session.set_video_format.assert_awaited_once_with("4K DCI", "BRAW", "25")
+        session.set_codec_quality.assert_awaited_once_with("BRAW", "5:1")
+        session.set_recording_format.assert_awaited_once_with("4K DCI", "25")
+
+    @pytest.mark.asyncio
+    async def test_proxy_path_switches_video_format_through_closest_resolution_first(self):
+        session = make_session(make_settings_profile())
+        session.set_video_format = AsyncMock()
+        session.set_codec_quality = AsyncMock()
+        session.set_recording_format = AsyncMock()
+
+        # 4K DCI has no ProRes dimension_enum in the fixture -- video_format
+        # must go through HD (the only ProRes-enabled resolution) first,
+        # while set_codec_quality and the final set_recording_format still
+        # target the caller's real request.
+        await session.set_camera_format("ProRes", "HQ", "4K DCI", "25")
+
+        session.set_video_format.assert_awaited_once_with("HD", "ProRes", "25")
+        session.set_codec_quality.assert_awaited_once_with("ProRes", "HQ")
+        session.set_recording_format.assert_awaited_once_with("4K DCI", "25")
+
+    @pytest.mark.asyncio
+    async def test_steps_run_in_order(self):
+        session = make_session(make_settings_profile())
+        order: list[str] = []
+        session.set_video_format = AsyncMock(side_effect=lambda *a: order.append("video_format"))
+        session.set_codec_quality = AsyncMock(side_effect=lambda *a: order.append("codec_quality"))
+        session.set_recording_format = AsyncMock(
+            side_effect=lambda *a: order.append("recording_format")
+        )
+
+        await session.set_camera_format("BRAW", "5:1", "4K DCI", "25")
+
+        assert order == ["video_format", "codec_quality", "recording_format"]
+
+    @pytest.mark.asyncio
+    async def test_propagates_verification_error_from_video_format_step_and_stops(self):
+        session = make_session(make_settings_profile())
+        session.set_video_format = AsyncMock(side_effect=BMDVerificationError("boom"))
+        session.set_codec_quality = AsyncMock()
+        session.set_recording_format = AsyncMock()
+
+        with pytest.raises(BMDVerificationError, match="boom"):
+            await session.set_camera_format("BRAW", "5:1", "4K DCI", "25")
+
+        session.set_codec_quality.assert_not_awaited()
+        session.set_recording_format.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_propagates_verification_error_from_codec_quality_step_and_stops(self):
+        session = make_session(make_settings_profile())
+        session.set_video_format = AsyncMock()
+        session.set_codec_quality = AsyncMock(side_effect=BMDVerificationError("no echo"))
+        session.set_recording_format = AsyncMock()
+
+        with pytest.raises(BMDVerificationError, match="no echo"):
+            await session.set_camera_format("BRAW", "5:1", "4K DCI", "25")
+
+        session.set_recording_format.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_raises_before_any_call_on_unknown_resolution(self):
+        session = make_session(make_settings_profile())
+        session.set_video_format = AsyncMock()
+
+        with pytest.raises(ValueError, match="no resolution 'UHD'"):
+            await session.set_camera_format("ProRes", "HQ", "UHD", "25")
+
+        session.set_video_format.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_raises_before_any_call_on_unknown_variant(self):
+        session = make_session(make_settings_profile())
+        session.set_video_format = AsyncMock()
+
+        with pytest.raises(ValueError, match="no variant '12:1'"):
+            await session.set_camera_format("BRAW", "12:1", "4K DCI", "25")
+
+        session.set_video_format.assert_not_awaited()
+
+
+class TestSetCameraFormatKnownUnreachable:
+    """A profile's resolutions.<name>.known_unreachable map (populated only
+    after real-hardware evidence exhausts every write-value hypothesis, e.g.
+    POCKET_6K_PRO v8.6's ProRes/4K DCI gap, docs/settings.md §16) must stop
+    set_camera_format before any write — not surface as a confusing
+    BMDVerificationError after burning a full echo-timeout sequence."""
+
+    @staticmethod
+    def _profile_with_known_unreachable() -> CameraProfile:
+        return make_settings_profile(
+            resolutions={
+                "4K DCI": {
+                    "width": 4096,
+                    "height": 2160,
+                    "codecs": ["BRAW", "ProRes"],
+                    "dimension_enums": {"BRAW": 8},
+                    "known_unreachable": {"ProRes": "evidence note for the test"},
+                },
+                "HD": {
+                    "width": 1920,
+                    "height": 1080,
+                    "codecs": ["ProRes"],
+                    "dimension_enums": {"ProRes": 3},
+                },
+            }
+        )
+
+    @pytest.mark.asyncio
+    async def test_raises_bmdunsupported_before_any_write(self):
+        session = make_session(self._profile_with_known_unreachable())
+        session.set_video_format = AsyncMock()
+        session.set_codec_quality = AsyncMock()
+        session.set_recording_format = AsyncMock()
+
+        with pytest.raises(BMDUnsupportedError, match="known-unreachable"):
+            await session.set_camera_format("ProRes", "HQ", "4K DCI", "25")
+
+        session.set_video_format.assert_not_awaited()
+        session.set_codec_quality.assert_not_awaited()
+        session.set_recording_format.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_error_message_includes_the_profile_evidence_note(self):
+        session = make_session(self._profile_with_known_unreachable())
+        session.set_video_format = AsyncMock()
+        session.set_codec_quality = AsyncMock()
+        session.set_recording_format = AsyncMock()
+
+        with pytest.raises(BMDUnsupportedError, match="evidence note for the test"):
+            await session.set_camera_format("ProRes", "HQ", "4K DCI", "25")
+
+    @pytest.mark.asyncio
+    async def test_unaffected_codec_at_the_same_resolution_proceeds_normally(self):
+        session = make_session(self._profile_with_known_unreachable())
+        session.set_video_format = AsyncMock()
+        session.set_codec_quality = AsyncMock()
+        session.set_recording_format = AsyncMock()
+
+        # BRAW isn't in known_unreachable for "4K DCI" — only ProRes is.
+        await session.set_camera_format("BRAW", "5:1", "4K DCI", "25")
+
+        session.set_video_format.assert_awaited_once_with("4K DCI", "BRAW", "25")
+        session.set_codec_quality.assert_awaited_once_with("BRAW", "5:1")
+        session.set_recording_format.assert_awaited_once_with("4K DCI", "25")
+
+    @pytest.mark.asyncio
+    async def test_same_codec_at_an_unaffected_resolution_proceeds_normally(self):
+        session = make_session(self._profile_with_known_unreachable())
+        session.set_video_format = AsyncMock()
+        session.set_codec_quality = AsyncMock()
+        session.set_recording_format = AsyncMock()
+
+        # ProRes is known_unreachable at "4K DCI" only, not at "HD".
+        await session.set_camera_format("ProRes", "HQ", "HD", "25")
+
+        session.set_video_format.assert_awaited_once_with("HD", "ProRes", "25")
+        session.set_codec_quality.assert_awaited_once_with("ProRes", "HQ")
+        session.set_recording_format.assert_awaited_once_with("HD", "25")

@@ -36,6 +36,208 @@
         "notes": "Operator-confirmed outcomes: start, stop. 2026-07-09: data_type relabelled BOOL -> INT8 when DataType was remapped to the official spec coding; the captured wire byte (0x01) is unchanged."
       },
       "echo_operation": 2
+    },
+    "video_format": {
+      "category": 1,
+      "parameter": 0,
+      "data_type": "INT8",
+      "reserved": 1,
+      "provenance": {
+        "status": "CANDIDATE",
+        "method": "active send (tools/control/send_settings_command.py --packet video_format --dimension-enum sweep, 2026-07-21). Coordinates now confirmed working, not just a hypothesis: repeated real-hardware sends produced genuine, repeatable resolution transitions on the recording_format (0x01/0x09) mode-notify channel — operator-confirmed against the on-screen resolution name after a power cycle (see notes). video_format's own channel (0x01/0x00) still never echoes, matching POCKET_6K_G2_v7.9. Not yet promoted to VERIFIED — that requires the full CameraSession round trip (examples/change_codec.py), not yet attempted on this camera.",
+        "capture_refs": [
+          "tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260721T171924.json",
+          "tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260721T174504.json",
+          "tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260721T180755.json",
+          "tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260721T180939.json",
+          "tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260722T142318.json",
+          "tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260723T163137.json",
+          "tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260724T110427.json",
+          "tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260724T110856.json",
+          "tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260724T112146.json",
+          "tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260724T112346.json",
+          "tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260724T112520.json",
+          "tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260724T122242.json",
+          "tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260724T125644.json"
+        ],
+        "notes": "IMPORTANT, real-hardware confirmed 2026-07-21: this camera's on-screen settings display does NOT live-update after a video_format write — the change genuinely takes effect (confirmed both by the wire and by power-cycling the camera, which then shows the new value) — but the body's menu keeps showing the OLD value until rebooted. Do not treat a static on-screen display alone as evidence a write failed; check tools/captures/ or power-cycle to confirm. dimension_enum values found so far match POCKET_6K_G2_v7.9's numbers exactly for every resolution tested (independently confirmed on this camera's own captures, not copied — see the resolutions table below) — 0x02 also produced a transition to the same pixel dimensions as 0x13 ('6K') once, but with fps clamped to 30 instead of the requested 50 and no confirming echo on a repeat attempt; recorded as an open, unresolved candidate rather than a second dimension_enums entry (the schema only holds one enum per resolution/codec pair) — see the '6K' resolution entry's own comment.\n\nEXHAUSTIVE SWEEP, 2026-07-22 (see docs/settings.md §16): tools/control/sweep_dimension_enum.py swept every dimension_enum in 0x00-0x16 not already known (0x00-0x02, 0x04-0x05, 0x07, 0x09-0x0C, 0x0E, 0x10-0x11, 0x15-0x16) targeting ProRes/4K DCI. 14 of 15 produced zero recording_format/codec_quality reports at all -- a clean negative, matching the same 'no camera change' result the G2's own exhausted 0x01-0x16 search got. The one exception (0x00, reporting ProRes/HQ/HD/24fps) is very likely stale connect-burst leftover, not a genuine transition: the report's fps (24) didn't match the requested fps (25), and it exactly matched an unrelated capture from ~25 minutes earlier in the same session. No dimension_enum in 0x00-0x16 reaches ProRes/4K DCI on this camera -- this range is now exhausted here the same way it already was on the G2.\n\nEXHAUSTIVE SWEEP CONTINUED, 2026-07-23 (see docs/settings.md §16): tools/control/sweep_dimension_enum.py --range 0x17 0x1F swept the next 9 candidates. All 9 produced zero recording_format/codec_quality reports -- no exceptions this time. 0x00-0x1F (32 values) is now fully exhausted on this camera with no ProRes/4K DCI match anywhere in it. Two full 16-value ranges in a row with nothing, on top of the G2's own exhausted 0x01-0x16 search, makes further blind dimension_enum guessing a weaker lead than retrying recording_format's write with data_type=0x02 or testing video_format's unexplained trailing elements -- see docs/settings.md §16 for the ranked next steps.\n\nTRAILING ELEMENTS PROBED, 2026-07-24 (see docs/settings.md §16): tools/control/send_settings_command.py --video-format-extra sent (UHD, ProRes, 25fps, dimension_enum=6) with four candidate (extra1, extra2) pairs. (1,0) confirmed cleanly 2/2 -- a fresh 0x01/0x09 report landing UHD (width=3840) exactly as requested both times, codec_quality confirming ProRes unchanged -- proving the override doesn't corrupt a known-good write, but it still landed UHD, not 4K DCI. (2,0), (0,1), and (1,1) each got zero response over a full 10s window -- the same 'silently rejected' signature already established for out-of-range dimension_enum candidates, not the 'accepted but unconfirmed' signature recording_format's retarget shows. No tested combination reaches 4K DCI; three of four are seemingly invalid to the camera outright. This hypothesis has no supporting evidence so far either -- see docs/settings.md §16 for the updated ranking of what's left to try.\n\nFULL-CHANNEL PASSIVE DECODE, 2026-07-24 (see docs/settings.md §16): every notification across all three passive captures of the body-menu-driven ProRes/4K DCI transition (referenced in commands.recording_format's provenance) was decoded with protocol/codec.py's own decode_packet, not just the two channels already extracted. recording_format (0x01/0x09) is the only channel that moves with the transition; codec_quality (0x0A/0x00) stays [2,0] (ProRes/HQ) on both sides; every other (category, parameter) pair is either free-running ambient telemetry (0x09/0x00, 0x09/0x02) that drifts regardless of activity, or a one-time static connect-burst item (camera capability/exposure/lens info) that never changes within the window. No hidden channel or field correlates with the transition -- this was the strongest remaining lead and it found nothing either. The one genuinely untested axis left: every write attempted so far used Operation.ASSIGN (0x00); Operation.OFFSET (0x01) has never been tried for any settings family.\n\nOFFSET (ABSOLUTE PAYLOAD) RULED OUT, 2026-07-24 (see docs/settings.md §16): tools/control/send_settings_command.py --operation OFFSET sent the same 4K DCI/25 recording_format retarget (TX: FF 0E 00 01 01 09 82 01 19 00 19 00 00 10 70 08 10 00, operation byte 01 confirmed at offset 7) with --listen-seconds 10. Zero 0x01/0x09 reports over the full window -- only the ambient 0x09/0x00 storage telemetry and the usual lens-metadata/connect-burst packets. This is not conclusive against OFFSET itself: the payload sent was the absolute width 4096, and per docs/protocol.md §4's documented OFFSET semantics (\"add the payload to the current value\"), that requests width = current + 4096, an out-of-range value the camera would have every reason to reject regardless of whether OFFSET is otherwise supported for this parameter. A faithful test needs a delta payload (width delta 4096-3840=256 for UHD -> 4K DCI), not this absolute one.\n\nRAW PAYLOAD TOOLING ADDED, 2026-07-24 (see docs/settings.md §16): tools/control/send_settings_command.py gained --raw-payload VALUE [VALUE ...], bypassing --resolution/--codec/--fps/--sensor-fps and the profile's lookup tables entirely to encode a literal element sequence via encode_assign_elements (protocol/codec.py) directly -- no protocol-layer changes needed. Composes with --data-type/--operation. This makes the genuine OFFSET delta test possible for the first time: --packet recording_format --raw-payload 0 0 256 0 0 --operation OFFSET sends a +256 width delta instead of an absolute target. Not yet tried on real hardware.\n\nOFFSET (DELTA PAYLOAD) ALSO RULED OUT -- EVERY HYPOTHESIS NOW EXHAUSTED, 2026-07-24 (see docs/settings.md §16): the raw-payload delta test above was run for real. TX independently decoded and confirmed correct (data_type=0x82 profile default, operation=0x01/OFFSET, payload=(0,0,256,0,0), the intended +256 width delta, not a mis-encoding). Over a full 10s window: zero 0x01/0x09 reports -- only the usual connect-burst tail, ambient 0x09/0x00 storage telemetry, and one previously-unseen one-off packet (0x09/0x08, INT8, payload [0,1]) that appeared before the send had any plausible time to react and is almost certainly more connect-burst noise. This result is stronger than the earlier absolute-payload OFFSET test: a +256 delta from UHD's 3840 lands exactly in-range at 4096 (valid 4K DCI width), so the 'out-of-range value' explanation that covered the absolute-payload silence does not apply here -- yet the same zero-response signature resulted. Most direct reading: Operation.OFFSET itself is not acted on for this write, independent of absolute-vs-delta payload framing (caveat: this assumes the camera was genuinely at UHD immediately before the send, which was the operator's noted starting state but wasn't independently re-confirmed by a fresh report inside this window). Every hypothesis raised across this investigation -- dimension_enum sweep, data_type byte, video_format trailing elements, full-channel passive decode, OFFSET absolute payload, OFFSET delta payload -- is now exhausted with no confirming echo, despite the passive-capture evidence proving the camera genuinely holds and reports ProRes/4K DCI when reached through its own body menu. Next diagnostic step under consideration, not yet run: an OFFSET delta against codec_quality (--packet codec_quality --raw-payload 0 1 --operation OFFSET), whose ASSIGN echo behavior is already well-characterized (§11), to isolate whether OFFSET is rejected camera-wide or specific to recording_format."
+      }
+    },
+    "codec_quality": {
+      "category": 10,
+      "parameter": 0,
+      "data_type": "INT8",
+      "reserved": 0,
+      "provenance": {
+        "status": "CANDIDATE",
+        "method": "passive sniffer capture (tools/sniffers/sniffer_settings.py, 0x0A/0x00 CAMERA_REPORT observed during codec_to_braw/codec_to_prores actions, 2026-07-21)",
+        "capture_refs": [
+          "tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260721T174504.json",
+          "tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260724T135131.json"
+        ],
+        "notes": "category/parameter/data_type directly observed on the wire; reserved=0 matches every codec_quality report captured passively. Codec ids ProRes=2, BRAW=3 match POCKET_6K_G2_v7.9's ids — independently confirmed via this camera's own transitions, not copied. Quality variant NAMES: operator-confirmed on screen for every id via an active-send sweep (2026-07-21, tools/control/send_settings_command.py --packet codec_quality across every candidate id for both codecs) — see the codecs table below; HQ=0 (ProRes) and Q0=0/5:1=3 (BRAW) match the G2's own ids exactly. None of those sends' own capture windows happened to show a confirming 0x0A/0x00 echo (each caught the camera's lens-metadata burst on category 0x0C instead, tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260721T190251.json onward) — the mapping rests on the operator's direct visual read of the on-screen label, per this project's operator-is-ground-truth convention for CANDIDATE sends, not yet a wire-verified write+echo round trip.\n\nOFFSET ISOLATION TEST (RECORDING_FORMAT INVESTIGATION), 2026-07-24 (see docs/settings.md §16): tools/control/send_settings_command.py --packet codec_quality --raw-payload 0 1 --operation OFFSET sent a +1 variant delta (category=0x0A, parameter=0x00, reserved=0, data_type=INT8 -- all TX-confirmed correct, not a mis-encoding) as part of the recording_format/ProRes/4K DCI investigation, to test whether Operation.OFFSET is refused specifically for recording_format or unimplemented camera-wide. Zero 0x0A/0x00 reports over a full 10s window -- the same silence every other OFFSET test on this camera has produced, this time for a family whose ASSIGN echo behavior is already well-characterized (fires on a real change, silent only on an exact no-op; a CameraSession.set_camera_format() write+echo cycle to ProRes/422 confirmed this cleanly under ASSIGN, 2026-07-22). Since a +1 delta is not a no-op, this rules out the recording_format-specific explanation and points at Operation.OFFSET not being acted on by this camera's firmware at all, for either category/parameter tried. Not evidence toward or against this block's own CANDIDATE status -- this was an OFFSET-operation probe, not an ASSIGN write test of codec_quality itself."
+      }
+    },
+    "recording_format": {
+      "category": 1,
+      "parameter": 9,
+      "data_type": "INT16_ARRAY",
+      "reserved": 1,
+      "provenance": {
+        "status": "CANDIDATE",
+        "method": "passive sniffer capture (tools/sniffers/sniffer_settings.py, 0x01/0x09 CAMERA_REPORT, five little-endian int16 elements — same shape as POCKET_6K_G2_v7.9), plus an active send+echo (tools/control/send_settings_command.py --packet recording_format --resolution \"4K DCI\" --fps 25 --repeat 2, 2026-07-22), plus two full CameraSession.set_camera_format() round trips (examples/change_codec.py, 2026-07-22, echo_timeout_s=6.0), plus a passive body-menu capture of ProRes/4K DCI itself (2026-07-22, see notes)",
+        "capture_refs": [
+          "tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260721T171924.json",
+          "tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260722T114850.json",
+          "tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260722T135501.json",
+          "tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260722T135643.json",
+          "tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260722T135912.json",
+          "tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260723T183711.json",
+          "tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260724T103854.json",
+          "tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260724T142752.json",
+          "tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260724T144631.json",
+          "tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260724T150030.json",
+          "tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260724T150130.json",
+          "tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260724T150245.json",
+          "tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260724T150738.json",
+          "tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260724T151002.json",
+          "tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260724T151134.json"
+        ],
+        "notes": "category/parameter directly observed on the wire. data_type/reserved for WRITES mirror the G2's convention (its own reports use data_type 0x02, not the claimed write byte 0x82 — same discrepancy documented for the G2, docs/settings.md §3). The 2026-07-22 --repeat 2 send (real change: 2.8K 17:9/50fps -> 4K DCI/25fps, BRAW 8:1 unchanged) confirmed a genuine write+echo cycle for the first time — TX matched, and the echoed (fps_int, width, height, frame_flags)=(25, 4096, 2160, 0x10) matched both the request and fps_modes.\"25\" exactly, though timing was ambiguous (see docs/settings.md §15): the echo arrived right as send 2 was issued, meaning it was send 1's own report delivered after send 1's capture window had already closed (the lens-metadata burst on category 0x0C has repeatedly dominated recent capture windows on this camera and delayed genuine settings echoes past their window) — not proof send 2 (redundant) echoed on its own. No second/fresh 0x01/0x09 report appeared anywhere in send 2's window, consistent with the same no-echo-on-redundant-write behavior already confirmed for this family via the G2 and via codec_quality here.\n\nKNOWN LIMITATION, real-hardware confirmed 2026-07-22 (see docs/settings.md §16): set_recording_format cannot retarget resolution to 4K DCI while ProRes is the active codec family, on this camera. Two independent examples/change_codec.py runs (echo_timeout_s=6.0, ruling out the earlier lens-burst timing false-negative) targeted ProRes 422/4K DCI/25 starting from a genuinely different prior resolution (5.7K 17:9/60fps and 4K DCI-under-BRAW/25fps respectively). In both runs set_video_format's proxy write to (UHD, ProRes) and the follow-up set_codec_quality write to ProRes/422 both landed and echoed cleanly and promptly (confirmed by a fresh 0x01/0x09 report showing width=3840/UHD and a fresh 0x0A/0x00 report showing codec_id=2/variant_id=1) — so the camera was unambiguously in ProRes/422/UHD, not still mid-transition, when the final set_recording_format(4K DCI, 25) write went out. That write then produced zero fresh 0x01/0x09 reports over the full 6.0s window in both runs — only one stale duplicate of the prior UHD report (width=3840, byte-identical to the pre-write report) plus the ambient 0x09/0x00 storage telemetry that free-runs regardless of any write, so BMDVerificationError was raised both times. The identical target reached via BRAW instead (dimension_enums.BRAW=8 for 4K DCI) succeeds every time in the same script run, in one step, via set_video_format alone — recording_format's retarget step is never even needed for BRAW. A third, superficially similar zero-echo result (an isolated tools/control/send_settings_command.py --packet recording_format --resolution \"4K DCI\" --fps 25 run) turned out NOT to be independent evidence: at the time it ran, the camera was already at BRAW/5:1/4K DCI/25fps/frame_flags=0x10 from the preceding change_codec.py run's own successful BRAW combo — an exact byte-for-byte match of the requested write, so its silence is fully explained by the already-confirmed redundant-write no-echo behavior, not by this ProRes-specific limitation. This makes the PRO's ProRes/4K DCI gap worse than the G2's: the G2's documented two-step proxy workaround (video_format to a reachable resolution, then recording_format to nudge the rest of the way) is known to actually reach 4K DCI/ProRes on that camera (docs/settings.md §7-§9); on the PRO, the same workaround's second step never confirms. set_camera_format() has no PRO-specific handling for this yet — a caller requesting (ProRes, 4K DCI) on this camera should currently expect a BMDVerificationError from the recording_format step, not a successful write.\n\nCONFIRMATION the target state itself is real, 2026-07-22 (see docs/settings.md §16 addendum): three independent passive sniffer captures (tools/sniffers/sniffer_settings.py --actions prores_uhd_to_4kdci / prores_hd_to_4kdci) of the operator manually switching the camera body's own menu from ProRes/UHD or ProRes/HD to ProRes/4K DCI each caught a genuine 0x01/0x09 report decoding to (fps_int=24, width=4096, height=2160, frame_flags=0x10) immediately alongside a 0x0A/0x00 report decoding to (codec_id=2/ProRes, variant_id=0/HQ) — the exact same wire shape this profile already expects for that state. This proves the camera's firmware genuinely holds and reports ProRes/4K DCI; the gap above is in this codebase's own write path (still-undiscovered dimension_enum, wrong write framing, or a missing intermediate step), not a hard camera-side refusal of the combination. Since a body-menu change never touches OUTGOING_CONTROL, these were pure listen-only captures — no TX to replay from them — so this narrows the problem without yet solving it.\n\nDATA_TYPE HYPOTHESIS RULED OUT, 2026-07-23/24 (see docs/settings.md §16): tools/control/send_settings_command.py --data-type INT16 retried the exact same 4K DCI/25 retarget write with wire data_type byte 0x02 (the camera's own report byte) instead of the claimed write byte 0x82, first with the default 3s window (inconclusive -- lens burst dominated it) then with --listen-seconds 8. The 8s run produced exactly one 0x01/0x09 report in the entire window, decoding to (fps=24, width=1920, height=1080, flags=0) -- HD, the pre-write leftover state, not a match for the requested 4K DCI/25fps -- followed by nothing but ambient 0x09/0x00 storage telemetry for the remaining ~5.5s. Zero fresh confirming reports, the same signature already established for 0x82 over a full window. data_type (0x02 vs 0x82) is not the cause of this failure -- ruled out as a hypothesis. The only remaining untried lead is video_format's two unexplained trailing zero elements (see docs/settings.md §16).\n\nEXACT CAMERA-REPORTED FPS RETRIED -- GENUINE REFUSAL, NOT AN ECHO PROBLEM, 2026-07-24 (see docs/settings.md §16): every write above targeted fps=25 without noticing the CONFIRMATION paragraph's own passive capture reported the target state as fps_int=24 (frame_flags=0x10), not 25 -- an exact match for this profile's \"24\" fps_modes entry, never tried. tools/control/send_settings_command.py --packet recording_format --resolution \"4K DCI\" --fps 24 sends (fps_int=24, sensor_fps_int=24, width=4096, height=2160, frame_flags=16) via a normal ASSIGN write -- TX-confirmed byte-identical to the passively observed target state, not a mis-encoding. Two runs, from two different, operator-confirmed starting states (ProRes proxied to UHD/25fps, then ProRes proxied to HD/30fps -- both genuinely different from the 4K DCI/24fps target, ruling out a redundant no-op): zero 0x01/0x09 reports in both 8s windows, AND the operator directly confirmed the on-screen display did not change in either run. This is a stronger result than every prior silent test: the value sent is now proven correct (taken directly from the camera's own self-report), yet the write still did not land, not even on-screen -- ruling out both \"wrong value\" and \"echo-only confirmation problem\" as explanations. Every write-content/write-mechanism hypothesis raised in this investigation (dimension_enum sweep, data_type byte, video_format trailing elements, full-channel passive decode, OFFSET absolute/delta payloads, OFFSET camera-wide isolation test, exact camera-reported fps) is now exhausted. Next angle under consideration, genuinely outside the packet: check the SD card / storage state (docs/recording.md's write_margin_warning, category 0x09 parameter 0x01, never checked specifically around a ProRes/4K DCI attempt) in case the card in use during these BLE-write attempts can't sustain 4K DCI ProRes's bitrate, unlike whatever card was in use during the 2026-07-22 body-menu capture that first proved the target state reachable. (Card confirmed present and rated V60 -- likely rules this out on its own, though see the update below for the test that overtook this line of inquiry.)\n\nEXACT CAMERA-REPORTED VARIANT RETRIED, CONFIRMED VIA GENUINE ECHO -- TERMINAL RESULT FOR THE WRITE-VALUE HYPOTHESIS SPACE, 2026-07-24 (see docs/settings.md §16): every active write attempt in this investigation had used a different ProRes variant than the one the body-menu capture actually reported (variant_id=0/HQ) -- the original KNOWN LIMITATION runs used 422, the fps=24 runs above started from PXY. Retried the three-step sequence (video_format to UHD/ProRes/24fps, codec_quality to ProRes/HQ, recording_format to 4K DCI/24fps) with --listen-seconds 8 on all three steps. Unlike the first attempt at this sequence (steps 1-2 used the tool's default 3s window and got no confirming echo for either, leaving the precondition unverified), this run caught genuine fresh echoes for both setup steps: step 1's 0x01/0x09 report decoded to (24, 24, 3840, 2160, 16) -- UHD/24fps, confirming the proxy write landed -- and step 2's 0x0A/0x00 report decoded to (codec_id=2, variant_id=0) -- a fresh HQ report, distinct from step 1's own leftover (2,1)/422 report still sitting in its connect-burst tail. Going into step 3 the camera's state was definitively confirmed by wire echo, not inferred: ProRes, HQ, UHD, 24fps -- the exact codec/variant proven reachable at 4K DCI, genuinely different resolution than the target (not a no-op). Step 3 still produced zero 0x01/0x09 reports over the full 8s window, and the operator confirmed the on-screen display did not change. Every dimension of this write -- resolution, fps, codec, variant, data type, operation -- now exactly matches the camera's own self-reported target state, confirmed by genuine echo immediately beforehand, and it still did not land, on the wire or on the camera. This closes the write-value hypothesis space entirely: dimension_enum, data_type byte, video_format trailing elements, full-channel passive decode, Operation.OFFSET (absolute, delta, camera-wide isolation), the exact camera-reported fps, and now the exact camera-reported codec variant have all been tried at their confirmed-correct values, and none of it works. The remaining question is no longer what this codebase sends -- it's whether this specific transition is reachable over BLE OUTGOING_CONTROL at all, by any means, on this camera/firmware."
+      }
+    }
+  },
+  "codecs": {
+    "ProRes": {
+      "id": 2,
+      "variants": {
+        "HQ": 0,
+        "422": 1,
+        "LT": 2,
+        "PXY": 3
+      },
+      "_comment": "Operator-confirmed on-screen labels (2026-07-21, active send sweep of every id via tools/control/send_settings_command.py --packet codec_quality). HQ=0 matches POCKET_6K_G2_v7.9's ProRes HQ=0 exactly — independently confirmed on this camera, not copied."
+    },
+    "BRAW": {
+      "id": 3,
+      "variants": {
+        "Q0": 0,
+        "Q5": 1,
+        "3:1": 2,
+        "5:1": 3,
+        "8:1": 4,
+        "12:1": 5,
+        "Q1": 7,
+        "Q3": 8
+      },
+      "_comment": "Operator-confirmed on-screen labels (2026-07-21, active send sweep of every id via tools/control/send_settings_command.py --packet codec_quality; id 6 not tested/not offered). Q0=0 and 5:1=3 match POCKET_6K_G2_v7.9's BRAW ids exactly — independently confirmed on this camera, not copied."
+    }
+  },
+  "resolutions": {
+    "HD": {
+      "width": 1920,
+      "height": 1080,
+      "codecs": ["ProRes"],
+      "dimension_enums": { "ProRes": 3 }
+    },
+    "UHD": {
+      "width": 3840,
+      "height": 2160,
+      "codecs": ["ProRes"],
+      "dimension_enums": { "ProRes": 6 }
+    },
+    "4K DCI": {
+      "width": 4096,
+      "height": 2160,
+      "codecs": ["BRAW", "ProRes"],
+      "dimension_enums": { "BRAW": 8 },
+      "known_unreachable": {
+        "ProRes": "Accepted capability gap, 2026-07-24 (see docs/settings.md §16 for the full evidentiary write-up). Every write-value hypothesis was tried at its confirmed-correct value — resolution, fps (including the exact fps_int=24 the camera itself reports at this state, not the fps=25 every earlier attempt used), codec variant (including the exact HQ variant the camera itself reports, not the 422/PXY every earlier attempt used, with the precondition confirmed by genuine wire echo immediately beforehand), data_type byte, and Operation (ASSIGN and OFFSET, both absolute and delta payloads) — and none of it produces a recording_format echo or an on-screen change. The camera demonstrably holds and reports ProRes/4K DCI when reached through its own body menu (see the CONFIRMATION note below), so this is a software capability gap in this codebase's BLE write path, not a camera-side refusal — never remove 'ProRes' from the codecs list above on the strength of this note. CameraSession.set_camera_format raises BMDUnsupportedError immediately for this (codec, resolution) pair rather than attempting a write known to fail."
+      },
+      "_comment": "Camera offers 4K DCI under both codecs (operator-confirmed), but the only known dimension_enum (8) reaches BRAW's 4K DCI only — same unresolved gap as POCKET_6K_G2_v7.9's 4K DCI/ProRes (docs/settings.md §7-§9), independently observed here, not assumed from the G2. Unlike the G2, the two-step proxy workaround (video_format to UHD, then recording_format to nudge to 4K DCI) does NOT close this gap on the PRO: two real-hardware examples/change_codec.py round trips (2026-07-22, docs/settings.md §16) confirmed video_format+codec_quality land ProRes/422/UHD cleanly, then recording_format's write to 4K DCI gets no echo at all within 6.0s. See commands.recording_format's provenance for the full evidence. ProRes/4K DCI is currently unreachable on this camera via CameraSession — but IS reachable on the camera itself: a passive capture of the body's own menu switching into it (docs/settings.md §16 addendum) confirms the firmware genuinely holds and reports this state, so the gap is in this codebase's write path, not a camera-side refusal. An exhaustive tools/control/sweep_dimension_enum.py run across every dimension_enum in 0x00-0x1F not already known (2026-07-22 and 2026-07-23, docs/settings.md §16) found no ProRes dimension_enum for this resolution anywhere in that 32-value range — same negative result as the G2's own exhausted 0x01-0x16 search. See commands.video_format's provenance for the sweep's full results. ACCEPTED, 2026-07-24: every write-value hypothesis (resolution, fps, codec variant, data_type, operation) has now been tried at its confirmed-correct value with no success — see the known_unreachable.ProRes note above for the final evidentiary summary and docs/settings.md §16 for the full write-up. This is now a documented, guarded software limitation rather than an open investigation."
+    },
+    "2.8K 17:9": {
+      "width": 2880,
+      "height": 1512,
+      "codecs": ["BRAW"],
+      "dimension_enums": { "BRAW": 13 }
+    },
+    "3.7K Anamorphic": {
+      "width": 3728,
+      "height": 3104,
+      "codecs": ["BRAW"],
+      "dimension_enums": { "BRAW": 15 },
+      "_comment": "Operator-verified (2026-07-21), same dimension_enum (0x0F) as POCKET_6K_G2_v7.9's '3.7K Anamorphic' — independently confirmed on this camera, not copied."
+    },
+    "5.7K 17:9": {
+      "width": 5744,
+      "height": 3024,
+      "codecs": ["BRAW"],
+      "dimension_enums": { "BRAW": 18 }
+    },
+    "6K": {
+      "width": 6144,
+      "height": 3456,
+      "codecs": ["BRAW"],
+      "dimension_enums": { "BRAW": 19 },
+      "max_fps_int": 50,
+      "_comment": "dimension_enum 19 (0x13) cleanly reproduced this resolution at the requested 50fps. Enum 2 (0x02) also produced the same pixel dimensions once, but clamped fps to 30 and did not reproduce on a later attempt (no confirming echo that time) — left unresolved rather than recorded as a second candidate, since the schema holds only one enum per resolution/codec pair. frame_flags reported as 0x00 here vs 0x10 for every other resolution — matches the G2's 'windowed bit' hypothesis (0x00 = full sensor, 0x10 = windowed/cropped), consistent with a full-sensor readout mode plausibly explaining the lower fps ceiling. CONFIRMED, 2026-07-24 (see docs/settings.md): tools/control/sweep_camera_format.py's first full production run found all 8 BRAW variants unconfirmed at 59.94/60fps here (16/16), every other fps (23.98-50) confirming cleanly for all 8 -- a systematic, codec-variant-independent pattern, the signature of a real ceiling rather than a write bug. Operator confirmed the camera's own UI does not offer 59.94/60fps as options at 6K either -- a genuine hardware/sensor-readout limit, not a software write-path gap (contrast resolutions.\"4K DCI\".known_unreachable.ProRes, which the camera CAN reach). max_fps_int=50 now guards this in CameraSession.set_video_format/set_recording_format and is excluded by default from sweep_camera_format.py's combination space."
+    },
+    "6K 2.4:1": {
+      "width": 6144,
+      "height": 2560,
+      "codecs": ["BRAW"],
+      "dimension_enums": { "BRAW": 20 }
+    }
+  },
+  "fps_modes": {
+    "23.98": {
+      "fps_int": 24,
+      "m_rate": 1,
+      "frame_flags": 19,
+      "_comment": "CANDIDATE (fps_modes has no per-entry provenance field in the schema). fps_int and frame_flags directly observed on the wire (tools/sniffers/sniffer_settings.py --actions fps_23_98..fps_60, tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260722T113812.json). frame_flags=19 (0x13) is the exact NTSC-drop-frame signature POCKET_6K_G2_v7.9's own '23.98' entry uses; note '24' below shares this same fps_int=24 but reports frame_flags=16 instead — flags, not fps_int, is what disambiguates the NTSC/exact pair. m_rate=1 is inferred by the G2's matching pattern (every NTSC-style fps there uses m_rate=1), not yet independently observed via a video_format send on this camera."
+    },
+    "24": {
+      "fps_int": 24,
+      "m_rate": 0,
+      "frame_flags": 16,
+      "_comment": "CANDIDATE. Directly observed on the wire, same capture as '23.98' above — see that entry's comment for the NTSC/exact fps_int-collision note."
+    },
+    "25": {
+      "fps_int": 25,
+      "m_rate": 0,
+      "frame_flags": 16,
+      "_comment": "CANDIDATE. Directly observed on the wire (tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260722T113812.json). No NTSC counterpart in the standard fps set, so no fps_int collision here. Cross-confirmed 2026-07-22 by an active recording_format --fps 25 send whose echo reported this exact (fps_int, frame_flags) pair — see commands.recording_format's provenance."
+    },
+    "29.97": {
+      "fps_int": 30,
+      "m_rate": 1,
+      "frame_flags": 19,
+      "_comment": "CANDIDATE. fps_int and frame_flags directly observed on the wire, confirmed twice now: first in tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260722T112548.json (the only one of eight fps actions that landed that day), then reconfirmed identically in the full clean sweep tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260722T113812.json. frame_flags=19 (0x13) is the exact NTSC-drop-frame signature POCKET_6K_G2_v7.9's own '23.98' entry uses; '30' below shares this fps_int=30 but reports frame_flags=16 instead. m_rate=1 is inferred by that same G2 pattern, not yet independently observed via a video_format send on this camera."
+    },
+    "30": {
+      "fps_int": 30,
+      "m_rate": 0,
+      "frame_flags": 16,
+      "_comment": "CANDIDATE. Directly observed on the wire, same capture as '29.97' above — see that entry's comment for the NTSC/exact fps_int-collision note."
+    },
+    "50": {
+      "fps_int": 50,
+      "m_rate": 0,
+      "frame_flags": 16,
+      "_comment": "CANDIDATE. fps_int first observed in tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260721T171924.json. frame_flags is genuinely resolution-dependent at this fps on real captures (0x00 for HD/UHD, 0x10 for 4K DCI — same 'windowed bit' pattern already flagged for the G2, docs/settings.md); 0x10 (16) is used here since the fuller 2026-07-22 sweep (tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260722T113812.json) landed this value at 4K DCI, the resolution every other fps_modes entry above was also captured at — revisit if a recording_format write at HD/UHD needs the 0x00 variant instead. m_rate=0 is an untested candidate (video_format has never been sent at this fps), reasonable for a round, non-NTSC rate but not confirmed."
+    },
+    "59.94": {
+      "fps_int": 60,
+      "m_rate": 1,
+      "frame_flags": 19,
+      "_comment": "CANDIDATE. Directly observed on the wire (tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260722T113812.json). frame_flags=19 (0x13) is the NTSC-drop-frame signature; '60' below shares this fps_int=60 but reports frame_flags=16 instead. m_rate=1 inferred by the G2's matching pattern, not yet independently confirmed via a video_format send here."
+    },
+    "60": {
+      "fps_int": 60,
+      "m_rate": 0,
+      "frame_flags": 16,
+      "_comment": "CANDIDATE. Directly observed on the wire, same capture as '59.94' above — see that entry's comment for the NTSC/exact fps_int-collision note."
     }
   },
   "storage": {

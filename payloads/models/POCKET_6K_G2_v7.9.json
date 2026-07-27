@@ -36,7 +36,105 @@
         "verified_on": "2026-06-19",
         "notes": "3/3 start/stop cycles echo-verified on real hardware via examples/record_start_stop.py. echo_operation is the operation byte the camera itself uses when reporting this category/parameter (distinct from ASSIGN used by the controller's command). Echo payload trailing bytes 00 40 00 01 03 not yet understood — hypothesis: SDI Cat 10 Param 1 transport-mode struct, see docs/protocol.md. 2026-07-09: data_type relabelled BOOL -> INT8 when DataType was remapped to the official spec coding; the captured wire byte (0x01) is unchanged."
       }
+    },
+    "codec_quality": {
+      "category": 10,
+      "parameter": 0,
+      "data_type": "INT8",
+      "reserved": 0,
+      "echo_operation": 2,
+      "provenance": {
+        "status": "VERIFIED",
+        "method": "external reverse-engineering document (CODEC_RES_FPS_6K_G2.docx) for the original byte layout; report-side coordinates confirmed by this repo's own passive capture (sniffer_settings.py); write side confirmed through CameraSession.set_codec_quality() itself via examples/change_codec.py, 1/1 genuine (non-redundant) real-hardware cycle echo-verified",
+        "capture_refs": [
+          "tools/captures/POCKET_6K_G2_v7.9/POCKET_6K_G2_v7.9_20260720T103044.json (local, gitignored)",
+          "examples/change_codec.py console log, 2026-07-20 16:48 run (not saved to tools/captures/ — this example doesn't call save_capture; see docs/settings.md §10)"
+        ],
+        "verified_on": "2026-07-20",
+        "notes": "Payload is two int8 elements [codec_id, variant_id] from the top-level `codecs` table (10-byte packet, e.g. FF 06 00 00 0A 00 01 00 03 03 for BRAW 5:1). Matches the official spec's 10.0 Codec parameter coordinates, but the observed data-type byte is 0x01 (INT8), not an array marker. Reserved byte 0x00 — differs from recording and video_format (0x01). OBSERVED LIMITATION: changes the quality variant within the active codec family but does NOT switch BRAW <-> ProRes even though it carries a codec id — codec-family switches require the video_format packet's dimension_enum. 2026-07-20 passive capture: camera-originated 0x0A/0x00 reports confirmed on the wire — operation 0x02, data-type byte 0x01, payload exactly 2 bytes; observed 02 00 (ProRes HQ), 03 02 (BRAW 3:1), 03 03 (BRAW 5:1), confirming both codec ids and those three variant ids. 2026-07-20 active send (send_settings_command.py, pre-connect-settle-fix): operator confirmed the codec did NOT change on a cross-family write — confirms the OBSERVED LIMITATION above, but the captured window itself was burst noise (see docs/settings.md §6). 2026-07-20 examples/change_codec.py run #1 (docs/settings.md §8): two set_codec_quality() calls both raised BMDVerificationError('no echo received') — a METHODOLOGICAL ARTIFACT, not a protocol failure: each requested the exact (codec_id, variant_id) the camera's own 0x0A/0x00 report had just shown it already at (a video_format switch resets/restores quality to a per-codec-family remembered value), and the camera only reports 0x0A/0x00 on an actual applied change — the same 'redundant command produces no echo' behavior already documented for record_stop() (docs/recording.md). 2026-07-20 examples/change_codec.py run #2 (set_camera_format(\"ProRes\", \"422\", \"4K DCI\", \"25\"), docs/settings.md §10): FIRST GENUINE CONFIRMATION. TX FF 06 00 00 0A 00 01 00 02 01 (codec_id=2/ProRes, variant_id=1/422) sent right after a video_format switch had reset quality to HQ(0) — a real change this time, since 422 != HQ. RX FF 06 00 00 0A 00 01 02 02 01 arrived ~200ms later: codec_id=2, variant_id=1 — exact match. This promotes the family to VERIFIED: the write mechanism, echo channel (0x0A/0x00, operation CAMERA_REPORT), and CameraSession.set_codec_quality()'s own verification logic are now confirmed on real hardware. Only 1/1 cycle so far (unlike video_format's 2/2) — a repeat run would strengthen further but isn't required to promote past CANDIDATE, matching how video_format was promoted on real, unambiguous evidence rather than a fixed cycle count."
+      }
+    },
+    "video_format": {
+      "category": 1,
+      "parameter": 0,
+      "data_type": "INT8",
+      "reserved": 1,
+      "provenance": {
+        "status": "VERIFIED",
+        "method": "external reverse-engineering document (CODEC_RES_FPS_6K_G2.docx) for the original byte layout; report-side coordinates and dimension_enum table confirmed by this repo's own passive and active captures (sniffer_settings.py, send_settings_command.py --dimension-enum); write side confirmed through CameraSession.set_video_format() itself via examples/change_codec.py, 2/2 real-hardware switches echo-verified",
+        "capture_refs": [
+          "tools/captures/POCKET_6K_G2_v7.9/POCKET_6K_G2_v7.9_20260720T103044.json (local, gitignored)",
+          "tools/captures/POCKET_6K_G2_v7.9/ — 16 files timestamped 20260720T1527xx through T1541xx, one per --dimension-enum probe (local, gitignored, see docs/settings.md §7 for the full list)",
+          "examples/change_codec.py console log, 2026-07-20 (not saved to tools/captures/ — this example doesn't call save_capture; see docs/settings.md §8)"
+        ],
+        "verified_on": "2026-07-20",
+        "notes": "The FORMAT packet: five int8 elements [fps_int, m_rate, dimension_enum, 0, 0] (13-byte packet, e.g. FF 09 00 01 01 00 01 00 19 00 08 00 00 for 25 fps 4K DCI/BRAW). dimension_enum encodes resolution AND codec family together (see `resolutions.*.dimension_enums`) — this is the packet that actually switches BRAW <-> ProRes; codec_quality alone does not. Parameter is 0x00 (spec 1.0 Video Mode int8 x5), NOT 0x09. The two trailing zero elements are unexplained — hypothesis: the spec's interlaced and colorspace video-mode elements. 2026-07-20 passive capture: NO report on 0x01/0x00 appeared in any window, INCLUDING body-initiated BRAW<->ProRes switches — the camera reports settings state via 0x01/0x09 and 0x0A/0x00 instead. 2026-07-20 dimension_enum probe sweep (send_settings_command.py --dimension-enum, docs/settings.md §7): all 8 enums already in `resolutions.*.dimension_enums` (0x03,0x06,0x08,0x0D,0x0F,0x12,0x13,0x14) each produced an exact decoded width/height/codec-family match; 0x01,0x02,0x04,0x05,0x07,0x09,0x10,0x11 all produced NO change (0x10 specifically refuted an earlier '3.7K Anamorphic alt' guess, removed from `resolutions`). Mechanistic insight: the camera issues a 0x01/0x09 status reflection after ANY video_format write, valid or not — not an ack/error signal, just 'here is my current state.' 2026-07-20 SESSION-PATH CONFIRMATION (examples/change_codec.py, docs/settings.md §8): CameraSession.set_video_format() itself — not the raw send tool — completed 2/2 real-hardware switches with its own echo verification passing: 'ProRes UHD @ 25' (TX ...19 00 06 00 00, confirmed via the 1/9 mode-notify channel decoding to 3840x2160, plus a 10/0 report of ProRes/HQ) and 'BRAW 4K DCI @ 25' (TX ...19 00 08 00 00, confirmed via 1/9 decoding to 4096x2160, plus 10/0 reporting BRAW/5:1). This is the round trip that promotes the family to VERIFIED — the write mechanism, echo channel, and CameraSession's own verification logic are all now confirmed on real hardware, not just the raw tool. REMAINING GAP (does not block this status): 4K DCI under ProRes has no known dimension_enum. The near-range search is now exhausted — 0x0A, 0x0B, 0x0C, 0x15, 0x16 were also probed (operator-reported 2026-07-20, no capture log retained) and none produced it, on top of the full 0x01-0x14 sweep in §7. Either the enum lies well outside this cluster or 4K DCI/ProRes isn't reachable via a single dimension_enum byte at all — set_video_format(\"4K DCI\", \"ProRes\", ...) continues to raise a clear ValueError pointing here rather than guessing (design principle 6). BUG FOUND AND FIXED 2026-07-20 (examples/change_codec.py run via set_camera_format, docs/settings.md §10): a set_video_format call whose (resolution, fps) exactly matches what's already active — only the codec family differs, e.g. switching 4K DCI/ProRes -> 4K DCI/BRAW — produced a mode-notify (1/9) report byte-identical to what NotificationRouter had already seen (since 1/9 doesn't encode codec at all), so the router's stale-duplicate filter discarded the genuinely fresh report and the call spuriously raised BMDVerificationError, even though a 0x0A/0x00 report confirming the new codec family (BRAW, 5:1) arrived on the wire well within the timeout. Fixed by also arming and watching the codec_quality coordinates (0x0A/0x00, when the profile has that block) as a third confirmation channel — a codec-only switch always changes THAT channel's content even when it can't change 1/9's. See CameraSession.set_video_format's docstring for the full mechanism."
+      }
+    },
+    "recording_format": {
+      "category": 1,
+      "parameter": 9,
+      "data_type": "INT16_ARRAY",
+      "reserved": 1,
+      "echo_operation": 2,
+      "provenance": {
+        "status": "VERIFIED",
+        "method": "external reverse-engineering document (CODEC_RES_FPS_6K_G2.docx) for the original byte layout; report-side coordinates confirmed by this repo's own passive capture (sniffer_settings.py); write side (including the claimed 0x82 data-type byte) confirmed through CameraSession.set_recording_format() itself via examples/change_codec.py's set_camera_format(), 1/1 real-hardware cycle echo-verified",
+        "capture_refs": [
+          "tools/captures/POCKET_6K_G2_v7.9/POCKET_6K_G2_v7.9_20260720T103044.json (local, gitignored)",
+          "examples/change_codec.py console log, 2026-07-20 16:48 run (not saved to tools/captures/ — this example doesn't call save_capture; see docs/settings.md §10)"
+        ],
+        "verified_on": "2026-07-20",
+        "notes": "Five little-endian int16 elements [fps_int, sensor_fps_int, width, height, frame_flags] (18-byte packet, e.g. FF 0E 00 01 01 09 82 00 19 00 19 00 00 10 70 08 10 00 for 25 fps 4096x2160). data_type 0x82 (INT16_ARRAY) is the claimed WRITE byte — the camera's own 0x01/0x09 reports carry data-type byte 0x02 (plain INT16) instead, sniffer-confirmed 2026-07-20 along with the exact element order (e.g. 32 00 32 00 00 10 70 08 10 00 = 50fps 4096x2160 flags 0x0010; 3C 00 3C 00 00 18 00 0A 13 00 = 59.94 6144x2560 flags 0x0013). NEW from that capture: flags 0x0000 reported at 6K 3:2 (full sensor) — so 0x0010 is NOT a plain 'exact rate' marker; the three observed values (0x0000/0x0010/0x0013) decode exactly as the official 1.9 flags bitfield (bit0 file-M-rate, bit1 sensor-M-rate, bit4 windowed), making the windowed bit resolution-dependent. `fps_modes.frame_flags` still stores the values as transcribed (valid for windowed resolutions); writing 6K 3:2 may need 0x0000. 2026-07-20 active send (pre-connect-settle-fix): operator confirmed both resolution and fps changed, but the captured window was burst noise — see docs/settings.md §6. 2026-07-20 dimension_enum probe sweep (post-fix, docs/settings.md §7): the 6K 3:2 flags-0x0000 finding was INDEPENDENTLY RE-CONFIRMED at a different fps (25fps here vs 50fps in the first sighting) via a clean decoded 0x01/0x09 report — the windowed-bit hypothesis now has two independent confirmations. 2026-07-20 SESSION-PATH CONFIRMATION (examples/change_codec.py, set_camera_format(\"ProRes\", \"422\", \"4K DCI\", \"25\"), docs/settings.md §10): the first genuine `set_recording_format` write+echo cycle, with the actual 0x82 write byte. TX FF 0E 00 01 01 09 82 00 19 00 19 00 00 10 70 08 10 00 (fps=25, width=4096, height=2160, flags=0x0010) sent right after codec_quality's confirmation, while the camera was sitting at UHD (from the video_format proxy step) — a genuine resolution change, not a no-op. RX FF 0E 00 00 01 09 02 02 19 00 19 00 00 10 70 08 10 00 arrived ~120ms later, decoding to exactly (25, 4096, 2160) — exact match, and its flags element (0x0010) also matches the fps_modes table's transcribed value for a windowed resolution. This promotes the family to VERIFIED: the write mechanism (including the CANDIDATE 0x82 byte, now confirmed accepted), echo channel, and CameraSession.set_recording_format()'s own verification logic are all now confirmed on real hardware. Only 1/1 cycle so far (unlike video_format's 2/2) — a repeat run, and one at 6K 3:2 specifically to settle the frame_flags=0x0000 write case, would strengthen further but aren't required to promote past CANDIDATE. sensor_fps_int still defaults to fps_int (off-speed unexplored)."
+      }
     }
+  },
+  "codecs": {
+    "_comment": "CANDIDATE — transcribed from CODEC_RES_FPS_6K_G2.docx; provenance rides with commands.codec_quality. Variant ids are per-codec. BRAW variant id 6 is unobserved (gap between 12:1 at 5 and Q1 at 7) — do not invent it.",
+    "BRAW": {
+      "id": 3,
+      "variants": {
+        "Q0": 0,
+        "Q5": 1,
+        "3:1": 2,
+        "5:1": 3,
+        "8:1": 4,
+        "12:1": 5,
+        "Q1": 7,
+        "Q3": 8
+      }
+    },
+    "ProRes": {
+      "id": 2,
+      "variants": {
+        "HQ": 0,
+        "422": 1,
+        "LT": 2,
+        "Proxy": 3
+      }
+    }
+  },
+  "resolutions": {
+    "_comment": "provenance rides with commands.video_format / commands.recording_format. dimension_enums are keyed per codec because the enum locks resolution and codec family together. All 8 dimension_enums below are now CONFIRMED (2026-07-20 dimension_enum probe sweep, docs/settings.md §7): each was sent via send_settings_command.py --dimension-enum and produced a decoded 0x01/0x09 report whose width/height matches exactly, plus a 0x0A/0x00 codec-family report matching the listed codec — not just the original external-document transcription. 4K DCI is the only resolution offered under both codecs, but only its BRAW enum is known — the ProRes one was searched for across the ENTIRE 0x01-0x16 range (0x01-0x14 in the probe sweep, plus 0x0A/0x0B/0x0C/0x15/0x16 operator-probed 2026-07-20, not captured to a log — see commands.video_format.provenance) and NOT found. The near-cluster search is now exhausted; it may lie well outside this range, or may not be reachable via a single dimension_enum at all. A previously-recorded second entry for 3728x3104 ('3.7K Anamorphic alt', enum 0x10) was REMOVED 2026-07-20: 0x10 was probed and produced no state change at all (not a valid resolution selector), refuting that hypothesis. 2026-07-20 captures also showed frame_flags 0x0000 reported at 6K 3:2 (both @ 50fps and @ 25fps, two independent sessions) vs 0x0010 at every other resolution — the 0x10 bit looks like the spec's resolution-dependent 'windowed' flag, see commands.recording_format.provenance.",
+    "6K 3:2": { "width": 6144, "height": 3456, "codecs": ["BRAW"], "dimension_enums": { "BRAW": 19 } },
+    "6K 2.4:1": { "width": 6144, "height": 2560, "codecs": ["BRAW"], "dimension_enums": { "BRAW": 20 } },
+    "5.7K 17:9": { "width": 5744, "height": 3024, "codecs": ["BRAW"], "dimension_enums": { "BRAW": 18 } },
+    "4K DCI": { "width": 4096, "height": 2160, "codecs": ["BRAW", "ProRes"], "dimension_enums": { "BRAW": 8 } },
+    "3.7K Anamorphic": { "width": 3728, "height": 3104, "codecs": ["BRAW"], "dimension_enums": { "BRAW": 15 } },
+    "2.8K 17:9": { "width": 2868, "height": 1512, "codecs": ["BRAW"], "dimension_enums": { "BRAW": 13 } },
+    "UHD": { "width": 3840, "height": 2160, "codecs": ["ProRes"], "dimension_enums": { "ProRes": 6 } },
+    "HD": { "width": 1920, "height": 1080, "codecs": ["ProRes"], "dimension_enums": { "ProRes": 3 } }
+  },
+  "fps_modes": {
+    "_comment": "CANDIDATE — transcribed from CODEC_RES_FPS_6K_G2.docx; provenance rides with commands.video_format / commands.recording_format. fps_int is shared by both packet families; m_rate is video_format's flag (0 exact, 1 NTSC/drop); frame_flags is recording_format's int16 as transcribed (0x0010 'exact', 0x0013 'NTSC/drop'). CAVEAT (2026-07-20 capture): the 0x10 bit appears to be the spec's resolution-dependent 'windowed' flag, not part of the fps encoding — the camera reported 0x0000 at 6K 3:2; these values hold as-written for windowed resolutions only. See commands.recording_format.provenance.",
+    "23.98": { "fps_int": 24, "m_rate": 1, "frame_flags": 19 },
+    "24": { "fps_int": 24, "m_rate": 0, "frame_flags": 16 },
+    "25": { "fps_int": 25, "m_rate": 0, "frame_flags": 16 },
+    "29.97": { "fps_int": 30, "m_rate": 1, "frame_flags": 19 },
+    "30": { "fps_int": 30, "m_rate": 0, "frame_flags": 16 },
+    "50": { "fps_int": 50, "m_rate": 0, "frame_flags": 16 },
+    "59.94": { "fps_int": 60, "m_rate": 1, "frame_flags": 19 },
+    "60": { "fps_int": 60, "m_rate": 0, "frame_flags": 16 }
   },
   "storage": {
     "write_margin_warning": {
@@ -51,7 +149,7 @@
       "provenance": {
         "status": "CANDIDATE",
         "method": "passive observation from examples/record_start_stop.py real-hardware logs during induced SD card slow-write-speed testing",
-        "notes": "Raw bytes FF 07 00 00 09 01 01 02 00 FE 00. Payload byte at offset 1 flips 0x01 (nominal) -> 0xFE (-2, low_margin) 0.1-1.4s before every autonomous unexpected stop observed on a known-slow SD card — 6/6 occurrences, 3 cycles x 2 camera models (POCKET_6K_G2 v7.9, POCKET_6K_PRO v8.6). Never -2 in 7 unrelated normal-session logs, where this notification fires once per session and stays 0x01. Payload offsets 0 and 2 are constant (0x00) in every sample, both conditions. NOT yet isolated from other possible autostop causes (card full, card removed, power loss) — 'slow write speed' is inference from test context, not read off the wire alone. See docs/recording.md's 'Camera-initiated stop detection' section."
+        "notes": "Raw bytes FF 07 00 00 09 01 01 02 00 FE 00. Payload byte at offset 1 flips 0x01 (nominal) -> 0xFE (-2, low_margin) 0.1-1.4s before every autonomous unexpected stop observed on a known-slow SD card — 6/6 occurrences, 3 cycles x 2 camera models (POCKET_6K_G2 v7.9, POCKET_6K_PRO v8.6). Never -2 in 7 unrelated normal-session logs, where this notification fires once per session and stays 0x01. Payload offsets 0 and 2 are constant (0x00) in every sample, both conditions. NOT yet isolated from other possible autostop causes (card full, card removed, power loss) — 'slow write speed' is inference from test context, not read off the wire alone. CAVEAT ADDED 2026-07-20 (docs/settings.md §7's dimension_enum probe sweep): this same -2/low_margin reading appeared in essentially every one of that sweep's ~18 connect cycles over roughly 15 minutes, with no recording ever active — i.e. it can persist as a steady state for extended periods outside any recording context, not just as a brief pre-stop warning. This further weakens (does not disprove) a simple 'low_margin predicts an imminent autostop' reading — it may instead reflect a per-(card, resolution/bitrate) threshold that happens to sit below nominal for this SD card at the BRAW resolutions used in that sweep, unrelated to recording at all. Recurred again in the same session's examples/change_codec.py run (2026-07-20, docs/settings.md §8) immediately after a switch to ProRes/UHD — a different codec family from the BRAW resolutions above, so the persistence isn't specific to one codec either — further supporting a persistent per-card threshold reading over a brief pre-stop-only one. See docs/recording.md's 'Camera-initiated stop detection' section."
       }
     }
   }

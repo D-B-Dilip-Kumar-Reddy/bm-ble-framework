@@ -131,6 +131,145 @@ attempting to build or send a command — used by
 on an unpopulated profile. See `docs/payload_profiles.md` for the profile
 structure.
 
+### Settings writes (`set_codec_quality` / `set_video_format` / `set_recording_format`)
+
+The three settings methods follow the same profile-driven
+arm-write-await-echo pattern as recording, against the packet families in
+`docs/settings.md` (which also tabulates exactly which decoded payload
+elements each method compares, and which it deliberately doesn't). All
+three are now confirmed VERIFIED on real hardware through `CameraSession`
+itself, not just a raw send tool: `set_video_format` via 2/2 round trips
+(`docs/settings.md` §8), `set_codec_quality` and `set_recording_format`
+via one genuine cycle each, surfaced by `set_camera_format`'s proxy path
+(`docs/settings.md` §10). Two deviations from the recording flow:
+
+- **`set_video_format` arms three echo channels.** Its own `0x01/0x00`
+  (never observed to fire in practice), the recording-format coordinates
+  `0x01/0x09` ("mode-notify"), and — added after a real bug, below — the
+  `codec_quality` coordinates `0x0A/0x00`. A `_wait_first_echo` helper runs
+  one `NotificationRouter.wait_for` task per armed key concurrently and
+  takes the first fresh delivery from any, cancelling the rest; each
+  channel's payload is decoded per its own family (the `0x0A/0x00` branch
+  only checks the reported `codec_id`, since this method takes no
+  `variant` argument to compare against). All keys are armed *before* the
+  write, per the router's usual staleness contract.
+
+  **Why three, not two — a real bug found on real hardware
+  (`docs/settings.md` §10):** the mode-notify payload encodes
+  fps/width/height only, never codec. A `set_video_format` call that
+  changes *only* the codec family (same resolution and fps — e.g. 4K
+  DCI/ProRes → 4K DCI/BRAW) produces a mode-notify report byte-identical
+  to what `NotificationRouter` already saw before the write, so its
+  stale-duplicate filter (see `NotificationRouter`'s own docstring below —
+  it exists to protect other families from genuine retransmit duplicates,
+  and is not being weakened) discards the fresh report, and the call
+  spuriously raised `BMDVerificationError` even though the camera's
+  `0x0A/0x00` report (which reliably follows *every* `video_format` write,
+  confirmed since `docs/settings.md` §8) carried real confirmation the
+  whole time. Watching that channel too closes the gap: a codec-only
+  switch always changes what it reports, even when it can't change
+  mode-notify's content.
+- **Precondition failures raise before any write.** `BMDUnsupportedError`
+  (its first use in the repo — CLAUDE.md design principle 7) when the
+  profile says the camera doesn't offer the requested codec at that
+  resolution; `ValueError` pointing at the capture workflow when the
+  combination is supported but its `dimension_enum` hasn't been
+  reverse-engineered yet.
+
+`set_codec_quality` had a confirmed false-positive mode independent of the
+bug above: real hardware showed the camera's `0x0A/0x00` report only fires
+on an *actual applied change* — a call requesting the (codec, variant) the
+camera is already at (easy to hit right after a `set_video_format` switch,
+since each codec family remembers its own last-set quality independently)
+produces no report at all. This recurred predictably in
+`examples/change_codec.py` and is now fixed for real, not just
+documented: `CameraSession` tracks `last_known_codec_variant: tuple[int,
+int] | None`, updated only from a decoded `codec_quality`-category
+notification (design principle 4 — never set from "we sent a command")
+via a new `_observe_codec_quality` watcher wired into `_handle_incoming`
+exactly like `is_recording`'s tracker. `set_codec_quality` checks it
+first and returns immediately — no write, no wait — when the target
+`(codec_id, variant_id)` is already known, mirroring `record_stop()`'s
+`is_recording is False` early return precisely. The guard only fires once
+a prior notification (from any source: a body-initiated change, an
+earlier `set_codec_quality` echo, or `set_video_format`'s own confirmation
+landing on this channel) has proven the state; a session's first
+`set_codec_quality` call, before any such report has arrived, still
+writes and waits normally, and the original `BMDVerificationError`
+message remains for that case. `set_camera_format` inherits the
+mitigation automatically, with no changes needed there. See
+`docs/settings.md` §8, §10, §11.
+
+**The same no-echo-on-redundant-write behavior was confirmed for
+`video_format` and `recording_format` too (2026-07-21, `docs/settings.md`
+§14: 7/7 and 5/5 real-hardware `--repeat 2` captures)** — requesting a
+`(resolution, fps)` or `(resolution, codec, fps)` the camera is already in
+produces no report on any watched channel, exactly like `codec_quality`.
+Both are now guarded the same way: a new `last_known_recording_format:
+tuple[int, int, int] | None` field (`fps_int, width, height`; deliberately
+excludes `sensor_fps_int`/`frame_flags`, matching what verification
+already compares) is updated by a new `_observe_recording_format` watcher.
+Because `set_video_format`'s mode-notify confirmation shares the exact
+same `(category, parameter)` as `recording_format`'s own echo, this one
+field is updated by either write — `set_recording_format` checks it alone,
+while `set_video_format` checks it together with `last_known_codec_variant`
+(its codec_id) rather than tracking video_format's own three-way state
+separately. Both guards mirror `set_codec_quality`'s exactly: return
+immediately, no write, no wait, only once a prior notification has proven
+the state. See `docs/settings.md` §14.
+
+**`set_camera_format(codec, variant, resolution, fps)`** orchestrates the
+three methods above from one combination, so a caller doesn't need to know
+which packet does which part. It sequences `set_video_format` →
+`set_codec_quality` → `set_recording_format`, adding no verification of
+its own — a failure at any step raises from that step and later steps
+don't run. Its only real logic is choosing what to pass `set_video_format`:
+the caller's real target resolution when a `dimension_enum` is known for
+it, or (currently only 4K DCI/ProRes) the pixel-dimension-closest
+resolution that *does* have one, via a private `_closest_reachable_resolution`
+helper — `set_recording_format`'s closing call still targets the caller's
+real resolution either way, since that packet encodes raw width/height
+rather than a codec-locked enum. Full design rationale and the real-hardware
+evidence behind the two-step workaround: `docs/settings.md` §9.
+
+**Before any of those three steps run, `set_camera_format` also checks the
+target resolution's `known_unreachable` map** (added 2026-07-24, see
+`docs/payload_profiles.md`): a codec listed there for that resolution is one
+the camera demonstrably supports (confirmed reachable through its own body
+menu) but that every write-value hypothesis this codebase has tried still
+cannot reach over BLE — `POCKET_6K_PRO v8.6`'s ProRes/4K DCI gap
+(`docs/settings.md` §16) is the first and so far only entry. If the
+requested `(codec, resolution)` pair is listed, this raises
+`BMDUnsupportedError` immediately, before connecting to any write path,
+quoting the profile's own evidence note — a fast, clear failure instead of
+burning a full three-step sequence (each with its own echo-timeout wait) on
+a combination already known to fail. This is deliberately a *separate* check
+from `resolution_spec.codecs`'s existing hardware-capability check just
+above it in the method: `codecs` says what the camera can do, `known_
+unreachable` says what this codebase's write path currently can't do to
+reach it — a combination can be in both `codecs` and `known_unreachable` at
+once, and always is when this check fires.
+
+**A different capability check lives directly in `set_video_format` and
+`set_recording_format` themselves, not just the orchestration method**:
+`resolution_spec.max_fps_int` (added 2026-07-24, see `docs/payload_profiles.md`)
+is a real hardware fps ceiling — `POCKET_6K_PRO v8.6`'s `"6K"` resolution
+tops out at 50, confirmed both by `sweep_camera_format.py`'s first
+production run (all 8 BRAW variants unconfirmed at 59.94/60fps, every other
+fps confirming cleanly) and independently by the operator checking the
+camera's own UI, which doesn't offer those fps values at 6K either. Both
+methods take `(resolution, fps)` directly and can be called without going
+through `set_camera_format` at all, so unlike `known_unreachable` (checked
+only in the orchestration method), this check lives in both — a requested
+fps whose `fps_int` exceeds the resolution's ceiling raises
+`BMDUnsupportedError` immediately, before any write, in either method
+independently. The two checks answer different questions and read
+differently in an error message on purpose: `known_unreachable` says the
+camera supports this but this codebase's writes can't reach it;
+`max_fps_int` says the camera itself doesn't support this combination at
+all — never write into `known_unreachable` something that's actually a
+`max_fps_int` case, or vice versa.
+
 ### Timecode tracking and clip duration
 
 `__aenter__` also subscribes `TIMECODE`, storing the latest decoded reading

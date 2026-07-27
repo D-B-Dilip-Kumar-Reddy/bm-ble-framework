@@ -32,6 +32,25 @@ It is model- and command-agnostic: nothing recording-specific is hardcoded.
 results — the same tool sweeps recording on a Pocket 6K Pro today and, say,
 still-capture on an URSA later.
 
+**Known limitation — scalar payloads only.** The sweep generates
+single-value ASSIGN payloads (`encode_assign`), so it cannot probe the
+multi-element settings families (codec_quality's id pair, video_format's
+five int8 elements, recording_format's five int16s — `docs/settings.md`).
+For those, seed the coordinates and value tables from a
+`tools/sniffers/sniffer_settings.py` capture, transcribe them into the
+profile as CANDIDATE, and confirm by sending the fully-formed packet with
+`tools/control/send_settings_command.py` instead.
+
+For the specific case of sweeping many `video_format` `dimension_enum`
+candidates against one already-known (category, parameter, data_type) —
+this tool's per-candidate re-scan/re-connect and operator-eyeball match
+detection don't scale to an exhaustive search — `tools/control/
+sweep_dimension_enum.py` is the sibling tool: one connected session, every
+candidate decoded straight off the wire (`recording_format`/`codec_quality`
+reports), with automated match detection against a target resolution/codec.
+See `docs/active_camera_control.md`'s section on it and `docs/settings.md`
+§16 for the case that motivated it.
+
 ---
 
 ## Module split: pure logic vs interactive driver
@@ -111,6 +130,75 @@ unfamiliar camera the echo may not decode at all (`decode_packet` rejects
 unknown operation/data-type bytes; the capture still records the raw hex
 with a `decode_error`). A confirmed outcome without a decodable echo simply
 emits a block without `echo_operation` — the schema permits that.
+
+**Known latent risk — connect-settle race.** This tool writes the first
+candidate immediately after connecting, with no wait for the camera's
+post-connect initial-payload burst to drain (the same hazard
+`CameraSession.connect_settle_s` exists for — see
+`docs/session_and_verification.md`). `tools/control/send_settings_command.py`
+hit exactly this on real hardware 2026-07-20 (`docs/settings.md` §6): its
+first three captures showed the initial burst instead of a response to the
+write, and it was fixed there with a `--connect-settle-seconds` wait. This
+tool has not needed the same fix yet — every candidate after the first
+naturally waits out `--listen-seconds` plus operator think-time before the
+next write, so only the very first candidate is at risk, and the operator's
+own eyes (not the echo) are ground truth anyway. Worth the same fix if a
+future sweep's first-candidate echo looks suspiciously like unrelated
+camera state.
+
+**Sibling tool note.** `send_settings_command.py` gained a `--repeat N`
+flag (2026-07-21) for a different discovery question than this tool
+answers: not "what command produces this effect" but "does this
+already-verified command echo when it's a redundant no-op" (see
+`docs/settings.md` §13 and `docs/active_camera_control.md`). This tool has
+no equivalent flag — a discovery sweep's candidates are, by construction,
+rarely repeats of the same value, so the redundant-write question doesn't
+arise here the way it does when replaying one known command twice.
+`send_settings_command.py` also gained a `--data-type NAME` override
+(2026-07-23, `docs/settings.md` §3/§16, later ruled out on real hardware),
+a `--video-format-extra E1 E2` override (2026-07-24, `docs/settings.md`
+§16, also ruled out) for probing `video_format`'s unexplained trailing
+payload elements, an `--operation NAME` override (2026-07-24,
+`docs/settings.md` §16, tried on real hardware for the absolute-payload
+case and ruled out — see the next entry for why that's not the whole
+story) for probing the `Operation.OFFSET` write, and a `--raw-payload
+VALUE [VALUE ...]` override (2026-07-24, `docs/settings.md` §16, tried on
+real hardware and also ruled out) that bypasses the profile's lookup
+tables entirely to send a literal element sequence — built specifically
+to test `OFFSET`'s documented delta semantics (`docs/protocol.md` §4),
+which an absolute-target payload can't do, and the delta test came back
+with the identical zero-response signature — four unrelated discovery
+axes (wire byte, extra payload elements, operation byte, raw payload —
+not command bytes), noted here only because the hook that requires
+touching this file on any `tools/control/*` change applies to them too.
+Every hypothesis this investigation raised for the PRO's ProRes/4K DCI
+gap is now exhausted (`docs/settings.md` §16) and accepted as a guarded
+software capability gap (`resolutions."4K DCI".known_unreachable.ProRes`,
+`docs/payload_profiles.md`). `discover_command.py`
+itself still has no equivalent: its `CandidateCommand.encode()` always
+uses `Operation.ASSIGN` via `encode_assign`'s (now overridable, but
+unused-by-default) `operation` parameter.
+
+A different kind of sibling tool, `tools/control/sweep_camera_format.py`
+(2026-07-24, `docs/active_camera_control.md`), exists precisely because that
+gap was found by accident rather than by systematic checking: it runs
+`CameraSession.set_camera_format()` — the real production API, not a raw
+protocol send like every tool above — across every `(codec, variant,
+resolution, fps)` combination a profile claims to support, to surface
+candidates for future `known_unreachable` entries before a caller hits one
+in production. Noted here only because the `tools/control/*` doc-sync hook
+applies to it too; it answers a different question than command discovery
+("does this already-populated command family actually work for every
+claimed combination", not "what command produces this effect" — no
+`CandidateCommand` sweep involved at all).
+
+Its first real-hardware run (2026-07-24, `docs/settings.md` §17) found a
+genuine camera hardware limit (`POCKET_6K_PRO v8.6`'s `"6K"` resolution
+capped at 50fps, now `resolutions.6K.max_fps_int`, excluded from this
+tool's default sweep like `known_unreachable`) and a false negative in the
+tool's own default echo timeout (fixed by raising `--echo-timeout-seconds`
+from 3.0 to 6.0) — same doc-sync-hook note as above, no `CandidateCommand`
+involvement either.
 
 ---
 

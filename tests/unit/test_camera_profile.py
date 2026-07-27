@@ -388,6 +388,271 @@ class TestRequireStorageSignal:
             profile.require_storage_signal("write_margin_warning", ("nominal", "low_margin"))
 
 
+def make_valid_raw_with_settings(**overrides) -> dict:
+    """`make_valid_raw` plus schema-valid settings command blocks and the
+    codecs/resolutions/fps_modes lookup tables they consume."""
+    raw = make_valid_raw(
+        codecs={
+            "BRAW": {"id": 3, "variants": {"Q0": 0, "5:1": 3}},
+            "ProRes": {"id": 2, "variants": {"HQ": 0}},
+        },
+        resolutions={
+            "4K DCI": {
+                "width": 4096,
+                "height": 2160,
+                "codecs": ["BRAW", "ProRes"],
+                "dimension_enums": {"BRAW": 8},
+            }
+        },
+        fps_modes={"25": {"fps_int": 25, "m_rate": 0, "frame_flags": 16}},
+    )
+    raw["commands"]["codec_quality"] = {
+        "category": 10,
+        "parameter": 0,
+        "data_type": "INT8",
+        "reserved": 0,
+        "provenance": {"status": "CANDIDATE"},
+    }
+    raw.update(overrides)
+    return raw
+
+
+class TestSettingsSections:
+    def test_command_block_without_values_resolves_to_empty_map(self):
+        profile = CameraProfile._from_raw("POCKET_6K_G2", "v7.9", make_valid_raw_with_settings())
+
+        spec = profile.require_command("codec_quality")
+        assert spec.values == {}
+        assert spec.reserved == 0
+
+    def test_schema_accepts_command_block_without_values(self):
+        validate_profile(make_valid_raw_with_settings(), source="test.json")
+
+    def test_resolves_codec_spec(self):
+        profile = CameraProfile._from_raw("POCKET_6K_G2", "v7.9", make_valid_raw_with_settings())
+
+        codec = profile.require_codec("BRAW", "5:1")
+        assert codec.id == 3
+        assert codec.variants["5:1"] == 3
+
+    def test_resolves_resolution_spec(self):
+        profile = CameraProfile._from_raw("POCKET_6K_G2", "v7.9", make_valid_raw_with_settings())
+
+        resolution = profile.require_resolution("4K DCI")
+        assert (resolution.width, resolution.height) == (4096, 2160)
+        assert resolution.codecs == ("BRAW", "ProRes")
+        assert resolution.dimension_enums == {"BRAW": 8}
+        assert resolution.known_unreachable == {}
+        assert resolution.max_fps_int is None
+
+    def test_resolves_resolution_max_fps_int(self):
+        raw = make_valid_raw_with_settings()
+        raw["resolutions"]["4K DCI"]["max_fps_int"] = 50
+        profile = CameraProfile._from_raw("POCKET_6K_G2", "v7.9", raw)
+
+        resolution = profile.require_resolution("4K DCI")
+        assert resolution.max_fps_int == 50
+
+    def test_resolves_resolution_known_unreachable(self):
+        raw = make_valid_raw_with_settings()
+        raw["resolutions"]["4K DCI"]["known_unreachable"] = {"ProRes": "evidence note"}
+        profile = CameraProfile._from_raw("POCKET_6K_G2", "v7.9", raw)
+
+        resolution = profile.require_resolution("4K DCI")
+        assert resolution.known_unreachable == {"ProRes": "evidence note"}
+
+    def test_known_unreachable_comment_keys_are_skipped(self):
+        raw = make_valid_raw_with_settings()
+        raw["resolutions"]["4K DCI"]["known_unreachable"] = {
+            "ProRes": "evidence note",
+            "_comment": "skip me",
+        }
+        profile = CameraProfile._from_raw("POCKET_6K_G2", "v7.9", raw)
+
+        resolution = profile.require_resolution("4K DCI")
+        assert resolution.known_unreachable == {"ProRes": "evidence note"}
+
+    def test_resolves_fps_mode_spec(self):
+        profile = CameraProfile._from_raw("POCKET_6K_G2", "v7.9", make_valid_raw_with_settings())
+
+        fps = profile.require_fps_mode("25")
+        assert (fps.fps_int, fps.m_rate, fps.frame_flags) == (25, 0, 16)
+
+    def test_require_codec_raises_naming_known_codecs(self):
+        profile = CameraProfile._from_raw("POCKET_6K_G2", "v7.9", make_valid_raw_with_settings())
+
+        with pytest.raises(ValueError, match="no codec 'H265'.*BRAW, ProRes"):
+            profile.require_codec("H265")
+
+    def test_require_codec_raises_naming_known_variants(self):
+        profile = CameraProfile._from_raw("POCKET_6K_G2", "v7.9", make_valid_raw_with_settings())
+
+        with pytest.raises(ValueError, match="no variant '12:1'"):
+            profile.require_codec("BRAW", "12:1")
+
+    def test_require_resolution_raises_naming_known_resolutions(self):
+        profile = CameraProfile._from_raw("POCKET_6K_G2", "v7.9", make_valid_raw_with_settings())
+
+        with pytest.raises(ValueError, match="no resolution 'UHD'.*4K DCI"):
+            profile.require_resolution("UHD")
+
+    def test_require_fps_mode_raises_naming_known_modes(self):
+        profile = CameraProfile._from_raw("POCKET_6K_G2", "v7.9", make_valid_raw_with_settings())
+
+        with pytest.raises(ValueError, match="no fps mode '23.98'.*25"):
+            profile.require_fps_mode("23.98")
+
+    def test_comment_keys_are_skipped_in_lookup_tables(self):
+        raw = make_valid_raw_with_settings()
+        raw["codecs"]["_comment"] = "skip me"
+        raw["resolutions"]["_comment"] = "skip me"
+        raw["fps_modes"]["_comment"] = "skip me"
+        profile = CameraProfile._from_raw("POCKET_6K_G2", "v7.9", raw)
+
+        assert set(profile.codecs) == {"BRAW", "ProRes"}
+        assert set(profile.resolutions) == {"4K DCI"}
+        assert set(profile.fps_modes) == {"25"}
+
+    def test_schema_rejects_codec_without_id(self):
+        raw = make_valid_raw_with_settings()
+        del raw["codecs"]["BRAW"]["id"]
+
+        with pytest.raises(ValueError, match="schema validation"):
+            validate_profile(raw, source="test.json")
+
+    def test_schema_rejects_resolution_with_unknown_key(self):
+        raw = make_valid_raw_with_settings()
+        raw["resolutions"]["4K DCI"]["dimension_enum"] = 8  # not the plural key
+
+        with pytest.raises(ValueError, match="schema validation"):
+            validate_profile(raw, source="test.json")
+
+    def test_schema_accepts_resolution_known_unreachable(self):
+        raw = make_valid_raw_with_settings()
+        raw["resolutions"]["4K DCI"]["known_unreachable"] = {"ProRes": "evidence note"}
+
+        validate_profile(raw, source="test.json")
+
+    def test_schema_rejects_known_unreachable_with_non_string_value(self):
+        raw = make_valid_raw_with_settings()
+        raw["resolutions"]["4K DCI"]["known_unreachable"] = {"ProRes": 123}
+
+        with pytest.raises(ValueError, match="schema validation"):
+            validate_profile(raw, source="test.json")
+
+    def test_schema_accepts_resolution_max_fps_int(self):
+        raw = make_valid_raw_with_settings()
+        raw["resolutions"]["4K DCI"]["max_fps_int"] = 50
+
+        validate_profile(raw, source="test.json")
+
+    def test_schema_rejects_max_fps_int_below_minimum(self):
+        raw = make_valid_raw_with_settings()
+        raw["resolutions"]["4K DCI"]["max_fps_int"] = 0
+
+        with pytest.raises(ValueError, match="schema validation"):
+            validate_profile(raw, source="test.json")
+
+    def test_schema_rejects_bad_m_rate(self):
+        raw = make_valid_raw_with_settings()
+        raw["fps_modes"]["25"]["m_rate"] = 2
+
+        with pytest.raises(ValueError, match="schema validation"):
+            validate_profile(raw, source="test.json")
+
+    def test_schema_accepts_int16_array_data_type(self):
+        raw = make_valid_raw_with_settings()
+        raw["commands"]["recording_format"] = {
+            "category": 1,
+            "parameter": 9,
+            "data_type": "INT16_ARRAY",
+            "reserved": 1,
+            "provenance": {"status": "CANDIDATE"},
+        }
+
+        validate_profile(raw, source="test.json")
+        profile = CameraProfile._from_raw("POCKET_6K_G2", "v7.9", raw)
+        assert profile.require_command("recording_format").data_type is DataType.INT16_ARRAY
+
+
+def test_pocket_6k_g2_profile_resolves_settings_blocks():
+    """POCKET_6K_G2_v7.9.json's settings families, originally transcribed
+    from an external reverse-engineering doc — see docs/settings.md. Spot-
+    check the load path end to end; all three are now VERIFIED on real
+    hardware (docs/settings.md §8/§10)."""
+    profile = CameraProfile.for_model("POCKET_6K_G2", "v7.9")
+
+    codec_quality = profile.require_command("codec_quality")
+    assert (codec_quality.category, codec_quality.parameter) == (10, 0)
+    assert codec_quality.reserved == 0
+    # Observed on the 2026-07-20 passive capture — camera reports use
+    # CAMERA_REPORT (0x02) on this family's coordinates.
+    assert codec_quality.echo_operation == 2
+    # Promoted 2026-07-20: CameraSession.set_codec_quality() confirmed a
+    # genuine (non-redundant) real-hardware write+echo cycle via
+    # examples/change_codec.py's set_camera_format().
+    assert codec_quality.provenance.status == "VERIFIED"
+
+    video_format = profile.require_command("video_format")
+    assert (video_format.category, video_format.parameter) == (1, 0)
+    assert video_format.reserved == 1
+    # The camera never reports on 1/0 (2026-07-20 capture) — no
+    # echo_operation may be recorded until a write-side echo is observed.
+    assert video_format.echo_operation is None
+    # Promoted 2026-07-20: CameraSession.set_video_format() itself confirmed
+    # 2/2 real-hardware switches via examples/change_codec.py, on top of the
+    # dimension_enum probe sweep's 8/8 byte-exact confirmations.
+    assert video_format.provenance.status == "VERIFIED"
+
+    recording_format = profile.require_command("recording_format")
+    assert (recording_format.category, recording_format.parameter) == (1, 9)
+    assert recording_format.data_type is DataType.INT16_ARRAY
+    assert recording_format.echo_operation == 2
+    # Promoted 2026-07-20: CameraSession.set_recording_format() confirmed a
+    # genuine write+echo cycle (including the CANDIDATE 0x82 data-type byte)
+    # via examples/change_codec.py's set_camera_format().
+    assert recording_format.provenance.status == "VERIFIED"
+
+    assert profile.require_codec("BRAW", "5:1").id == 3
+    assert profile.require_codec("ProRes", "HQ").id == 2
+    four_k = profile.require_resolution("4K DCI")
+    # ProRes enum still unknown — 0x01-0x16 all probed 2026-07-20, none matched.
+    assert four_k.dimension_enums == {"BRAW": 8}
+    assert profile.require_fps_mode("23.98").m_rate == 1
+    assert profile.require_fps_mode("23.98").fps_int == 24
+
+
+def test_pocket_6k_pro_profile_resolves_settings_blocks():
+    """POCKET_6K_PRO_v8.6.json's settings blocks/tables were populated from
+    this camera's own real captures (2026-07-21) — CLAUDE.md design
+    principle 6 requires that, never copied from the G2. All three command
+    blocks and the codecs/resolutions tables stay CANDIDATE (not VERIFIED)
+    until a full CameraSession write+echo round trip is attempted — see
+    docs/settings.md's PRO section."""
+    profile = CameraProfile.for_model("POCKET_6K_PRO", "v8.6")
+
+    for name in ("video_format", "codec_quality", "recording_format"):
+        spec = profile.require_command(name)
+        assert spec.provenance.status == "CANDIDATE"
+
+    codec_quality = profile.require_command("codec_quality")
+    assert (codec_quality.category, codec_quality.parameter) == (10, 0)
+    recording_format = profile.require_command("recording_format")
+    assert (recording_format.category, recording_format.parameter) == (1, 9)
+
+    assert profile.require_codec("BRAW", "5:1").id == 3
+    assert profile.require_codec("ProRes", "HQ").id == 2
+
+    four_k = profile.require_resolution("4K DCI")
+    # ProRes enum unknown here too — same open gap as the G2's 4K DCI/ProRes.
+    assert four_k.dimension_enums == {"BRAW": 8}
+    six_k = profile.require_resolution("6K")
+    assert (six_k.width, six_k.height) == (6144, 3456)
+    assert six_k.dimension_enums == {"BRAW": 19}
+
+    assert profile.require_fps_mode("50").fps_int == 50
+
+
 def test_pocket_6k_pro_profile_resolves_recording_command():
     """POCKET_6K_PRO_v8.6.json's recording block was populated via
     tools/control/discover_command.py on real hardware — must load and

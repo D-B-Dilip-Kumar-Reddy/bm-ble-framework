@@ -254,6 +254,40 @@ card-ready check, no remaining-capacity tracking, no `BMDStorageError`. See
 "Remaining work" below for the real-hardware follow-up that could resolve
 this.
 
+**A one-off sighting outside this context (2026-07-20, not treated as
+evidence):** a `send_settings_command.py --packet recording_format`
+capture (`docs/settings.md` §6) contained one `category=0x09 parameter=0x01`
+report reading `-2`/`low_margin`, with no recording in progress. This is
+*not* added to the correlation above: that capture window is confounded —
+it was taken before a connect-settle fix, so it's largely the camera's
+post-connect initial-payload burst rather than a response to anything
+this repo's tooling did, and the burst appears to include a full sweep of
+ambient state (this signal among many others) regardless of context. Worth
+re-checking if the signal turns up again in a clean (post-settle) capture,
+but a single contaminated-window sighting is not enough to broaden the
+"precedes a camera-initiated stop" correlation to "precedes any settings
+change."
+
+**Follow-up, now in clean captures (2026-07-20, `docs/settings.md` §7):**
+it did turn up again — repeatedly. A 16-run `--dimension-enum` probe
+sweep, taken entirely *after* the connect-settle fix above (so these
+captures are genuine responses, not burst noise), read `low_margin`/`-2`
+in essentially every one of its ~18 connect cycles across roughly 15
+minutes, with no recording ever active. That's a much longer, steadier
+persistence than the signal's original evidence (a brief 0.1–1.4s pre-stop
+warning). This doesn't disprove the original correlation — no autostop
+happened during the sweep either, so "low_margin" and "about to stop" are
+still not shown to be the same thing — but it does undercut reading
+`low_margin` as *itself* a short-fused warning. A steadier explanation fits
+better: this signal may reflect a per-(SD card, resolution/bitrate)
+threshold that this particular card sits below at the BRAW resolutions the
+sweep used, largely independent of whether anything is recording. Recorded
+in the profile's `storage.write_margin_warning.provenance.notes`; no
+change to `values` or to `CameraSession`'s behavior — the signal still
+only feeds `last_stop_signal` around an actual stop, and this doesn't
+change that logic, only the confidence in what a lone `low_margin` reading
+means in isolation.
+
 ---
 
 ## Remaining work

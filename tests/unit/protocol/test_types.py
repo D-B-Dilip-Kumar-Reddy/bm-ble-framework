@@ -39,6 +39,13 @@ class TestDataTypeValues:
         recording command/echo) decodes to INT8 under the official coding."""
         assert DataType(0x01) is DataType.INT8
 
+    def test_int16_array_is_the_candidate_recording_format_byte(self):
+        """0x82 (INT16_ARRAY) is a CANDIDATE wire value from the POCKET_6K_G2
+        v7.9 recording-format packet — not in the official spec coding."""
+        assert DataType.INT16_ARRAY == 0x82
+        assert DATA_TYPE_BYTE_WIDTHS[DataType.INT16_ARRAY] == 2
+        assert struct.calcsize(DATA_TYPE_STRUCT_FORMATS[DataType.INT16_ARRAY]) == 2
+
 
 class TestDataTypeByteWidths:
     """Tests for the ``DATA_TYPE_BYTE_WIDTHS`` lookup table."""
