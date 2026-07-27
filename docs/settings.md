@@ -628,7 +628,15 @@ RX (0x01/0x09): 19 00 19 00 00 18 80 0D 00 00
 here — at 25fps, in a completely separate session from §6's 50fps sighting
 — **independently reconfirms** §6's "windowed bit" finding: 6K 3:2 (the
 G2's only full-sensor mode) reports `0x0000` regardless of frame rate,
-while every other resolution here reports `0x0010`.
+while every other resolution here reports `0x0010`. A third, later
+reconfirmation arrived from an unrelated investigation entirely:
+`docs/photo_capture.md` §10.1's first Sensor Area capture (2026-07-27)
+found the same bit tracking full-sensor-vs-cropped exactly (clear for a
+full-sensor "6K" ProRes sensor-area choice, set for the smaller 2.8K/5.7K
+crops) while `recording_format`'s width/height stayed pinned to an
+unrelated video resolution throughout — evidence for the windowed-bit
+theory from a completely different settings axis than the one that
+originally established it.
 
 This is the strongest evidence any settings value has received: a decoded,
 byte-exact echo *and* (per the operator's own summary of this round) a
@@ -1936,6 +1944,14 @@ resolution's `codecs` list, since the camera genuinely supports the
 combination; `known_unreachable` records only that this codebase's current
 write path can't reach it, so the entry can be deleted the moment a future fix
 is found without touching anything else in the profile.
+
+A later, unrelated investigation turned up a suggestive parallel, not
+proof of the same underlying cause: `docs/photo_capture.md` §10.2 records
+that both cameras' own body menus disable choosing a still-photo "Sensor
+Area" entirely at ProRes/4K DCI — a different subsystem (still-photo
+sensor readout selection, not video recording resolution), but the same
+label going dark on both cameras. Left as an open observation there, not
+claimed as this same write-path gap.
 
 To reduce the chance of a similar gap going unnoticed for as long as this one
 did on a *different* (codec, resolution, fps) combination, on either camera,
