@@ -158,20 +158,57 @@ unknown operation/data-type bytes; the capture still records the raw hex
 with a `decode_error`). A confirmed outcome without a decodable echo simply
 emits a block without `echo_operation` — the schema permits that.
 
-**Known latent risk — connect-settle race.** This tool writes the first
-candidate immediately after connecting, with no wait for the camera's
-post-connect initial-payload burst to drain (the same hazard
-`CameraSession.connect_settle_s` exists for — see
-`docs/session_and_verification.md`). `tools/control/send_settings_command.py`
-hit exactly this on real hardware 2026-07-20 (`docs/settings.md` §6): its
-first three captures showed the initial burst instead of a response to the
-write, and it was fixed there with a `--connect-settle-seconds` wait. This
-tool has not needed the same fix yet — every candidate after the first
-naturally waits out `--listen-seconds` plus operator think-time before the
-next write, so only the very first candidate is at risk, and the operator's
-own eyes (not the echo) are ground truth anyway. Worth the same fix if a
-future sweep's first-candidate echo looks suspiciously like unrelated
-camera state.
+**"Ground truth" still needs a real signal to read, not a glance.** The
+G2's first photo-capture sweep (2026-07-27, `docs/photo_capture.md` §6)
+showed this the hard way: all 6 candidates in an INT8 sweep were confirmed
+`photo_taken`, and the tool correctly refused to emit a block from that (a
+single outcome name can't hold 6 disagreeing candidates — see below), but
+the deeper problem is that "confirmed every single candidate regardless of
+value" is *itself* evidence the confirmations weren't discriminating
+between "the write did this" and "the operator answered yes" — plausibly a
+reflex carried over from the immediately-prior passive sniffer session,
+where manually triggering the action on the body every window is the
+correct protocol. The fix isn't in this tool (it did its job); it's
+operator discipline for triggers with no independently-observable
+confirmation channel: check a real state marker (an on-camera counter, not
+an impression) before answering, and consider a deliberate negative-control
+answer partway through a sweep to catch drift. See
+`docs/photo_capture.md` §6.3 for the concrete redo protocol this produced.
+
+**Immediate outcome-conflict warning (added 2026-07-27, from the same
+run).** Previously, two candidates confirmed under the same outcome name
+with disagreeing `value`/`reserved` only surfaced as a `ValueError` from
+`build_command_block` at the very end — after the BLE session had already
+closed, discarding a reconnect's worth of camera time to fix. The
+photo-capture sweep above hit this: 6 confirmations, all named
+`photo_taken`, only 1 of which could ever have been used. `probe_candidates`
+now prints a warning immediately after any confirmation that reuses an
+outcome name for a candidate whose `value`/`reserved` disagrees with an
+earlier confirmation of that name — including the same "verify this isn't
+just a confirmation-reliability problem" reminder — so the operator can
+react while still connected instead of discovering the conflict from a
+traceback.
+
+**Known latent risk — connect-settle race — materialized in practice
+2026-07-27.** This tool writes the first candidate immediately after
+connecting, with no wait for the camera's post-connect initial-payload
+burst to drain (the same hazard `CameraSession.connect_settle_s` exists
+for — see `docs/session_and_verification.md`). `tools/control/
+send_settings_command.py` hit exactly this on real hardware 2026-07-20
+(`docs/settings.md` §6): its first three captures showed the initial burst
+instead of a response to the write, and it was fixed there with a
+`--connect-settle-seconds` wait. This tool had not needed the same fix
+yet — every candidate after the first naturally waits out `--listen-seconds`
+plus operator think-time before the next write, so only the very first
+candidate is at risk, and the operator's own eyes (not the echo) are
+ground truth anyway. **Confirmed live on the G2's first photo-capture
+discovery sweep** (`docs/photo_capture.md` §6.1): candidate 1's first send
+landed mid-burst (the `0x0C` lens-string cadence from
+`docs/sniffer_capture_engine.md`'s connect-burst section), and the operator
+correctly used `[r] repeat` rather than confirm on contaminated data — the
+existing mitigation (operator judgment on the first candidate) worked as
+designed, so the `--connect-settle-seconds` fix still isn't required, but
+this is the first real evidence the risk isn't just theoretical.
 
 **Sibling tool note.** `send_settings_command.py` gained a `--repeat N`
 flag (2026-07-21) for a different discovery question than this tool

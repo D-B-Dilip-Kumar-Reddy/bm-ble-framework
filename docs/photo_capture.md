@@ -1,14 +1,16 @@
 # Photo Capture
 
-**Status:** passive phase complete — first real-hardware captures ran
-2026-07-27 on **both** `POCKET_6K_G2 v7.9` and `POCKET_6K_PRO v8.6`
+**Status:** passive phase complete, first active probe attempted and
+**inconclusive** — no confirmed command yet. First real-hardware captures
+ran 2026-07-27 on **both** `POCKET_6K_G2 v7.9` and `POCKET_6K_PRO v8.6`
 (`tools/sniffers/sniffer_photo.py`, default windows), with a decisive
 negative result: **a body-triggered still produces no photo-specific report
-on either camera** (§5). The next step is the active 10.3 void-trigger
-probe, unblocked by `discover_command.py`'s VOID sweep support (§3). There
-is still no `commands.photo` block in any profile, no
-`protocol/categories/media.py`, no `CameraSession` photo API, and no
-`examples/capture_photo.py` — all of those remain planned (CLAUDE.md
+on either camera** (§5). A same-day active INT8 sweep on `0x0A/0x03`
+(§6) confirmed every candidate tried — a pattern that is itself evidence of
+an unreliable read, not a finding; §6 gives the redo protocol before this
+can enter a profile. There is still no `commands.photo` block in any
+profile, no `protocol/categories/media.py`, no `CameraSession` photo API,
+and no `examples/capture_photo.py` — all of those remain planned (CLAUDE.md
 package structure).
 
 Target camera for first bring-up: `POCKET_6K_G2 v7.9`, per CLAUDE.md's
@@ -243,3 +245,97 @@ payload byte), `0x05` (UTF-8 lens strings), and `0x80` (fixed16 — the G2's
 matching the "f4.0" lens string in the same burst). `docs/protocol.md` §3's
 provenance list updated; int64 (`0x04`) is now the only official code never
 observed on hardware.
+
+---
+
+## 6. First active probe — 2026-07-27, G2 — inconclusive
+
+`discover_command.py --category 0x0A --parameter 0x03 --data-type INT8
+--values 1,2,0 --reserved 0,1 --outcomes photo_taken` (6 candidates, the
+INT8 fallback from §3, run instead of the VOID sweep — the operator's local
+checkout predated the commit that added `--data-type VOID` support, and the
+tool correctly rejected the seed with `--values` marked required at that
+version; **pull the branch before the next run**). Capture:
+`tools/captures/POCKET_6K_G2_v7.9/POCKET_6K_G2_v7.9_20260727T110927.json`.
+
+### 6.1 What happened
+
+The very first send (value=1, reserved=0) landed while the post-connect
+burst was still draining — the operator correctly recognized the §5.2
+signature (0x0C lens-string block at ~180ms spacing) and chose `[r]
+repeat` rather than confirm on contaminated data. Good catch, and exactly
+the discipline §5.2's mitigation calls for.
+
+Every one of the following 6 confirmations — the repeat, then all 5
+remaining candidates: values 1/2/0 crossed with reserved 0x00/0x01 — was
+confirmed `photo_taken`. **No candidate was ever declined.** The tool's
+`build_command_block` then correctly refused to emit anything: 6
+confirmations under one outcome name, disagreeing on `value`/`reserved`, is
+exactly the "a command block describes exactly one family" invariant it
+exists to catch (`ValueError: Confirmed outcomes disagree on command
+coordinates`). No data was lost — the capture JSON with all 6 windows'
+wire evidence is intact — but no block was emitted, correctly, because six
+different candidates can't share one outcome's payload slot.
+
+**Tooling fix from this run:** the conflict was only surfaced at the very
+end, after the camera session had already closed — costing the redo a full
+reconnect. `discover_command.py`'s `probe_candidates` now warns immediately
+after any confirmation that reuses an outcome name for a candidate with a
+different `value`/`reserved` than an earlier confirmation of that same
+outcome, printing both candidates and the same guidance below, so the
+operator can course-correct while still standing at the camera instead of
+finding out from a traceback afterward.
+
+### 6.2 Why "confirmed every time" is not a finding yet
+
+Two explanations fit the transcript, and the log alone cannot distinguish
+them:
+
+**(a) The confirmation itself was unreliable.** The operator had just
+finished the §5 passive sniffer session, whose protocol requires manually
+triggering a photo on the body during each window. A carried-over reflex
+of "press the shutter, then say yes" — rather than judging whether *this
+specific BLE write* caused the camera to act — would produce exactly this
+transcript: uniform, unconditional confirmation regardless of value.
+
+**(b) A genuine, value-insensitive trigger.** The spec types 10.3 as void
+(§1) — if the firmware's actual behavior is "fire on any write reaching
+this (category, parameter) coordinate, regardless of payload or even
+declared data type," then every INT8 value tried, and presumably a true
+VOID write too, would legitimately trigger a photo every time. This isn't
+implausible: a firmware that expects a payloadless trigger has no
+particular reason to validate or even read a payload someone else's INT8
+write happens to attach.
+
+The wire evidence doesn't cleanly separate these. The one piece of
+independent-ish evidence — `0x09/0x02`, §5.3's remaining-capacity signal,
+which fired once per ~3 real photos in the passive baseline — appeared
+exactly **once** across all 6 supposedly-successful triggers here, where a
+genuine 6-for-6 would predict roughly two occurrences. That's a mild lean
+toward (a), but the baseline's own rate (1 per ~3) makes "1 occurrence in
+6 trials" unsurprising under either hypothesis — not decisive either way.
+**Do not write a `commands.photo` block, or update `commands.photo`'s
+provenance to anything but absent, from this run.**
+
+### 6.3 Redo protocol
+
+1. **`git pull`** the branch first — the checkout that ran this predates
+   both the VOID sweep support and the immediate-conflict warning (§6.1).
+2. **Establish ground truth outside the BLE session.** Before sending
+   anything, note the camera's own photo/clip count (its playback or media
+   browser screen) — the same category of hazard the earlier lens-burst
+   mistake (§5.2) revealed: don't trust a glance, check a real counter.
+3. **One candidate per reconnect, or at minimum a hard pause between
+   candidates** long enough to deliberately check that counter before
+   answering the prompt — not "did I just see something," but "did the
+   count go up."
+4. **Include a negative control candidate** the operator is confident does
+   nothing (e.g. a value already known inert on another parameter's
+   coordinates spliced in mentally, or simply answering `[n] nothing` once
+   deliberately as a sanity check on their own attentiveness) interleaved
+   with the real sweep, to catch confirmation drift early rather than
+   after 6 candidates.
+5. **Try VOID first, per §3's ordering** — it's the spec's own typing and,
+   per (b) above, the theoretically cleanest single test: if VOID alone
+   reliably moves the counter and a clearly-wrong control does not, that's
+   real evidence, in a way six same-outcome INT8 confirmations aren't.

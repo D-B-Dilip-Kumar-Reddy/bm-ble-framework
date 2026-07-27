@@ -174,6 +174,13 @@ async def probe_candidates(
             echo_operation, echo_payload = extract_echo(
                 notifications, category=candidate.category, parameter=candidate.parameter
             )
+            conflicting = [
+                c
+                for c in confirmed
+                if c.outcome == outcome
+                and (c.candidate.value, c.candidate.reserved)
+                != (candidate.value, candidate.reserved)
+            ]
             confirmed.append(
                 ConfirmedOutcome(
                     outcome=outcome,
@@ -185,6 +192,21 @@ async def probe_candidates(
             if outcome in remaining:
                 remaining.remove(outcome)
             print(f"Confirmed: '{outcome}' <- {candidate.describe()}")
+            if conflicting:
+                prior = conflicting[-1].candidate
+                print(
+                    f"\nWARNING: outcome '{outcome}' was already confirmed for a DIFFERENT "
+                    f"candidate:\n  earlier: {prior.describe()}\n  now:     {candidate.describe()}"
+                    "\nA command block needs exactly one candidate per outcome name — this will "
+                    "be REJECTED at the end unless every remaining confirmation of this outcome "
+                    "agrees on one value. If several different values are all genuinely "
+                    "triggering the same effect, that's real evidence the camera ignores the "
+                    "payload — but confirming every candidate identically is also the signature "
+                    "of an unreliable read (e.g. confirming out of habit, or manually triggering "
+                    "the action yourself instead of observing the write's own effect). Verify "
+                    "with an independent signal (an on-camera counter, not just a glance) before "
+                    "trusting this."
+                )
             if echo_payload is not None:
                 print(f"Echo: operation={echo_operation} payload={echo_payload}")
             else:
