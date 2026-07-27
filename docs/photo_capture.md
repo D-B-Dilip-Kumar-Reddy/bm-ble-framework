@@ -35,8 +35,11 @@ dimensions/format: BRAW stills inherit the current recording resolution
 (independently cross-confirmed against all six of the profile's BRAW
 `resolutions` entries), but ProRes stills use a separate sensor-area
 concept (2.8K/5.7K/6K) unrelated to ProRes's own UHD/HD video
-resolutions — and every still is DNG regardless of codec. §10's first
-capture with `tools/sniffers/sniffer_sensor_area.py` found that changing
+resolutions — and every still on the G2 is DNG regardless of codec. §8.4
+corrects that last point for the PRO: file format there follows the
+active codec, `.braw` for BRAW and DNG for ProRes, not a uniform DNG.
+§10's first capture with `tools/sniffers/sniffer_sensor_area.py` found
+that changing
 Sensor Area does trigger real report activity (`recording_format`,
 `codec_quality`, and the `0x09/0x02` capacity-shaped signal) but no
 directly-encoded sensor-area value on either already-known channel — a
@@ -490,8 +493,9 @@ even in principle) on `POCKET_6K_G2 v7.9`:
 - **ProRes:** a still's pixel dimensions are decided by *sensor area*
   instead, with only three possible readouts: 2.8K, 5.7K, and 6K.
 - Both BRAW's resolution-driven dimensions and ProRes's three sensor-area
-  dimensions are reported as **the same pixel counts**, and every still,
-  regardless of codec, is saved as **DNG**.
+  dimensions are reported as **the same pixel counts**, and on this
+  camera, every still, regardless of codec, is saved as **DNG**. **Not
+  true on the PRO — see §8.4.**
 
 ### 8.1 Cross-check against the profile's `resolutions` table
 
@@ -562,6 +566,40 @@ from the current recording state, if that's ever built).
   need this table anyway** eventually (remaining photo count depends on
   file size, which depends on dimensions) — a genuine future consumer for
   this data, just not today's.
+
+### 8.4 File format differs by camera and codec — operator-provided
+
+Correction to §8's opening claim, operator-reported: **"every still is
+DNG" is a `POCKET_6K_G2 v7.9`-specific fact, not a general one.** On
+`POCKET_6K_PRO v8.6`, the still's file format follows the active codec:
+
+| Camera | Codec | Still format |
+|---|---|---|
+| `POCKET_6K_G2 v7.9` | BRAW | DNG |
+| `POCKET_6K_G2 v7.9` | ProRes | DNG |
+| `POCKET_6K_PRO v8.6` | BRAW | **`.braw`** |
+| `POCKET_6K_PRO v8.6` | ProRes | DNG |
+
+This is a genuine cross-model behavior difference, in the same vein as
+§10.2's 5.7K/5.3K sensor-area difference — worth stating plainly rather
+than letting a G2-derived assumption ("stills are always DNG") leak into
+any future PRO-specific work. It also has no BLE angle at all: like every
+other fact in §8, this is file-format behavior observed on the SD card,
+not something the void, payload-less, echo-less trigger (§7.1) could ever
+carry information about — nothing here changes §8.2's reasoning for
+keeping this as prose rather than a schema field.
+
+A `.braw` still is a real, if less obvious, consequence of §8's own
+dimension finding: a BRAW still already inherits the *video* recording
+resolution and, presumably, the BRAW *codec's own compression*, not a
+generic bitmap conversion — a native `.braw` file for a BRAW-mode still
+is the more natural fit than forcing it through a DNG (raw Bayer image)
+container the way ProRes/DNG stills already are. Whether the G2 also
+technically supports `.braw` stills and simply wasn't tested that way, or
+whether the G2 firmware always converts to DNG regardless of active
+codec, is not established — this section reports what was directly
+observed on each camera, not what either camera is theoretically capable
+of.
 
 ---
 
