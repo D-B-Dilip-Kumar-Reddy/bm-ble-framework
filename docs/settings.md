@@ -630,13 +630,18 @@ here — at 25fps, in a completely separate session from §6's 50fps sighting
 G2's only full-sensor mode) reports `0x0000` regardless of frame rate,
 while every other resolution here reports `0x0010`. A third, later
 reconfirmation arrived from an unrelated investigation entirely:
-`docs/photo_capture.md` §10.1's first Sensor Area capture (2026-07-27)
-found the same bit tracking full-sensor-vs-cropped exactly (clear for a
-full-sensor "6K" ProRes sensor-area choice, set for the smaller 2.8K/5.7K
-crops) while `recording_format`'s width/height stayed pinned to an
-unrelated video resolution throughout — evidence for the windowed-bit
+`docs/photo_capture.md` §10.1's first Sensor Area capture (2026-07-27,
+G2) found the same bit tracking full-sensor-vs-cropped exactly (clear for
+a full-sensor "6K" ProRes sensor-area choice, set for the smaller
+2.8K/5.7K crops) while `recording_format`'s width/height stayed pinned to
+an unrelated video resolution throughout — evidence for the windowed-bit
 theory from a completely different settings axis than the one that
-originally established it.
+originally established it. A fourth reconfirmation followed immediately,
+this time cross-model: `docs/photo_capture.md` §10.3's PRO rerun of the
+same Sensor Area capture found the identical clear-only-for-full-sensor
+pattern independently, on that camera's own different baseline flags byte
+(`0x10`/`0x00` vs the G2's `0x13`/`0x03`) — the bit-4 boundary, not the
+exact byte value, is what holds across both cameras.
 
 This is the strongest evidence any settings value has received: a decoded,
 byte-exact echo *and* (per the operator's own summary of this round) a
