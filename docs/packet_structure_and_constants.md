@@ -69,13 +69,14 @@ non-zero value, which would otherwise be silently discarded.
 
 Every confirmed command family until 2026-07-27 needed one *specific*
 reserved byte (recording's `0x01` vs the `0x00` default elsewhere — see
-`docs/protocol.md` §6). `commands.photo` on `POCKET_6K_G2 v7.9`
-(`docs/photo_capture.md` §7) broke that pattern: both `0x00` and `0x01`
-independently triggered a real photo capture (SD-card-verified), so the
-byte is recorded as indifferent for this command rather than as a value
-the camera checks. `0x00` is stored in the profile as the canonical value
-(this codebase's own default) purely for convention, not because it was
-distinguished from `0x01` on the wire.
+`docs/protocol.md` §6). `commands.photo` broke that pattern: both `0x00`
+and `0x01` independently triggered a real photo capture (SD-card-verified)
+on `POCKET_6K_G2 v7.9` (`docs/photo_capture.md` §7), and the same
+indifference was then independently reproduced on `POCKET_6K_PRO v8.6`
+(§9) — not a one-camera quirk. The byte is recorded as indifferent for
+this command rather than as a value the camera checks. `0x00` is stored in
+each profile as the canonical value (this codebase's own default) purely
+for convention, not because it was distinguished from `0x01` on the wire.
 
 `encode_assign(*, category, parameter, data_type, value, reserved=RESERVED_BYTE,
 command_id=0x00, operation=Operation.ASSIGN)` builds a complete command packet
