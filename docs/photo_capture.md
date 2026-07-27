@@ -497,11 +497,8 @@ resolution setting," which holds for BRAW but is wrong for ProRes — worth
 stating explicitly since nothing else in this document would have
 predicted the difference.
 
-Not pinned down here: which specific "6K" ProRes's 6K sensor-area readout
-matches — plain `"6K 3:2"` (6144×3456) or `"6K 2.4:1"` (6144×2560). The
-operator's report names three areas (2.8K, 5.7K, 6K) without
-disambiguating 6K's aspect ratio the way the BRAW list did. Left as an
-open detail rather than guessed.
+Disambiguated by the operator: ProRes's 6K sensor-area readout is plain
+`"6K 3:2"` (6144×3456), not `"6K 2.4:1"` (6144×2560).
 
 ### 8.2 Why this doesn't become a profile/schema field
 
