@@ -361,7 +361,11 @@ both `POCKET_6K_G2 v7.9` and `POCKET_6K_PRO v8.6` — but no echo and no
 one, so there isn't even the fallback this section describes for
 recording. That's a harder open question than anything implemented in
 this file — no `CameraSession.capture_photo()` exists yet specifically
-because of it.
+because of it. One proposed direction, noted but not yet started
+(`docs/photo_capture.md` §7.3): verify out-of-band over USB instead of
+BLE, using `POCKET_6K_PRO v8.6`'s HTTP clip-playback interface — a
+channel this file's dual-check strategy (echo + `CAMERA_STATUS`, both
+BLE) doesn't cover at all, and explicitly not assumed to exist on the G2.
 
 ---
 
