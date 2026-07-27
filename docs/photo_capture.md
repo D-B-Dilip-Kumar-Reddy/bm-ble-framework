@@ -797,20 +797,57 @@ coordinates were found. No profile changes made from this capture — there
 is nothing here that meets this codebase's evidentiary bar for even a
 CANDIDATE entry (design principle 6).
 
-**Next steps, not yet done:**
-1. A repeat/interleaved run to check whether `0x09/0x02`'s per-setting
-   values are stable and reproducible, or just time-based drift.
-2. A genuine full-channel decode is effectively already done here — all
-   notifications in all three windows are accounted for above (ambient
-   `0x09/0x00` plus the three-triple burst); nothing else appeared. If a
-   real sensor-area parameter exists on the wire, it isn't in this
-   capture at all — worth trying `Operation.OFFSET` isolation-style
-   probing (per the `docs/settings.md` §16 precedent) or a wider
-   `--listen-seconds` in case of a delayed report, rather than re-reading
-   this same capture for a signal that isn't in it.
-3. Repeat on `POCKET_6K_PRO v8.6` — not yet run; design principle 6 means
-   this needs its own capture, especially since §10.2 shows the PRO's own
-   sensor-area option set differs from the G2's.
+**Next steps, ranked (updated after §10.3's PRO rerun):**
+
+1. **Highest priority, not yet tried — hunt for multiple `dimension_enum`
+   values that all decode to the same `HD` width/height.** Both profiles
+   currently record exactly one ProRes/HD `dimension_enum` (G2 and PRO
+   both: `3`). Sensor Area sits *underneath* the displayed video
+   resolution (§10.1/§10.3: width/height stay pinned to `HD` regardless of
+   which sensor area is chosen) — the natural place for it to actually
+   live is `video_format`'s own write, as one of several enum bytes that
+   all happen to produce the *same* `recording_format` width/height but a
+   *different* underlying sensor readout, distinguishable by the flags
+   nibble §10.1/§10.3 already showed correlates with full-sensor-vs-
+   cropped. This has never been checked — every past `dimension_enum`
+   sweep (`docs/settings.md` §7, §16) was hunting for an enum reaching an
+   entirely *different* resolution (4K DCI), not for a second/third enum
+   secretly aliasing to a resolution already known. `tools/control/
+   sweep_dimension_enum.py` already does exactly this kind of sweep and
+   decodes flags for every candidate — no new tooling needed:
+
+   ```
+   python tools/control/sweep_dimension_enum.py \
+       --model-key POCKET_6K_G2 --firmware v7.9 \
+       --fps 24 --target-resolution "HD" --target-codec ProRes \
+       --no-stop-on-match --include-known
+   ```
+
+   (`--no-stop-on-match` is essential — the tool's default stops at the
+   first match, which would hide any second or third enum. `--include-known`
+   re-sends the already-known enum `3` too, for a fresh baseline flags
+   reading in the same session.) Repeat with `--model-key POCKET_6K_PRO
+   --firmware v8.6` — same command otherwise, since both profiles share
+   `dimension_enum=3` for HD. If this finds more than one enum decoding to
+   `HD`, that's likely `commands.sensor_area`'s real home — a
+   `dimension_enum` value per sensor area, same mechanism as ordinary
+   resolution selection, just aliased at the display level. Because the
+   flags bit is only binary, a genuine 3-way find (2.8K vs 5.7K/5.3K vs 6K)
+   would still need photon-level confirmation — send each candidate, then
+   trigger a still (`commands.photo`) and check the SD card's actual pixel
+   dimensions/EXIF against §8's known per-sensor-area sizes, the same
+   verification method that established §7/§9's photo findings.
+2. A repeat/interleaved run to check whether `0x09/0x02`'s per-setting
+   values are stable and reproducible on the G2, or just time-based drift
+   — lower priority now that it didn't reproduce on the PRO at all (§10.3).
+3. `Operation.OFFSET` isolation-style probing (per the `docs/settings.md`
+   §16 precedent) or a wider `--listen-seconds` in case of a delayed
+   report — full-channel decode of the existing captures is already done
+   (nothing beyond the three-triple burst appeared in either camera's
+   capture), so a genuine sensor-area-specific report, if the
+   dimension_enum hypothesis above doesn't pan out, isn't in these
+   captures at all and needs a different probe shape.
+4. ~~Repeat on `POCKET_6K_PRO v8.6`~~ — done, §10.3.
 
 ### 10.2 Operator-provided: sensor-area options per model/video-resolution
 
