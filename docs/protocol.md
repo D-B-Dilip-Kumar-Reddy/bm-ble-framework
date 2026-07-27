@@ -241,7 +241,7 @@ payload order; all values little-endian.
 | 7 | Configuration | — |
 | 8 | Color Correction | — |
 | 9 | (undocumented) | mostly ambient ~1/s telemetry, meaning unknown [sniffer-verified] — except parameter 1, a CANDIDATE write-margin warning, see §9 below |
-| 10 | Media | `protocol/categories/recording.py` (10.1); `protocol/categories/settings.py` codec_quality (10.0, CANDIDATE — see `docs/settings.md`); future: photo (10.3), playback (10.2) |
+| 10 | Media | `protocol/categories/recording.py` (10.1); `protocol/categories/settings.py` codec_quality (10.0, CANDIDATE — see `docs/settings.md`); `commands.photo` (10.3) VERIFIED on `POCKET_6K_G2 v7.9` but with no `protocol/categories/media.py` yet — see below and `docs/photo_capture.md`; future: playback (10.2) |
 | 11 | PTZ Control | — |
 | 12 | Metadata | future: metadata reads; also ambient telemetry observed on G2 v7.9 (`0x0C`) [sniffer-verified] |
 
@@ -373,13 +373,18 @@ telemetry (~1/s, category-wide, meaning unknown). One exception:
 | 10.3 | Still Capture | void | capture a photo |
 
 10.1 is the parameter behind this repo's sniffer-verified recording
-command (category `0x0A`, parameter `0x01`) — see §6. 10.2/10.3 are the
-[spec] starting points for the playback and photo-capture target
-operations. For 10.3, the passive phase is done: 2026-07-27 captures on
-both cameras showed a body-triggered still produces **no** report — not on
-10.3, not anywhere — so the trigger needs active probing (the void sweep
-in `docs/photo_capture.md` §3). 10.3 has never been observed on the wire
-in either direction.
+command (category `0x0A`, parameter `0x01`) — see §6. 10.2 remains the
+[spec] starting point for the playback target operation, untouched.
+
+10.3 (still capture) is now **confirmed as a write coordinate** on
+`POCKET_6K_G2 v7.9` (2026-07-27, `docs/photo_capture.md` §7): a void ASSIGN
+to `0x0A/0x03` triggers a real photo, verified by inspecting the SD card's
+contents on a PC after each send — not by anything observable over BLE.
+10.3 has still never been observed *reported* on the wire, in either
+direction: not passively (§5 — a body-triggered still produces no report
+at all) and not as an echo of the confirmed write either (both confirmed
+sends' capture windows show only ambient telemetry). The [spec]'s void
+typing (the table above) matches the confirmed write shape exactly.
 
 ### Category 11 — PTZ Control
 

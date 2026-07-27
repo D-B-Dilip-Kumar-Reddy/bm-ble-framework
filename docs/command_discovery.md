@@ -1,6 +1,6 @@
 # Guided Command Discovery
 
-**Status:** implemented — used to populate `POCKET_6K_PRO v8.6`'s recording block on real hardware.
+**Status:** implemented — used to populate `POCKET_6K_PRO v8.6`'s recording block, and (via its VOID sweep support) `POCKET_6K_G2 v7.9`'s `commands.photo` block, on real hardware.
 
 ## Overview
 
@@ -188,6 +188,24 @@ earlier confirmation of that name — including the same "verify this isn't
 just a confirmation-reliability problem" reminder — so the operator can
 react while still connected instead of discovering the conflict from a
 traceback.
+
+**The same conflict, but this time a real finding, not an artifact
+(2026-07-27, same day).** A follow-up VOID sweep on the same G2
+coordinates hit the identical warning and end-of-run `ValueError` — two
+candidates (`reserved=0x00`, `reserved=0x01`) both confirmed under
+`photo_taken` — but this time the operator had independently verified each
+confirmation against the SD card's actual contents, not impression alone
+(`docs/photo_capture.md` §7). The crash still meant no block could be
+auto-emitted (the schema's `reserved` field is singular, and rightly so —
+a command block records the one value that was captured, not a set), but
+this time the conflict *was* the finding: the reserved byte is genuinely
+indifferent for this trigger, not a value the camera checks. The block
+was written into the profile by hand from the saved capture evidence,
+picking `0x00` as the conventional default with `0x01` noted as an
+equally-confirmed alternative in `provenance.notes` — the tool's
+one-candidate-per-outcome design stayed correct throughout; only the
+last step (emission) needed a human because the finding itself doesn't
+fit a single-`reserved` block by nature, not because anything was wrong.
 
 **Known latent risk — connect-settle race — materialized in practice
 2026-07-27.** This tool writes the first candidate immediately after

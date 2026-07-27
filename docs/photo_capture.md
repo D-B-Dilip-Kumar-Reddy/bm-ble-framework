@@ -1,17 +1,26 @@
 # Photo Capture
 
-**Status:** passive phase complete, first active probe attempted and
-**inconclusive** — no confirmed command yet. First real-hardware captures
-ran 2026-07-27 on **both** `POCKET_6K_G2 v7.9` and `POCKET_6K_PRO v8.6`
-(`tools/sniffers/sniffer_photo.py`, default windows), with a decisive
-negative result: **a body-triggered still produces no photo-specific report
-on either camera** (§5). A same-day active INT8 sweep on `0x0A/0x03`
-(§6) confirmed every candidate tried — a pattern that is itself evidence of
-an unreliable read, not a finding; §6 gives the redo protocol before this
-can enter a profile. There is still no `commands.photo` block in any
-profile, no `protocol/categories/media.py`, no `CameraSession` photo API,
-and no `examples/capture_photo.py` — all of those remain planned (CLAUDE.md
-package structure).
+**Status:** the trigger command is confirmed. `POCKET_6K_G2 v7.9`'s
+`commands.photo` (category `0x0A`, parameter `0x03`, `VOID`) is
+`VERIFIED` in the profile as of 2026-07-27 (§7) — a void ASSIGN to that
+coordinate reliably fires a real photo capture, confirmed by inspecting
+the SD card's contents on a PC after each send. What's still missing:
+**no BLE-observable signal (echo or otherwise) confirms a photo was
+taken** — every capture window around a confirmed-successful trigger
+shows only ambient telemetry, matching the passive finding (§5) that a
+body-triggered still produces no report either. That leaves an open
+verification-strategy question (§7's closing section) blocking
+`protocol/categories/media.py`, `CameraSession.capture_photo()`, and
+`examples/capture_photo.py` — all still planned (CLAUDE.md package
+structure) — since CLAUDE.md design principle 3 requires every write to
+be confirmed before reporting success, and no BLE channel currently does
+that for this command.
+
+Path so far: passive sniffing (§5) found no report at all; a first active
+INT8 sweep (§6) came back inconclusive because every candidate was
+confirmed on operator judgment alone; a VOID retry (§7), this time
+verified against the SD card's actual contents rather than a glance,
+produced the confirmed result above.
 
 Target camera for first bring-up: `POCKET_6K_G2 v7.9`, per CLAUDE.md's
 camera registry ("start all new features with `POCKET_6K_G2 v7.9`").
@@ -89,62 +98,31 @@ record it here, and move to active probing (§3). **This is exactly what the
 
 ---
 
-## 3. Active probe path (current next step)
+## 3. Active probe path (as planned; superseded by results — see §6-§7)
 
-With the passive route exhausted (§5), the trigger must be probed actively.
-There was no capture to seed `--from-capture` with — the seed is manual,
-straight from the [spec] map.
+With the passive route exhausted (§5), the trigger needed to be probed
+actively. There was no capture to seed `--from-capture` with — the seed
+was manual, straight from the [spec] map. This section is kept as
+written before any active attempt, for the reasoning trail; §6 and §7
+record what actually happened.
 
-1. **Void 10.3 first** (the spec's own typing). `discover_command.py` can
-   now sweep a payloadless trigger — `generate_candidates` emits one
-   candidate per reserved byte when the data type is VOID (no payload
-   axis), `CandidateCommand.encode()` uses `encode_assign_void`
-   (`protocol/codec.py`, added 2026-07-27 alongside these findings), and
-   `--values`/`--restore-value` are rejected for a VOID sweep:
-
-   ```
-   python tools/control/discover_command.py \
-       --model-key POCKET_6K_G2 --firmware v7.9 \
-       --label photo --category 0x0A --parameter 0x03 --data-type VOID \
-       --reserved 0,1 --outcomes photo_taken
-   ```
-
-   `--reserved 0,1` because the G2's recording command needed the
-   non-default `0x01`. The operator watches the camera body — since §5
-   shows stills produce no report, **operator confirmation is likely the
-   only ground truth**; expect no echo even on success until proven
-   otherwise.
-
+1. **Void 10.3 first** (the spec's own typing) — `discover_command.py`
+   sweeps a payloadless trigger via `--data-type VOID` (`generate_candidates`
+   emits one candidate per reserved byte, `CandidateCommand.encode()` uses
+   `encode_assign_void`, `protocol/codec.py`, added 2026-07-27).
+   **Confirmed correct on the first genuinely-verified attempt — §7.**
 2. **If void does nothing: INT8 payload sweep** on the same coordinates —
    the recording precedent (spec says "boolean", wire wanted int8 payload
-   `2`) makes a small-value int8 sweep the natural second hypothesis:
-
-   ```
-   python tools/control/discover_command.py \
-       --model-key POCKET_6K_G2 --firmware v7.9 \
-       --label photo --category 0x0A --parameter 0x03 --data-type INT8 \
-       --values 1,2,0 --reserved 0,1 --outcomes photo_taken
-   ```
-
-3. **If both fail:** one further wire shape exists that the tooling still
-   cannot send — data-type byte `0x00` *with* a one-byte boolean payload
-   (a real camera-report shape: the 2026-07-27 baselines caught
-   `0x0C/0x04` reporting type `0x00` with payload `00`). Build that
-   variant only if the first two sweeps are exhausted, per the same
-   don't-build-speculatively rule that governed void support itself.
-
-4. **Verification question (open):** what confirms a photo was taken?
-   §5's finding makes this harder than recording: there is no passive
-   report to model an echo on, and the only storage-side movement seen
-   (`0x09/0x02`, §5) is too coarse to confirm an individual photo. Per
-   design principle 3 the photo API cannot ship without an answer; per
-   principle 10, storage preconditions gate the command — both need state
-   sources that are themselves still undiscovered.
-
+   `2`) made a small-value int8 sweep the natural second hypothesis. Tried
+   first in practice, before VOID support existed locally — §6.
+3. **If both fail:** one further wire shape the tooling still cannot
+   send — data-type byte `0x00` *with* a one-byte boolean payload (a real
+   camera-report shape: the 2026-07-27 baselines caught `0x0C/0x04`
+   reporting type `0x00` with payload `00`). **Moot** — void worked.
+4. **Verification question:** still open — see §7's closing section.
 5. **Profile shape:** one `commands.photo` block, same shape as
-   `recording`. If the trigger is confirmed void, the block carries no
-   `values` map at all — the schema treats `values` as optional and
-   `build_command_block` omits it for a VOID family.
+   `recording`, no `values` map since the trigger confirmed genuinely
+   void — see §7 for the actual emitted block.
 
 ---
 
@@ -152,20 +130,37 @@ straight from the [spec] map.
 
 - ~~Does a body-triggered still produce *any* INCOMING_CONTROL report?~~
   **Answered 2026-07-27: no, on both cameras (§5).**
-- Is the write void as the spec claims, or does it carry a payload like
-  recording does? (§3's probe ladder — undetermined until an active sweep
-  lands.)
-- Does an *accepted* BLE-written trigger echo, even though body-triggered
-  stills don't report? (Precedent either way: `codec_quality` echoes writes
-  while body changes also report; `video_format` never reports *or* echoes
-  a confirmation on its own channel.)
+- ~~Is the write void as the spec claims, or does it carry a payload like
+  recording does?~~ **Answered 2026-07-27: genuinely void — confirmed on
+  `POCKET_6K_G2 v7.9` (§7).**
+- ~~Does an *accepted* BLE-written trigger echo, even though body-triggered
+  stills don't report?~~ **Answered 2026-07-27: no — neither confirmed
+  VOID write produced any coordinate-specific notification (§7), matching
+  §5's passive result exactly.**
+- ~~Does the reserved byte matter for this trigger?~~ **Answered
+  2026-07-27: no — both `0x00` and `0x01` independently confirmed working
+  (§7), unlike recording's exact-`0x01` requirement.**
+- **Open, and now the blocking question:** what BLE-observable signal, if
+  any, can confirm a photo was taken at runtime? The SD-card check that
+  established §7's finding is not something controller code can perform.
+  Candidates, all unconfirmed as a *reliable per-photo* signal: the
+  `0x09/0x02` storage lead (§5.3 — fired once per ~3 photos in the
+  passive baseline, far too coarse), a `CAMERA_STATUS` bit (never seen to
+  move in a photo-specific way in any capture so far), or genuinely
+  nothing over BLE. Blocks `CameraSession.capture_photo()` per design
+  principle 3 until answered — see §7's closing discussion.
 - What storage/state signal, if any, moves per photo? (`0x09/0x02` moved
-  once per run, not per photo — §5.)
+  once per run in the passive baseline, not per photo — §5.3; not
+  re-examined in the active runs.)
 - Does photo capture require a particular camera state (e.g. not
   recording), and what does the camera report if it's refused (card full,
   no card)?
 - Does the still button behave identically across codecs (a BRAW vs ProRes
-  attribution session via `--actions` would answer this)?
+  attribution session via `--actions` would answer this)? Still open —
+  only tried at one codec/resolution so far.
+- Does the same `0x0A/0x03` VOID write work on `POCKET_6K_PRO v8.6`? Not
+  yet tried — design principle 6 (sniffer/discovery-first per model) means
+  this needs its own confirmation, not an assumption from the G2 result.
 
 ---
 
@@ -339,3 +334,106 @@ provenance to anything but absent, from this run.**
    per (b) above, the theoretically cleanest single test: if VOID alone
    reliably moves the counter and a clearly-wrong control does not, that's
    real evidence, in a way six same-outcome INT8 confirmations aren't.
+
+---
+
+## 7. Confirmed — 2026-07-27, G2 — VOID trigger, SD-card verified
+
+Same-day redo of §6, following its own protocol almost exactly: pulled the
+branch (picking up VOID sweep support), then ran the VOID candidate list
+from §3:
+
+```
+python tools/control/discover_command.py \
+    --model-key POCKET_6K_G2 --firmware v7.9 \
+    --label photo --category 0x0A --parameter 0x03 --data-type VOID \
+    --reserved 0,1 --outcomes photo_taken
+```
+
+The critical change from §6: **the operator verified ground truth by
+inserting the SD card into a PC and inspecting its contents after each
+send**, not by watching the camera or answering from impression. This is
+strictly stronger evidence than anything else in this document so far —
+stronger than an echo (which only proves the camera *acknowledged* a
+write, not that a photo exists), stronger than an on-screen glance (§5.2
+and §6 both show how unreliable that channel is here).
+
+### 7.1 Result
+
+Both candidates were sent and confirmed, each independently checked
+against the SD card:
+
+| Candidate | TX | Confirmed |
+|---|---|---|
+| reserved=`0x00` | `FF 04 00 00 0A 03 00 00` | photo_taken — new file on card |
+| reserved=`0x01` | `FF 04 00 01 0A 03 00 00` | photo_taken — new file on card |
+
+Both windows' wire capture shows only ambient telemetry (the first
+candidate's window also caught the tail of the connect burst — the same
+§5.2 signature, correctly not confused with a response) — **no
+INCOMING_CONTROL notification specific to this write appeared either
+time.** That's the expected result, not a gap: it's exactly what §5's
+passive baseline already showed for body-triggered stills. A photo with
+zero wire footprint is now established on both the passive and active
+sides.
+
+`build_command_block` correctly refused to emit a block from this run too
+— same invariant as §6, one outcome can't hold two candidates — but this
+time the "conflict" is a genuine positive result, not a reliability
+problem: the reserved byte is confirmed **indifferent**, not ambiguous.
+The `commands.photo` block was written directly into
+`payloads/models/POCKET_6K_G2_v7.9.json` from this evidence (`reserved:
+0`, chosen as this codebase's own default — `0x01` is equally confirmed
+and noted in `provenance.notes`), rather than re-running hardware a third
+time to force a single-candidate sweep the tool could emit unassisted.
+`capabilities.supports_photo: true` was added to the same profile on the
+strength of this result.
+
+### 7.2 Why this one is trusted and §6 wasn't
+
+§6's INT8 sweep confirmed every candidate too — on the surface, an
+identical-looking pattern. The difference is the verification method, not
+the outcome: §6's confirmations came from operator impression alone (the
+exact channel already shown unreliable by the connect-burst mistake, §5.2,
+and plausibly contaminated by reflexes carried over from the passive
+sniffer protocol just run beforehand). §7's confirmations came from
+physically inspecting the artifact the command is supposed to produce —
+a channel with no plausible false-positive mechanism. "Every candidate
+confirmed" is suspicious when the confirmation is a subjective read and
+reassuring when it's an objective count, because in the latter case
+uniform success is exactly what "the reserved byte doesn't matter"
+predicts.
+
+### 7.3 What's still missing
+
+Confirming the trigger command is not the same as being able to verify a
+write at runtime (CLAUDE.md design principle 3: "every write command must
+be verified before reporting success"). The method that established §7.1
+— pulling and inspecting the SD card — is not something `CameraSession`
+can do from Python over BLE. As things stand, **no BLE channel confirms a
+photo was taken**: not an echo (none exists for this coordinate, on either
+the passive or active evidence), not `CAMERA_STATUS` (never seen to move
+here), and the one storage lead that does exist (`0x09/0x02`, §5.3) is far
+too coarse — it moves roughly once per three photos, not once per photo,
+so it cannot distinguish "this specific write succeeded" from "some
+unrelated write nearby also succeeded."
+
+This is a genuine architectural question, not a small implementation
+detail, and is left open rather than decided unilaterally here:
+
+- Build `CameraSession.capture_photo()` now with only best-effort
+  verification (e.g. cross-checking `0x09/0x02` when it happens to fire),
+  clearly documented as not meeting the bar every other write in this
+  codebase meets?
+- Hold `protocol/categories/media.py` / `CameraSession.capture_photo()`
+  until a real per-photo signal is found (e.g. deeper investigation of
+  whether any category-9 or category-12 parameter moves reliably and
+  promptly after a photo, the way `0x09/0x02` moves after a settings
+  change)?
+- Something else — e.g. an explicit, loudly-documented exception to
+  principle 3 for this one command, with the caller told up front that
+  "success" means "the write was sent," not "a photo was confirmed"?
+
+The protocol-level finding (§7.1) stands regardless of how this is
+resolved — it belongs in the profile now, per design principle 6, whether
+or not a session API is ever built on top of it.

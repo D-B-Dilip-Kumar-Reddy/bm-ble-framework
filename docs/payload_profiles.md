@@ -133,9 +133,9 @@ mirroring `$defs/command`.
   the discovery tool's `--outcomes` flag produces; integers are the
   sniffer-captured payload bytes. Any command family fits without schema or
   dataclass changes — playback might be `{"play": 1, "pause": 0, "next": 2}`;
-  photo capture might be `{"trigger": 1}` if a payload turns out to be
-  needed, or omit `values` entirely if the trigger is confirmed void
-  (`docs/photo_capture.md` §3).
+  `commands.photo` on `POCKET_6K_G2 v7.9` is the first real example of the
+  no-`values` case, since its trigger is confirmed genuinely void
+  (`docs/photo_capture.md` §7).
 - **`data_type` is a symbolic string** matching `protocol/types.py`
   `DataType` names (official spec coding — see `docs/protocol.md` §3) —
   human-readable in captures and diffs, and validated by the schema's
