@@ -633,7 +633,12 @@ while every other resolution here reports `0x0010`.
 This is the strongest evidence any settings value has received: a decoded,
 byte-exact echo *and* (per the operator's own summary of this round) a
 confirmed physical camera change, for 8 independent resolution/codec
-combinations in one sweep. It also settles the open question from §6:
+combinations in one sweep. A second, independent cross-check arrived later
+from a completely different evidence channel: `docs/photo_capture.md` §8.1
+notes that all six BRAW `resolutions` entries also match the operator's
+separately-reported still-photo output dimensions exactly (2026-07-27) —
+camera file output, not a BLE write/report, corroborating this table from
+outside the wire protocol entirely. It also settles the open question from §6:
 **`0x01/0x00` still never echoes** — every one of these 16 sends confirmed
 on `0x01/0x09` (and, for codec, `0x0A/0x00`) — the same channels
 `CameraSession.set_video_format` was already arming.
