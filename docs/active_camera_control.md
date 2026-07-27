@@ -504,7 +504,11 @@ the profile block does **not** exist yet and the command must be
 reverse-engineered. It sweeps operator-supplied candidate values/reserved
 bytes over a seeded (category, parameter, data_type), asks the operator to
 confirm what the camera physically did after each send, and emits a
-ready-to-paste `commands` block. Full writeup: `docs/command_discovery.md`.
+ready-to-paste `commands` block. A VOID seed sweeps payloadless trigger
+packets — reserved bytes only, no `--values` — added 2026-07-27 for the
+10.3 still-capture probe after the passive photo captures showed there is
+no report to seed from (`docs/photo_capture.md`). Full writeup:
+`docs/command_discovery.md`.
 
 ---
 

@@ -89,6 +89,19 @@ little-endian, in the order given. Same zero-semantics stance and the same
 overridable `operation`; consumed by `protocol/categories/settings.py` (see
 `docs/settings.md`).
 
+`encode_assign_void(*, category, parameter, reserved=RESERVED_BYTE,
+command_id=0x00, operation=Operation.ASSIGN)` (added 2026-07-27) is the
+payloadless sibling for the spec's void trigger parameters (one-shot AF
+0.1, still capture 10.3, ...): header only, length byte exactly
+`LENGTH_FIELD_OFFSET` — the same shape as the sniffer-verified void camera
+reports in the 2026-07-27 photo-capture baselines. It is deliberately a
+separate function rather than a `value=None` mode of `encode_assign`: the
+`DATA_TYPE_STRUCT_FORMATS` gate in `encode_assign` is what stops a caller
+from silently encoding a zero-byte payload for a fixed-width type, and
+keeping VOID out of that table preserves the guarantee. Consumed by
+`tools/common/discovery.py`'s VOID candidate sweeps (see
+`docs/command_discovery.md`).
+
 ### `Operation`
 
 ```python

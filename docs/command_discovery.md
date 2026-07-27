@@ -32,8 +32,9 @@ It is model- and command-agnostic: nothing recording-specific is hardcoded.
 results — the same tool sweeps recording on a Pocket 6K Pro today and, say,
 still-capture on an URSA later.
 
-**Known limitation — scalar payloads only.** The sweep generates
-single-value ASSIGN payloads (`encode_assign`), so it cannot probe the
+**Known limitation — scalar and void payloads only.** The sweep generates
+single-value ASSIGN payloads (`encode_assign`) or payloadless VOID triggers
+(`encode_assign_void` — see below), so it cannot probe the
 multi-element settings families (codec_quality's id pair, video_format's
 five int8 elements, recording_format's five int16s — `docs/settings.md`).
 For those, seed the coordinates and value tables from a
@@ -85,7 +86,7 @@ See `docs/active_camera_control.md`'s section on it and `docs/settings.md`
 |---|---|---|
 | `tools/common/discovery.py` | All pure logic — candidate generation, capture-seeding, echo extraction, block building/rendering. No BLE, no `input()`, no filesystem | `tests/unit/tools/common/test_discovery.py` |
 | `tools/control/discover_command.py` | Interactive driver — prompts, BLE session, sweep loop | Manual (matches `docs/sniffer_capture_engine.md`'s stance on interactive tools) |
-| `protocol/codec.py` `encode_assign` | Category-agnostic ASSIGN-packet encoder the candidates use (also now the body of `recording.py`'s encoder) | `tests/unit/protocol/test_codec.py` |
+| `protocol/codec.py` `encode_assign` / `encode_assign_void` | Category-agnostic ASSIGN-packet encoders the candidates use — scalar payload and payloadless void trigger respectively (`encode_assign` is also the body of `recording.py`'s encoder) | `tests/unit/protocol/test_codec.py` |
 
 `tools/common/discovery.py` key functions:
 
@@ -202,8 +203,9 @@ gap is now exhausted (`docs/settings.md` §16) and accepted as a guarded
 software capability gap (`resolutions."4K DCI".known_unreachable.ProRes`,
 `docs/payload_profiles.md`). `discover_command.py`
 itself still has no equivalent: its `CandidateCommand.encode()` always
-uses `Operation.ASSIGN` via `encode_assign`'s (now overridable, but
-unused-by-default) `operation` parameter.
+uses `Operation.ASSIGN`, via `encode_assign` or `encode_assign_void`
+(both carry a now-overridable, but unused-by-default, `operation`
+parameter).
 
 A different kind of sibling tool, `tools/control/sweep_camera_format.py`
 (2026-07-24, `docs/active_camera_control.md`), exists precisely because that
@@ -385,9 +387,13 @@ raw hex is still captured as evidence either way (see "Safety model" above).
 `tests/unit/tools/common/test_discovery.py` covers: candidate sweep order
 and operator-ordering preservation; `CandidateCommand.encode` parity with
 `encode_assign` (including a byte-for-byte match with the known G2 start
-packet); capture seeding with and without ambient filtering, single-window
-behaviour, and skipping of non-INCOMING_CONTROL/undecoded notifications;
-echo extraction; block building — including validation of emitted blocks
-against the real `payloads/schema.json` — and every rejection path; snippet
-JSON round-trip. `tests/unit/protocol/test_codec.py` covers `encode_assign`
-directly.
+packet) and with `encode_assign_void` for VOID candidates; the
+`value`/VOID consistency invariant (both rejection directions); VOID sweep
+generation (one candidate per reserved byte; values rejected); capture
+seeding with and without ambient filtering, single-window behaviour, and
+skipping of non-INCOMING_CONTROL/undecoded notifications; echo extraction;
+block building — including validation of emitted blocks (scalar and VOID,
+the latter omitting `values`) against the real `payloads/schema.json` —
+and every rejection path; snippet JSON round-trip.
+`tests/unit/protocol/test_codec.py` covers `encode_assign` and
+`encode_assign_void` directly.
