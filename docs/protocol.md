@@ -356,7 +356,9 @@ telemetry (~1/s, category-wide, meaning unknown). One exception:
 10.1 is the parameter behind this repo's sniffer-verified recording
 command (category `0x0A`, parameter `0x01`) — see §6. 10.2/10.3 are the
 [spec] starting points for the playback and photo-capture target
-operations.
+operations. Photo-capture reverse engineering has started from the 10.3
+seed — passive sniffer scaffold only, no capture yet; see
+`docs/photo_capture.md`.
 
 ### Category 11 — PTZ Control
 

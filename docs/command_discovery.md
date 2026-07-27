@@ -41,6 +41,15 @@ For those, seed the coordinates and value tables from a
 profile as CANDIDATE, and confirm by sending the fully-formed packet with
 `tools/control/send_settings_command.py` instead.
 
+The same `encode_assign` dependency also means the sweep cannot send a
+**void (payloadless)** packet — `encode_assign` deliberately rejects
+`DataType.VOID` (`protocol/types.py` omits code 0 from
+`DATA_TYPE_STRUCT_FORMATS`). This matters for the photo-capture target: the
+[spec] types 10.3 "Still Capture" as void, so if a real capture shows the
+trigger genuinely carries no payload, a void-capable encode path must be
+built before this tool can sweep it — see `docs/photo_capture.md` §3 for
+why that isn't built speculatively.
+
 For the specific case of sweeping many `video_format` `dimension_enum`
 candidates against one already-known (category, parameter, data_type) —
 this tool's per-candidate re-scan/re-connect and operator-eyeball match
