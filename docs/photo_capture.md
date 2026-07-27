@@ -20,7 +20,13 @@ Path so far: passive sniffing (§5) found no report at all; a first active
 INT8 sweep (§6) came back inconclusive because every candidate was
 confirmed on operator judgment alone; a VOID retry (§7), this time
 verified against the SD card's actual contents rather than a glance,
-produced the confirmed result above.
+produced the confirmed result above. §8 adds operator-provided (not
+wire-observed) knowledge of photo output dimensions/format: BRAW stills
+inherit the current recording resolution (independently cross-confirmed
+against all six of the profile's BRAW `resolutions` entries), but ProRes
+stills use a separate sensor-area concept (2.8K/5.7K/6K) unrelated to
+ProRes's own UHD/HD video resolutions — and every still is DNG regardless
+of codec.
 
 Target camera for first bring-up: `POCKET_6K_G2 v7.9`, per CLAUDE.md's
 camera registry ("start all new features with `POCKET_6K_G2 v7.9`").
@@ -437,3 +443,93 @@ detail, and is left open rather than decided unilaterally here:
 The protocol-level finding (§7.1) stands regardless of how this is
 resolved — it belongs in the profile now, per design principle 6, whether
 or not a session API is ever built on top of it.
+
+---
+
+## 8. Photo output dimensions and format — operator-provided, not wire-observed
+
+Operator-reported (from camera experience/documentation, not a sniffer
+capture or BLE signal — §7.1 already established the trigger carries no
+payload and produces no wire report, so no BLE channel could reveal this
+even in principle) on `POCKET_6K_G2 v7.9`:
+
+- **BRAW:** a still's pixel dimensions equal the current recording
+  *resolution* setting — quality/variant (Q0…5:1…) does not affect them.
+- **ProRes:** a still's pixel dimensions are decided by *sensor area*
+  instead, with only three possible readouts: 2.8K, 5.7K, and 6K.
+- Both BRAW's resolution-driven dimensions and ProRes's three sensor-area
+  dimensions are reported as **the same pixel counts**, and every still,
+  regardless of codec, is saved as **DNG**.
+
+### 8.1 Cross-check against the profile's `resolutions` table
+
+All six of the BRAW dimensions given match `resolutions.*.width`/`height`
+in `payloads/models/POCKET_6K_G2_v7.9.json` exactly (that table's own
+values are themselves confirmed by the 2026-07-20 `dimension_enum` sweep,
+`docs/settings.md` §7):
+
+| Name given | Dimensions given | Matches `resolutions` entry |
+|---|---|---|
+| 6K | 6144×3456 | `"6K 3:2"` |
+| 6K 2.4:1 | 6144×2560 | `"6K 2.4:1"` |
+| 5.7K 17:9 | 5744×3024 | `"5.7K 17:9"` |
+| 4K DCI | 4096×2160 | `"4K DCI"` |
+| 3.7K Anamorphic | 3728×3104 | `"3.7K Anamorphic"` |
+| 2.8K 17:9 | 2868×1512 | `"2.8K 17:9"` |
+
+A clean 6-for-6 match is a strong, independent cross-check on that table
+even though it comes from a completely different evidence channel (camera
+output behavior, not a BLE write/report) — worth recording precisely
+because it corroborates existing wire-verified data from an unrelated
+direction.
+
+**ProRes does not follow the same table**, and this is the important part
+of the finding, not a footnote: the profile's `resolutions` entries for
+ProRes are `"UHD"` (3840×2160) and `"HD"` (1920×1080) — the *video
+recording* resolutions ProRes offers via `dimension_enum`. The operator's
+report says ProRes *stills* ignore that entirely and instead take one of
+three *sensor-area* readouts (2.8K/5.7K/6K) matching BRAW's own dimensions
+for those names. **A still shot while the camera is set to ProRes/UHD is
+not a scaled-down UHD-sized DNG** — it's a full-or-partial sensor-area
+capture unrelated to the active video recording resolution. This directly
+contradicts the naive assumption "photo dimensions = current video
+resolution setting," which holds for BRAW but is wrong for ProRes — worth
+stating explicitly since nothing else in this document would have
+predicted the difference.
+
+Not pinned down here: which specific "6K" ProRes's 6K sensor-area readout
+matches — plain `"6K 3:2"` (6144×3456) or `"6K 2.4:1"` (6144×2560). The
+operator's report names three areas (2.8K, 5.7K, 6K) without
+disambiguating 6K's aspect ratio the way the BRAW list did. Left as an
+open detail rather than guessed.
+
+### 8.2 Why this doesn't become a profile/schema field
+
+Nothing here is a BLE protocol value — there is no wire representation to
+record, because §7.1 already confirmed the trigger is a bare void write
+with no configurable payload, echo, or report of any kind. A hypothetical
+`resolutions.*.photo_dimensions` schema field would encode a fact with no
+corresponding write path (design principle 1 is about protocol values
+specifically, but the same "don't invent structure ahead of a concrete
+need" instinct applies here too) — so this stays prose in this doc rather
+than schema until something in code actually needs to consume it (e.g. a
+future `CameraSession` helper that predicts a still's expected dimensions
+from the current recording state, if that's ever built).
+
+### 8.3 What this changes for the still-open design questions
+
+- **No BLE resolution parameter exists for stills, confirming §7.3's
+  finding isn't accidental.** If dimensions were meant to be
+  BLE-selectable per photo, the trigger would need a payload to carry that
+  selection — it doesn't (confirmed void, both reserved bytes). Dimensions
+  are apparently fully determined by camera state at the moment of
+  capture, not by anything in the trigger command itself.
+- **A future `capture_photo()` needs the caller already in the right
+  state**, the same way `set_camera_format()` must be called *before*
+  `capture_photo()` rather than the reverse — this is consistent with, not
+  a change to, the existing `CameraSession` design (settings are
+  orchestrated separately from the action that consumes them).
+- **Design principle 10's storage/remaining-photo-capacity tracking will
+  need this table anyway** eventually (remaining photo count depends on
+  file size, which depends on dimensions) — a genuine future consumer for
+  this data, just not today's.
