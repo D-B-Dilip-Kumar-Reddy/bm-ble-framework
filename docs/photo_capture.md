@@ -35,7 +35,10 @@ dimensions/format: BRAW stills inherit the current recording resolution
 (independently cross-confirmed against all six of the profile's BRAW
 `resolutions` entries), but ProRes stills use a separate sensor-area
 concept (2.8K/5.7K/6K) unrelated to ProRes's own UHD/HD video
-resolutions — and every still is DNG regardless of codec.
+resolutions — and every still is DNG regardless of codec. §10 scaffolds
+`tools/sniffers/sniffer_sensor_area.py` to find out whether that
+sensor-area concept has any BLE representation at all — no capture run
+yet.
 
 Target camera for first bring-up: `POCKET_6K_G2 v7.9`, per CLAUDE.md's
 camera registry ("start all new features with `POCKET_6K_G2 v7.9`").
@@ -612,3 +615,52 @@ resolving it once rather than per-camera: whatever answer is chosen
 (best-effort signal, held API, or a documented exception) is very likely
 to transfer across models the same way the trigger coordinates did,
 since nothing camera-specific has shown up in this investigation so far.
+
+---
+
+## 10. Sniffing "Sensor Area" — `tools/sniffers/sniffer_sensor_area.py`
+
+Scaffold only — no capture has been run yet. This is the natural next
+reverse-engineering step §8 opened up: §8.1 established that ProRes
+stills follow a "sensor area" concept (2.8K/5.7K/6K) with no relationship
+to `resolutions.*.dimension_enums`'s ProRes entries (`UHD`/`HD`, the
+video recording resolutions) — but that finding was operator-reported
+camera behavior, not a BLE capture, so nothing is known yet about whether
+"Sensor Area" has any BLE representation at all, or what it looks like on
+the wire if it does.
+
+The new sniffer follows the same pattern as `sniffer_photo.py` and
+`sniffer_settings.py` (see `docs/sniffer_capture_engine.md` — fourth
+consumer): default windows are `idle_baseline` then one window per
+concrete sensor-area value (`sensor_area_2_8k`, `sensor_area_5_7k`,
+`sensor_area_6k`), operator-triggered on the body, `--actions`-overridable.
+Precondition: the camera must already be in ProRes before running it —
+BRAW stills follow the ordinary recording resolution instead (§8.1),
+already fully modeled, nothing new to sniff there.
+
+```
+python tools/sniffers/sniffer_sensor_area.py
+python tools/sniffers/sniffer_sensor_area.py --model-key POCKET_6K_PRO --firmware v8.6
+```
+
+### What the result would mean
+
+- **If a category/parameter reports on the wire when Sensor Area
+  changes:** seed `tools/control/discover_command.py --from-capture` with
+  it and follow the standard discovery workflow (`docs/command_discovery.md`)
+  to find the write coordinates — this would become a new command family,
+  `commands.sensor_area` or similar, structurally independent of
+  `video_format`/`recording_format`.
+- **If nothing reports** (matching the still-capture trigger's own null
+  result, §5, and consistent with a menu setting that only affects local
+  image-processing/readout without a corresponding BLE-visible state
+  change): that's a real finding too, and would mean this codebase has no
+  way to read or set Sensor Area over BLE at all — worth knowing before
+  any future photo-capabilities work assumes it's controllable.
+- **A third possibility, not yet ruled out:** "Sensor Area" could turn out
+  to just be a display name for something the `dimension_enum` sweep
+  already touched (e.g. if a ProRes dimension_enum below the currently
+  unexplained gap actually selects a sensor-area readout rather than a
+  video resolution) — the capture would settle this by showing whether
+  changing Sensor Area moves `recording_format`/`codec_quality`'s existing
+  channels or something new entirely.

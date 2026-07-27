@@ -207,6 +207,14 @@ so without an idle window `tools/common/discovery.py`'s
 `seed_triples_from_capture(exclude_ambient=True)` filter would have no
 contrast and keep everything. See `docs/photo_capture.md`.
 
+`tools/sniffers/sniffer_sensor_area.py` is the fourth consumer, built the
+same way — `idle_baseline` plus one window per concrete setting value
+(`sensor_area_2_8k`/`5_7k`/`6k`) — investigating a ProRes-only still-photo
+concept the operator reported (docs/photo_capture.md §8) that has no
+known BLE representation yet, unlike anything the settings sniffer
+already covers. Scaffold only as of this writing; no capture run. See
+`docs/photo_capture.md` §10.
+
 ---
 
 ## Testing
