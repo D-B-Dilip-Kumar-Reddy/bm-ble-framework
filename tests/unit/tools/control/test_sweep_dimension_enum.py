@@ -222,6 +222,25 @@ class TestIsMatch:
         )
 
 
+class TestRecordingFormatState:
+    RF = RecordingFormat(fps_int=25, sensor_fps_int=25, width=4096, height=2160, frame_flags=16)
+
+    def test_none_report_gives_none_state(self):
+        assert sde.recording_format_state(None) is None
+
+    def test_extracts_width_height_flags_fingerprint(self):
+        assert sde.recording_format_state(self.RF) == (4096, 2160, 16)
+
+    def test_same_dimensions_different_flags_are_distinct_states(self):
+        windowed = RecordingFormat(
+            fps_int=25, sensor_fps_int=25, width=1920, height=1080, frame_flags=0x10
+        )
+        unwindowed = RecordingFormat(
+            fps_int=25, sensor_fps_int=25, width=1920, height=1080, frame_flags=0x00
+        )
+        assert sde.recording_format_state(windowed) != sde.recording_format_state(unwindowed)
+
+
 class TestParseArgs:
     def _parse(self, monkeypatch, extra: list[str]) -> object:
         monkeypatch.setattr(

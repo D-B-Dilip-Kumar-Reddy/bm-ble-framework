@@ -54,7 +54,13 @@ PRO sessions — the G2 side of that question is now permanently untestable
 on v7.9, since the operator's G2 has since been upgraded to firmware
 v8.6. §10.2 records the operator's cross-model sensor-area option matrix,
 including a genuine G2/PRO difference (5.7K vs 5.3K) and both cameras
-disabling sensor-area choice entirely at ProRes/4K DCI.
+disabling sensor-area choice entirely at ProRes/4K DCI. §10.5's hunt for
+a second `dimension_enum` aliasing to `HD` (the natural next place for
+Sensor Area to live) found an apparent match that a same-session repeat
+run then **refuted as a stale-state false positive** — a real
+methodology lesson, now guarded against in `sweep_dimension_enum.py`
+itself, but leaving the underlying question open again: no confirmed BLE
+write path for Sensor Area has been found on either camera.
 
 Target camera for first bring-up: `POCKET_6K_G2 v7.9`, per CLAUDE.md's
 camera registry ("start all new features with `POCKET_6K_G2 v7.9`") —
@@ -805,49 +811,15 @@ coordinates were found. No profile changes made from this capture — there
 is nothing here that meets this codebase's evidentiary bar for even a
 CANDIDATE entry (design principle 6).
 
-**Next steps, ranked (updated after §10.3's and §10.4's PRO reruns):**
+**Next steps, ranked (updated after §10.3's, §10.4's, and §10.5's PRO
+reruns):**
 
-1. **Highest priority, not yet tried — hunt for multiple `dimension_enum`
-   values that all decode to the same `HD` width/height.** Both profiles
-   currently record exactly one ProRes/HD `dimension_enum` (G2 and PRO
-   both: `3`). Sensor Area sits *underneath* the displayed video
-   resolution (§10.1/§10.3/§10.4: width/height stay pinned to `HD`
-   regardless of which sensor area is chosen) — the natural place for it
-   to actually live is `video_format`'s own write, as one of several enum
-   bytes that all happen to produce the *same* `recording_format`
-   width/height but a *different* underlying sensor readout,
-   distinguishable by the flags nibble §10.1/§10.3/§10.4 have now
-   repeatedly and reproducibly (§10.4) shown correlates with
-   full-sensor-vs-cropped. This has never been checked — every past
-   `dimension_enum` sweep (`docs/settings.md` §7, §16) was hunting for an
-   enum reaching an entirely *different* resolution (4K DCI), not for a
-   second/third enum secretly aliasing to a resolution already known.
-   `tools/control/sweep_dimension_enum.py` already does exactly this kind
-   of sweep and decodes flags for every candidate — no new tooling needed.
-   **Run this on the PRO** (the G2's firmware upgrade to v8.6 means its
-   v7.9 profile can no longer be tested against real hardware — this
-   hypothesis stays G2-untestable until a `POCKET_6K_G2_v8.6` profile
-   exists):
-
-   ```
-   python tools/control/sweep_dimension_enum.py \
-       --model-key POCKET_6K_PRO --firmware v8.6 \
-       --fps 24 --target-resolution "HD" --target-codec ProRes \
-       --no-stop-on-match --include-known
-   ```
-
-   (`--no-stop-on-match` is essential — the tool's default stops at the
-   first match, which would hide any second or third enum. `--include-known`
-   re-sends the already-known enum `3` too, for a fresh baseline flags
-   reading in the same session.) If this finds more than one enum decoding
-   to `HD`, that's likely `commands.sensor_area`'s real home — a
-   `dimension_enum` value per sensor area, same mechanism as ordinary
-   resolution selection, just aliased at the display level. Because the
-   flags bit is only binary, a genuine 3-way find (2.8K vs 5.3K vs 6K)
-   would still need photo-level confirmation — send each candidate, then
-   trigger a still (`commands.photo`) and check the SD card's actual pixel
-   dimensions/EXIF against §8's known per-sensor-area sizes, the same
-   verification method that established §7/§9's photo findings.
+1. ~~Hunt for multiple `dimension_enum` values that all decode to the
+   same `HD` width/height.~~ **Tried, PRO, §10.5: an apparent second enum
+   (`0x00`) turned out to be a stale-state false positive, refuted by an
+   immediate repeat run — only the already-known `0x03` reliably reaches
+   `HD`.** Not fully exhausted (`0x17`-`0x1F` untried, per §10.5's closing
+   options) but no longer the confident top lead it was before testing.
 2. ~~A repeat/interleaved run to check whether `0x09/0x02`'s per-setting
    values are stable and reproducible, or just time-based drift.~~ **Done,
    PRO, §10.4: firmly negative — 0-for-2 independent PRO sensor-area
@@ -1013,3 +985,105 @@ artifact of the G2's single sample being an unlucky coincidence.
 repeat test) is now done on the PRO with a firm negative result — drop it
 from future priority. The dimension_enum-aliasing hunt (§10.1 item 1) is
 unaffected and remains the top open lead, runnable on the PRO alone.
+
+---
+
+### 10.5 dimension_enum-aliasing hunt — 2026-07-27, PRO — apparent match REFUTED by a repeat run
+
+§10.1 item 1's hypothesis, finally tested: is there a second
+`dimension_enum` that decodes to the same `HD` width/height as the
+already-known enum `3`, distinguishable by the windowed flags bit? Ran
+
+```
+python tools/control/sweep_dimension_enum.py \
+    --model-key POCKET_6K_PRO --firmware v8.6 \
+    --fps 24 --target-resolution "HD" --target-codec ProRes \
+    --no-stop-on-match --include-known
+```
+
+**twice in immediate succession** (the operator's own repeat, not a
+planned interleave — but it turned out to be exactly the check this
+result needed). Captures:
+`tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260727T163737.json`
+and `…T164102.json`.
+
+#### First run: an apparent hit
+
+Candidate `0x00` — never tried before, not in the profile — decoded to
+`1920×1080` (HD) with `flags=0x0000` (unwindowed), while the already-known
+`0x03` also matched at `1920×1080` with `flags=0x0010` (windowed). Two
+enums, same resolution, different flags: exactly the signature §10.1's
+hypothesis predicted for a genuine sensor-area-selecting enum pair.
+
+#### Second run: contradiction
+
+The identical command, run again right after, gave `0x00` a **completely
+different** result: `6144×2560` ("6K 2.4:1"), `flags=0x0010` — not HD at
+all. Every *other* candidate's result — including `0x03` and every
+already-known enum (`0x06`/UHD, `0x08`/4K DCI-BRAW, `0x0D`/2.8K,
+`0x0F`/3.7K Anamorphic, `0x12`/5.7K, `0x13`/6K, `0x14`/6K 2.4:1) —
+reproduced byte-identically across both runs. Only `0x00` disagreed with
+itself.
+
+#### Diagnosis: `0x00` is a no-op; the "match" was stale leftover state
+
+Cross-checking against what the camera held immediately *before* each
+run's `0x00` send settles it. Run 1's `0x00` was the sweep's first
+candidate, sent right after connect-settle — and the camera's prior
+session was §10.4's interleaved sensor-area test, which ended at
+ProRes/HD with the unwindowed ("6K" sensor area) flags. Run 1's `0x00`
+result — `1920×1080`, `flags=0x0000` — is an exact match for that
+leftover state, not a new one. Run 2's `0x00` was likewise this sweep's
+first candidate, right after Run 1 had ended on candidate `0x14`
+(`6144×2560`, "6K 2.4:1") with two silent candidates (`0x15`, `0x16`)
+after it — so the camera was still sitting at "6K 2.4:1" when Run 2
+started. Run 2's `0x00` result — `6144×2560`, `flags=0x0010` — is an
+exact match for *that* leftover state.
+
+**`0x00` never caused either reported state — both times, the "result"
+was simply whatever the camera already held before the write, exactly
+`docs/settings.md` §7's "the report isn't an ack, it's a state
+reflection" mechanism applied to an enum that (most likely) isn't a real,
+assigned value at all.** This is a genuine false positive, the mirror
+image of the false-negative lesson `CLAUDE.md`'s protocol table already
+records for this same tool family (an `unconfirmed` result that turned
+out to be a timeout artifact) — here, a `MATCH` turned out to be a
+timing/state artifact instead. Both lessons say the same thing: a single
+sweep's per-candidate result isn't self-certifying; check it against
+context (a prior confirmed state, an independent repeat) before trusting
+it.
+
+#### Tooling fix: stale-match guard added to `sweep_dimension_enum.py`
+
+`is_match` only ever checked a candidate's decoded state against the
+*target* — it had no way to notice a match that was actually inherited
+from before the write. The tool now tracks the last confirmed
+`(width, height, flags)` state across candidates (carried forward through
+silent ones) and flags any `MATCH` identical to it as a **possible stale
+match**, inline during the sweep and in the final summary, with a
+pointer to this finding. Real matches should come through clean unless
+the immediately preceding candidate coincidentally reached the exact same
+state — in which case the warning is itself useful signal to re-run from
+a different starting point.
+
+#### Bottom line: no second HD-aliasing enum found in 0x00–0x16
+
+Only `0x03` — the already-known value — reliably, reproducibly reaches
+`ProRes/HD`. §10.1 item 1's hypothesis is **not confirmed** within the
+default sweep range. No profile changes from this result (a refuted
+hypothesis isn't evidence for a `known_unreachable` entry either — it's
+simply inconclusive within the range tested). Options going forward,
+neither pursued yet:
+
+- Extend the sweep to `0x17`–`0x1F` (the same second range the earlier
+  ProRes/4K DCI hunt used, `docs/settings.md` §16) for full 32-value
+  coverage — worth doing for completeness, but tempered: every candidate
+  in `0x00`–`0x16` other than the known values produced literally no
+  report at all (a clean "invalid enum" signature, the same pattern the
+  4K DCI hunt saw across its own untried range), which doesn't inspire
+  confidence a second HD enum is hiding just past `0x16` either.
+- Treat this as reasonably strong (not exhaustive) evidence that Sensor
+  Area, at least at HD, is not selected via a second `video_format`
+  `dimension_enum` — reopening the "does Sensor Area have any BLE
+  representation at all" question §10.1's bottom line already left open,
+  now with one more closed-off hypothesis.
