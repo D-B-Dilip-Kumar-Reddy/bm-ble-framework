@@ -218,7 +218,12 @@ G2-only, a capacity-shaped signal), but neither already-known channel's
 payload actually varies with the chosen sensor area on either camera —
 see `docs/photo_capture.md` §10.1/§10.3 for the full results, including a
 genuine cross-model reconfirmation of the pre-existing "windowed bit"
-hypothesis found along the way.
+hypothesis found along the way. §10.4 then reused `--actions` a third
+way: repeating labels to interleave a value twice (`--actions
+idle_baseline,sensor_area_2_8k,sensor_area_6k,sensor_area_2_8k,sensor_area_6k`)
+turned a single-sample correlation into a demonstrated, on-demand-toggling
+signal — `run_capture_windows` has no dedicated "repeat" concept, since a
+duplicated label in `--actions` already gets its own fresh window.
 
 ---
 

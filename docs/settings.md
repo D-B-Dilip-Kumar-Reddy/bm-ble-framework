@@ -641,7 +641,14 @@ this time cross-model: `docs/photo_capture.md` §10.3's PRO rerun of the
 same Sensor Area capture found the identical clear-only-for-full-sensor
 pattern independently, on that camera's own different baseline flags byte
 (`0x10`/`0x00` vs the G2's `0x13`/`0x03`) — the bit-4 boundary, not the
-exact byte value, is what holds across both cameras.
+exact byte value, is what holds across both cameras. A fifth
+reconfirmation then upgraded this from correlation to demonstrated
+causation: `docs/photo_capture.md` §10.4's PRO-only interleaved A-B-A-B
+sensor-area sweep (2.8K→6K→2.8K→6K) toggled the bit byte-identically on
+demand, `0x0010`↔`0x0000`, twice each way — no longer just "this bit
+happened to differ between two states observed once each," but a signal
+that flips cleanly and repeatably every time the operator changes the
+setting.
 
 This is the strongest evidence any settings value has received: a decoded,
 byte-exact echo *and* (per the operator's own summary of this round) a

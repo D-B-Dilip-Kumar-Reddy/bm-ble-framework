@@ -43,17 +43,25 @@ that changing
 Sensor Area does trigger real report activity (`recording_format`,
 `codec_quality`, and, on the G2 only, the `0x09/0x02` capacity-shaped
 signal) but no directly-encoded sensor-area value on either channel — a
-promising but single-sample-and-not-PRO-reproduced lead sits in
-`0x09/0x02`'s monotonic G2 values (§10.1). §10.3 independently reran the
-capture on the PRO: same negative result, plus a genuine cross-model
-reconfirmation of the "windowed" flag bit tracking full-sensor-vs-cropped
-sensor area on both cameras. §10.2 records the operator's cross-model
-sensor-area option matrix, including a genuine G2/PRO difference (5.7K
-vs 5.3K) and both cameras disabling sensor-area choice entirely at
-ProRes/4K DCI.
+promising but single-sample G2 lead sits in `0x09/0x02`'s monotonic
+values (§10.1). §10.3 independently reran the capture on the PRO: same
+negative result, plus a genuine cross-model reconfirmation of the
+"windowed" flag bit tracking full-sensor-vs-cropped sensor area on both
+cameras. §10.4's PRO-only interleaved A-B-A-B repeat then **confirmed the
+windowed bit as a clean, reproducible signal** (toggled byte-identically,
+twice each way) while putting `0x09/0x02` at a firm 0-for-2 independent
+PRO sessions — the G2 side of that question is now permanently untestable
+on v7.9, since the operator's G2 has since been upgraded to firmware
+v8.6. §10.2 records the operator's cross-model sensor-area option matrix,
+including a genuine G2/PRO difference (5.7K vs 5.3K) and both cameras
+disabling sensor-area choice entirely at ProRes/4K DCI.
 
 Target camera for first bring-up: `POCKET_6K_G2 v7.9`, per CLAUDE.md's
-camera registry ("start all new features with `POCKET_6K_G2 v7.9`").
+camera registry ("start all new features with `POCKET_6K_G2 v7.9`") —
+note this firmware is no longer available on the operator's own G2 unit
+(upgraded to v8.6 as of this session), so further G2 work needs a new
+`POCKET_6K_G2_v8.6` profile scaffolded from scratch (CLAUDE.md's
+Phase 1-4 workflow) whenever that's picked up.
 
 ---
 
@@ -797,28 +805,33 @@ coordinates were found. No profile changes made from this capture — there
 is nothing here that meets this codebase's evidentiary bar for even a
 CANDIDATE entry (design principle 6).
 
-**Next steps, ranked (updated after §10.3's PRO rerun):**
+**Next steps, ranked (updated after §10.3's and §10.4's PRO reruns):**
 
 1. **Highest priority, not yet tried — hunt for multiple `dimension_enum`
    values that all decode to the same `HD` width/height.** Both profiles
    currently record exactly one ProRes/HD `dimension_enum` (G2 and PRO
    both: `3`). Sensor Area sits *underneath* the displayed video
-   resolution (§10.1/§10.3: width/height stay pinned to `HD` regardless of
-   which sensor area is chosen) — the natural place for it to actually
-   live is `video_format`'s own write, as one of several enum bytes that
-   all happen to produce the *same* `recording_format` width/height but a
-   *different* underlying sensor readout, distinguishable by the flags
-   nibble §10.1/§10.3 already showed correlates with full-sensor-vs-
-   cropped. This has never been checked — every past `dimension_enum`
-   sweep (`docs/settings.md` §7, §16) was hunting for an enum reaching an
-   entirely *different* resolution (4K DCI), not for a second/third enum
-   secretly aliasing to a resolution already known. `tools/control/
-   sweep_dimension_enum.py` already does exactly this kind of sweep and
-   decodes flags for every candidate — no new tooling needed:
+   resolution (§10.1/§10.3/§10.4: width/height stay pinned to `HD`
+   regardless of which sensor area is chosen) — the natural place for it
+   to actually live is `video_format`'s own write, as one of several enum
+   bytes that all happen to produce the *same* `recording_format`
+   width/height but a *different* underlying sensor readout,
+   distinguishable by the flags nibble §10.1/§10.3/§10.4 have now
+   repeatedly and reproducibly (§10.4) shown correlates with
+   full-sensor-vs-cropped. This has never been checked — every past
+   `dimension_enum` sweep (`docs/settings.md` §7, §16) was hunting for an
+   enum reaching an entirely *different* resolution (4K DCI), not for a
+   second/third enum secretly aliasing to a resolution already known.
+   `tools/control/sweep_dimension_enum.py` already does exactly this kind
+   of sweep and decodes flags for every candidate — no new tooling needed.
+   **Run this on the PRO** (the G2's firmware upgrade to v8.6 means its
+   v7.9 profile can no longer be tested against real hardware — this
+   hypothesis stays G2-untestable until a `POCKET_6K_G2_v8.6` profile
+   exists):
 
    ```
    python tools/control/sweep_dimension_enum.py \
-       --model-key POCKET_6K_G2 --firmware v7.9 \
+       --model-key POCKET_6K_PRO --firmware v8.6 \
        --fps 24 --target-resolution "HD" --target-codec ProRes \
        --no-stop-on-match --include-known
    ```
@@ -826,20 +839,20 @@ CANDIDATE entry (design principle 6).
    (`--no-stop-on-match` is essential — the tool's default stops at the
    first match, which would hide any second or third enum. `--include-known`
    re-sends the already-known enum `3` too, for a fresh baseline flags
-   reading in the same session.) Repeat with `--model-key POCKET_6K_PRO
-   --firmware v8.6` — same command otherwise, since both profiles share
-   `dimension_enum=3` for HD. If this finds more than one enum decoding to
-   `HD`, that's likely `commands.sensor_area`'s real home — a
+   reading in the same session.) If this finds more than one enum decoding
+   to `HD`, that's likely `commands.sensor_area`'s real home — a
    `dimension_enum` value per sensor area, same mechanism as ordinary
    resolution selection, just aliased at the display level. Because the
-   flags bit is only binary, a genuine 3-way find (2.8K vs 5.7K/5.3K vs 6K)
-   would still need photon-level confirmation — send each candidate, then
+   flags bit is only binary, a genuine 3-way find (2.8K vs 5.3K vs 6K)
+   would still need photo-level confirmation — send each candidate, then
    trigger a still (`commands.photo`) and check the SD card's actual pixel
    dimensions/EXIF against §8's known per-sensor-area sizes, the same
    verification method that established §7/§9's photo findings.
-2. A repeat/interleaved run to check whether `0x09/0x02`'s per-setting
-   values are stable and reproducible on the G2, or just time-based drift
-   — lower priority now that it didn't reproduce on the PRO at all (§10.3).
+2. ~~A repeat/interleaved run to check whether `0x09/0x02`'s per-setting
+   values are stable and reproducible, or just time-based drift.~~ **Done,
+   PRO, §10.4: firmly negative — 0-for-2 independent PRO sensor-area
+   sessions (8 windows total). Dropped from further priority; the G2 side
+   of this question is now untestable on v7.9 hardware.**
 3. `Operation.OFFSET` isolation-style probing (per the `docs/settings.md`
    §16 precedent) or a wider `--listen-seconds` in case of a delayed
    report — full-channel decode of the existing captures is already done
@@ -947,3 +960,56 @@ windowed-bit theory, but not a usable 3-way selector, and not something
 this codebase can act on for reading/writing a specific sensor area. No
 profile changes from either capture — nothing here clears design
 principle 6's bar.
+
+### 10.4 Interleaved repeat — 2026-07-27, PRO — windowed bit reproducibility CONFIRMED, capacity signal still absent
+
+Following §10.1's "next steps" item 2 (checking `0x09/0x02` for
+reproducibility vs. drift), but PRO-only: the operator's G2 was upgraded
+to firmware v8.6 between sessions, so it can no longer be tested against
+`payloads/models/POCKET_6K_G2_v7.9.json` — nothing new can be added to
+§10.1's G2 evidence until a `POCKET_6K_G2_v8.6` profile exists someday.
+Ran `sniffer_sensor_area.py --model-key POCKET_6K_PRO --firmware v8.6
+--actions idle_baseline,sensor_area_2_8k,sensor_area_6k,sensor_area_2_8k,sensor_area_6k`
+— an A-B-A-B interleave, 2.8K and 6K each set twice, with a longer pause
+before closing each window than the single-pass runs used. Capture:
+`tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260727T162558.json`.
+
+**Windowed bit: clean, byte-identical, reproducible toggle.**
+`recording_format`'s flags decoded to exactly `0x0010` both times 2.8K
+was selected and exactly `0x0000` both times 6K was selected — an A-B-A-B
+pattern with zero deviation:
+
+| Window | Flags |
+|---|---|
+| `sensor_area_2_8k` (1st) | `0x0010` |
+| `sensor_area_6k` (1st) | `0x0000` |
+| `sensor_area_2_8k` (2nd) | `0x0010` |
+| `sensor_area_6k` (2nd) | `0x0000` |
+
+This is meaningfully stronger evidence than §10.1/§10.3's single-pass
+results: a signal that toggles cleanly on demand, twice each way, is
+reproducible causation, not a one-off correlation. Width/height stayed
+`1920×1080` and `codec_quality` stayed `ProRes/422` in all four windows,
+same as every prior sensor-area capture — confirming again that neither
+channel's *primary* payload carries the sensor-area choice, only this one
+flags bit does.
+
+**`0x09/0x02` still did not fire — not once, across all five windows,
+despite longer per-window waits.** Combined with §10.3's single-pass PRO
+result (also zero occurrences), this signal is now **0-for-2 independent
+PRO sensor-area sessions (8 total sensor-area windows)**, a much firmer
+negative than a single miss. Important nuance: this does not mean the
+signal is dead on the PRO generally — it fired during the original PRO
+photo-capture session (`docs/photo_capture.md` §5.3, `photo_capture_2`
+window) — only that it specifically does not respond to Sensor Area
+changes on this camera, unlike its consistent one-per-window appearance
+on the G2's single sensor-area sample. Given the G2 can no longer be
+retested on v7.9, this asymmetry (fires for sensor area on G2, never for
+sensor area on PRO, despite firing for other events on both) will likely
+stay unresolved as either a genuine cross-model difference or an
+artifact of the G2's single sample being an unlucky coincidence.
+
+**Updated next-steps priority:** item 2 from §10.1 (the `0x09/0x02`
+repeat test) is now done on the PRO with a firm negative result — drop it
+from future priority. The dimension_enum-aliasing hunt (§10.1 item 1) is
+unaffected and remains the top open lead, runnable on the PRO alone.
