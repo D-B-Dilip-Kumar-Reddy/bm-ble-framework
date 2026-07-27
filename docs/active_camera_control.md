@@ -390,6 +390,22 @@ the body menu, so the state is real and an exhaustive sweep is the most
 promising way to find whatever `dimension_enum` (if any) reaches it
 directly through this codebase's own writes.
 
+A second, structurally different use case (`docs/photo_capture.md` §10.1's
+"Next steps", not yet run): hunting for a *second* `dimension_enum` that
+aliases to a resolution already known, rather than one reaching an unknown
+resolution. Both profiles record exactly one ProRes/HD enum (`3`); the
+Sensor Area investigation (§10.1/§10.3) found that a still-photo sensor
+readout choice sits underneath the displayed video resolution without
+changing `recording_format`'s width/height at all, only its flags nibble —
+so if Sensor Area is written via `video_format` the way ordinary
+resolution changes are, its enum bytes would all decode to the *same* `HD`
+width/height as the one already known, distinguishable only by that flags
+bit. This needs `--no-stop-on-match` (the tool's default stops at the
+first match, which would hide a second/third one) and `--include-known`
+(to get a fresh baseline flags reading from the already-known enum in the
+same session) — the opposite defaults from the motivating case above,
+since here every match matters, not just the first one.
+
 ---
 
 ## `tools/control/sweep_camera_format.py`
