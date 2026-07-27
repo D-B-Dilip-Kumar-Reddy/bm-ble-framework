@@ -1,6 +1,6 @@
 # Guided Command Discovery
 
-**Status:** implemented — used to populate `POCKET_6K_PRO v8.6`'s recording block, and (via its VOID sweep support) `POCKET_6K_G2 v7.9`'s `commands.photo` block, on real hardware.
+**Status:** implemented — used to populate `POCKET_6K_PRO v8.6`'s recording block, and (via its VOID sweep support) `commands.photo` on both `POCKET_6K_G2 v7.9` and `POCKET_6K_PRO v8.6`, on real hardware.
 
 ## Overview
 
@@ -206,6 +206,10 @@ equally-confirmed alternative in `provenance.notes` — the tool's
 one-candidate-per-outcome design stayed correct throughout; only the
 last step (emission) needed a human because the finding itself doesn't
 fit a single-`reserved` block by nature, not because anything was wrong.
+The identical sweep, repeated on `POCKET_6K_PRO v8.6` the same day
+(`docs/photo_capture.md` §9), hit the exact same warning/crash/manual-
+transcription sequence and reached the identical reserved-indifference
+finding independently — this pattern is now established, not a one-off.
 
 **Known latent risk — connect-settle race — materialized in practice
 2026-07-27.** This tool writes the first candidate immediately after

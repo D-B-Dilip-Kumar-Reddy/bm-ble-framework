@@ -1,32 +1,37 @@
 # Photo Capture
 
-**Status:** the trigger command is confirmed. `POCKET_6K_G2 v7.9`'s
+**Status:** the trigger command is confirmed on **both cameras**.
 `commands.photo` (category `0x0A`, parameter `0x03`, `VOID`) is
-`VERIFIED` in the profile as of 2026-07-27 (§7) — a void ASSIGN to that
-coordinate reliably fires a real photo capture, confirmed by inspecting
-the SD card's contents on a PC after each send. What's still missing:
-**no BLE-observable signal (echo or otherwise) confirms a photo was
-taken** — every capture window around a confirmed-successful trigger
-shows only ambient telemetry, matching the passive finding (§5) that a
-body-triggered still produces no report either. That leaves an open
-verification-strategy question (§7's closing section) blocking
+`VERIFIED` as of 2026-07-27 in both `payloads/models/POCKET_6K_G2_v7.9.json`
+(§7) and `payloads/models/POCKET_6K_PRO_v8.6.json` (§9), each
+independently confirmed on its own hardware — a void ASSIGN to that
+coordinate reliably fires a real photo capture on both, confirmed by
+inspecting the SD card's contents on a PC after each send. What's still
+missing, on both cameras: **no BLE-observable signal (echo or otherwise)
+confirms a photo was taken** — every capture window around a
+confirmed-successful trigger shows only ambient telemetry, matching the
+passive finding (§5) that a body-triggered still produces no report
+either. That leaves an open verification-strategy question (§7's closing
+section, now applying identically to both cameras — §9.2) blocking
 `protocol/categories/media.py`, `CameraSession.capture_photo()`, and
 `examples/capture_photo.py` — all still planned (CLAUDE.md package
 structure) — since CLAUDE.md design principle 3 requires every write to
 be confirmed before reporting success, and no BLE channel currently does
 that for this command.
 
-Path so far: passive sniffing (§5) found no report at all; a first active
-INT8 sweep (§6) came back inconclusive because every candidate was
-confirmed on operator judgment alone; a VOID retry (§7), this time
-verified against the SD card's actual contents rather than a glance,
-produced the confirmed result above. §8 adds operator-provided (not
-wire-observed) knowledge of photo output dimensions/format: BRAW stills
-inherit the current recording resolution (independently cross-confirmed
-against all six of the profile's BRAW `resolutions` entries), but ProRes
-stills use a separate sensor-area concept (2.8K/5.7K/6K) unrelated to
-ProRes's own UHD/HD video resolutions — and every still is DNG regardless
-of codec.
+Path so far: passive sniffing (§5) found no report at all on either
+camera; a first active INT8 sweep on the G2 (§6) came back inconclusive
+because every candidate was confirmed on operator judgment alone; a VOID
+retry on the G2 (§7), this time verified against the SD card's actual
+contents rather than a glance, produced the confirmed result; the
+identical VOID sweep repeated on the PRO (§9), same SD-card verification
+method, reached the identical finding independently. §8 adds
+operator-provided (not wire-observed) knowledge of the G2's photo output
+dimensions/format: BRAW stills inherit the current recording resolution
+(independently cross-confirmed against all six of the profile's BRAW
+`resolutions` entries), but ProRes stills use a separate sensor-area
+concept (2.8K/5.7K/6K) unrelated to ProRes's own UHD/HD video
+resolutions — and every still is DNG regardless of codec.
 
 Target camera for first bring-up: `POCKET_6K_G2 v7.9`, per CLAUDE.md's
 camera registry ("start all new features with `POCKET_6K_G2 v7.9`").
@@ -164,9 +169,9 @@ record what actually happened.
 - Does the still button behave identically across codecs (a BRAW vs ProRes
   attribution session via `--actions` would answer this)? Still open —
   only tried at one codec/resolution so far.
-- Does the same `0x0A/0x03` VOID write work on `POCKET_6K_PRO v8.6`? Not
-  yet tried — design principle 6 (sniffer/discovery-first per model) means
-  this needs its own confirmation, not an assumption from the G2 result.
+- ~~Does the same `0x0A/0x03` VOID write work on `POCKET_6K_PRO v8.6`?~~
+  **Answered 2026-07-27: yes — independently confirmed, same coordinates,
+  same reserved-byte indifference, same SD-card verification method (§9).**
 
 ---
 
@@ -530,3 +535,61 @@ from the current recording state, if that's ever built).
   need this table anyway** eventually (remaining photo count depends on
   file size, which depends on dimensions) — a genuine future consumer for
   this data, just not today's.
+
+---
+
+## 9. Confirmed — 2026-07-27, PRO — same VOID trigger, independently verified
+
+Same-day repeat of §7's sweep on `POCKET_6K_PRO v8.6`:
+
+```
+python tools/control/discover_command.py \
+    --model-key POCKET_6K_PRO --firmware v8.6 \
+    --label photo --category 0x0A --parameter 0x03 --data-type VOID \
+    --reserved 0,1 --outcomes photo_taken
+```
+
+Both candidates (`reserved=0x00`, `reserved=0x01`) confirmed `photo_taken`,
+**each independently checked against the SD card's actual contents** —
+same verification method as §7, confirmed explicitly by the operator
+before this was trusted enough to write into the profile. Same
+end-of-run `ValueError` from `build_command_block` for the same reason
+(one outcome, two disagreeing candidates); same manual transcription into
+the profile as a result, per §7.1's precedent, rather than forcing a
+third hardware round to get a tool-emittable single-candidate sweep.
+
+### 9.1 Result — identical finding, independently reached
+
+`commands.photo` is now `VERIFIED` in
+`payloads/models/POCKET_6K_PRO_v8.6.json` too: category `0x0A`, parameter
+`0x03`, `VOID`, reserved indifferent (`0x00` canonical, `0x01` equally
+confirmed), no echo or report of any kind in either capture window
+(`tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260727T140011.json`).
+`capabilities.supports_photo: true` added to this profile alongside it.
+
+This is deliberately **not** copied from the G2's entry — design
+principle 6 requires independent confirmation per camera/firmware, and
+this run supplied it: its own TX bytes, its own two capture windows, its
+own SD-card check. That two cameras arrived at byte-identical coordinates
+and byte-identical reserved-byte indifference independently is a genuine
+cross-model data point (the still-capture command appears to be a fixed
+part of the BMD BLE protocol, not something that varies per camera the
+way the settings families' `dimension_enum`s do), but it's evidence, not
+a substitute for the PRO's own confirmation.
+
+One wire difference worth noting, not a discrepancy: the PRO's first
+candidate window shows a longer/different-shaped connect-burst tail than
+the G2's equivalent window (`0x01/0x10`, `0x04/0x07`, `0x0A/0x05`,
+`0x09/0x08` appear here but not there) — consistent with this camera's
+already-documented longer/heavier connect burst from the settings
+investigation (`docs/settings.md` §15's lens-burst timing note), not
+anything specific to the photo trigger.
+
+### 9.2 What this changes
+
+Nothing about §7.3's open verification-strategy question — it now applies
+identically to both cameras, which if anything strengthens the case for
+resolving it once rather than per-camera: whatever answer is chosen
+(best-effort signal, held API, or a documented exception) is very likely
+to transfer across models the same way the trigger coordinates did,
+since nothing camera-specific has shown up in this investigation so far.

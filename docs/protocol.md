@@ -241,7 +241,7 @@ payload order; all values little-endian.
 | 7 | Configuration | — |
 | 8 | Color Correction | — |
 | 9 | (undocumented) | mostly ambient ~1/s telemetry, meaning unknown [sniffer-verified] — except parameter 1, a CANDIDATE write-margin warning, see §9 below |
-| 10 | Media | `protocol/categories/recording.py` (10.1); `protocol/categories/settings.py` codec_quality (10.0, CANDIDATE — see `docs/settings.md`); `commands.photo` (10.3) VERIFIED on `POCKET_6K_G2 v7.9` but with no `protocol/categories/media.py` yet — see below and `docs/photo_capture.md`; future: playback (10.2) |
+| 10 | Media | `protocol/categories/recording.py` (10.1); `protocol/categories/settings.py` codec_quality (10.0, CANDIDATE — see `docs/settings.md`); `commands.photo` (10.3) VERIFIED on both `POCKET_6K_G2 v7.9` and `POCKET_6K_PRO v8.6` but with no `protocol/categories/media.py` yet — see below and `docs/photo_capture.md`; future: playback (10.2) |
 | 11 | PTZ Control | — |
 | 12 | Metadata | future: metadata reads; also ambient telemetry observed on G2 v7.9 (`0x0C`) [sniffer-verified] |
 
@@ -376,15 +376,19 @@ telemetry (~1/s, category-wide, meaning unknown). One exception:
 command (category `0x0A`, parameter `0x01`) — see §6. 10.2 remains the
 [spec] starting point for the playback target operation, untouched.
 
-10.3 (still capture) is now **confirmed as a write coordinate** on
-`POCKET_6K_G2 v7.9` (2026-07-27, `docs/photo_capture.md` §7): a void ASSIGN
-to `0x0A/0x03` triggers a real photo, verified by inspecting the SD card's
-contents on a PC after each send — not by anything observable over BLE.
-10.3 has still never been observed *reported* on the wire, in either
-direction: not passively (§5 — a body-triggered still produces no report
-at all) and not as an echo of the confirmed write either (both confirmed
-sends' capture windows show only ambient telemetry). The [spec]'s void
-typing (the table above) matches the confirmed write shape exactly.
+10.3 (still capture) is now **confirmed as a write coordinate on both
+cameras**: `POCKET_6K_G2 v7.9` (2026-07-27, `docs/photo_capture.md` §7)
+and, independently, `POCKET_6K_PRO v8.6` the same day (§9) — a void ASSIGN
+to `0x0A/0x03` triggers a real photo on each, verified by inspecting the
+SD card's contents on a PC after each send — not by anything observable
+over BLE. 10.3 has still never been observed *reported* on the wire, on
+either camera, in either direction: not passively (§5 — a body-triggered
+still produces no report at all) and not as an echo of the confirmed
+write either (every confirmed send's capture window shows only ambient
+telemetry). The [spec]'s void typing (the table above) matches the
+confirmed write shape exactly, and both cameras agree on the coordinates
+and on reserved-byte indifference — the first cross-model data point this
+command family has produced.
 
 ### Category 11 — PTZ Control
 

@@ -354,12 +354,14 @@ discovers a recording-related `CAMERA_STATUS` bit (or this camera's status
 byte gets fully decoded), the secondary check can be added here.
 
 Recording's echo-only gap turns out not to be the floor. `commands.photo`
-(`docs/photo_capture.md` §7) has neither channel: its trigger is confirmed
-on real hardware, but no echo and no `CAMERA_STATUS` bit has ever been
-observed to respond to it, so there isn't even the fallback this section
-describes for recording. That's a harder open question than anything
-implemented in this file — no `CameraSession.capture_photo()` exists yet
-specifically because of it.
+(`docs/photo_capture.md` §7, §9) has neither channel on **either**
+camera: its trigger is confirmed on real hardware — independently, on
+both `POCKET_6K_G2 v7.9` and `POCKET_6K_PRO v8.6` — but no echo and no
+`CAMERA_STATUS` bit has ever been observed to respond to it on either
+one, so there isn't even the fallback this section describes for
+recording. That's a harder open question than anything implemented in
+this file — no `CameraSession.capture_photo()` exists yet specifically
+because of it.
 
 ---
 
