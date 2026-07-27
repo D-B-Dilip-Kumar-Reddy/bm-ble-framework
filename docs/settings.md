@@ -658,6 +658,16 @@ entire spec. This codebase's own "windowed bit" name was coined purely
 from wire behavior, well before that search — landing on the spec's own
 answer independently is itself a form of confirmation.
 
+**Read-only, confirmed 2026-07-27** (`docs/photo_capture.md` §10.7, the
+closing test of the Sensor Area investigation): the windowed bit is a
+genuine, reproducible *read* signal, but a single isolated-write test —
+same fps/width/height as an already-confirmed state, only flags flipped
+— produced no echo and, decisively, no change in a photo taken
+immediately after (identical dimensions to one taken immediately
+before, both checked on the SD card). Five reconfirmations of this bit
+as a read signal, zero as a write path — this is where the investigation
+that grew this hypothesis stops.
+
 This is the strongest evidence any settings value has received: a decoded,
 byte-exact echo *and* (per the operator's own summary of this round) a
 confirmed physical camera change, for 8 independent resolution/codec

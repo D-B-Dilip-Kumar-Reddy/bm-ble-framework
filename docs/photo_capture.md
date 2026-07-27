@@ -66,7 +66,12 @@ named or resembling "Sensor Area" exists anywhere in it — the windowed-
 mode bit already found (§10.1/§10.3/§10.4) is the *only* officially
 documented concept related to sensor readout area in the entire spec,
 confirming it as the ceiling of what's discoverable here, not just this
-codebase's best guess.
+codebase's best guess. §10.7 then closed the one remaining thread: an
+isolated write flipping just the windowed bit produced no echo *and* —
+confirmed via before/after SD-card photo dimensions, not just wire
+silence — no physical effect either. **The Sensor Area investigation is
+concluded**: no BLE write path exists for it beyond the read-only
+windowed bit, on either camera, by any means tried.
 
 Target camera for first bring-up: `POCKET_6K_G2 v7.9`, per CLAUDE.md's
 camera registry ("start all new features with `POCKET_6K_G2 v7.9`") —
@@ -1161,18 +1166,87 @@ protocol. Two readings of this, both worth keeping open:
 - Or a full encoding exists somewhere this investigation hasn't looked —
   but per the spec search above, it would have to be undocumented.
 
-#### Recommendation
+#### Recommendation (superseded — see §10.7)
 
 Treat the Sensor Area BLE investigation as **effectively concluded** for
 now: the windowed bit is the ceiling of what's discoverable through
 spec-guided or passive/active wire investigation as currently scoped.
-Further progress would need either accepting the binary windowed-bit
-signal as-is (useful for "full sensor or not," not for which specific
-crop), or a substantially different investigative approach (e.g. blind
-full-channel monitoring across every category during a live sensor-area
-change, the way category 9's write-margin signal was originally found —
-a bigger undertaking than anything tried so far, and not undertaken
-here). Attention is better spent elsewhere: the photo-capture
-verification-strategy question (§7.3) and its USB TODO (§7.3's closing
-bullet) remain the higher-value open threads on the broader photo-capture
-effort this section grew out of.
+One concrete, not-yet-exhausted test remained: whether the windowed bit
+itself is *writable*, independent of the 3-way selection question — see
+§10.7 for that test and its result, which closes the investigation for
+real.
+
+---
+
+### 10.7 Closing write test — 2026-07-27, PRO — windowed bit confirmed READ-ONLY
+
+The one remaining concrete test from §10.6's recommendation: is
+`recording_format`'s windowed bit independently *writable*, even if only
+as a binary full-sensor/cropped toggle (not a 3-way Sensor Area
+selector)? A single-variable isolation write — same `fps_int`/
+`sensor_fps_int`/`width`/`height` as HD's already-confirmed values,
+changing *only* the flags element — starting from a clean, known state
+(Sensor Area set to `6K`/full-sensor on the body, `flags=0x00`):
+
+```
+python tools/control/send_settings_command.py \
+    --model-key POCKET_6K_PRO --firmware v8.6 \
+    --packet recording_format --raw-payload 24 24 1920 1080 16 \
+    --listen-seconds 8
+```
+
+TX confirmed correct: `FF 0E 00 01 01 09 82 00 18 00 18 00 80 07 38 04 10
+00` — `(24, 24, 1920, 1080, 0x10)`, exactly the intended single-bit flip
+(`0x00` → `0x10`) with everything else unchanged. Capture:
+`tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260727T174908.json`.
+
+**No echo.** Zero `0x01/0x09` reports over the full 8s window — only the
+connect-burst lens-metadata tail (`0x0C`) and ambient `0x09/0x00`
+telemetry. The same silent-write signature already established for
+resolution retargets on this camera (`docs/settings.md` §16).
+
+**No physical effect either — the decisive part.** Per the test protocol
+(previous turn), the operator took a photo immediately before this write
+and another immediately after. **Both measured identical `6K` dimensions
+on the SD card.** The write did not change what the camera actually
+does, not just what it echoes.
+
+This second check is what makes this result trustworthy in a way a
+silent echo alone never is in this codebase: every other "no echo"
+result elsewhere carries the standing caveat that a real change could
+still have landed unconfirmed (the lens-burst delayed-echo pattern,
+`docs/session_and_verification.md`'s documented risk). Here that caveat
+is closed off directly — there is independent, physical, SD-card ground
+truth that nothing changed, not merely an absence of wire confirmation.
+
+#### Conclusion
+
+**The Sensor Area investigation is closed.** Full summary of everything
+this section (§10) established:
+
+- Passive sniffing found no dedicated report for Sensor Area changes on
+  either camera (§10.1, §10.3) — only the pre-existing
+  `recording_format`/`codec_quality`/ambient channels re-fire.
+- An active `dimension_enum` hunt for a second enum aliasing to `HD`
+  found nothing genuine — an apparent match was a stale-state false
+  positive, refuted by an immediate repeat (§10.5).
+- The full official 115-page spec document contains no parameter named
+  or resembling "Sensor Area" anywhere (§10.6) — the closest and only
+  related concept is `recording_format`'s own `windowed mode` flag bit.
+- That bit is a real, reproducible **read** signal (§10.1/§10.3/§10.4:
+  clear for full-sensor "6K", set for any smaller crop, toggles cleanly
+  on demand) — but distinguishes only two states, never the full three,
+  and is confirmed **not writable** via a direct isolated ASSIGN (§10.7,
+  this section): no echo, and — decisively — no change in what the
+  camera's own stored photos actually measure.
+
+`commands.recording_format`'s provenance in
+`payloads/models/POCKET_6K_PRO_v8.6.json` records this isolation test.
+No other profile changes — there was never a `commands.sensor_area`
+family to begin with, and nothing here creates evidence for one. Any
+future revisit would need a fundamentally different approach (e.g. blind
+full-channel monitoring across every category during a live change, the
+way category 9's write-margin signal was originally found) rather than
+another variation on what's already been tried here. Attention moves to
+the photo-capture verification-strategy question (§7.3) and its USB TODO
+— the higher-value open thread this whole detour grew out of.
