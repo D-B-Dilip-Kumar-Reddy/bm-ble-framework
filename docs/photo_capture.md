@@ -59,8 +59,14 @@ a second `dimension_enum` aliasing to `HD` (the natural next place for
 Sensor Area to live) found an apparent match that a same-session repeat
 run then **refuted as a stale-state false positive** — a real
 methodology lesson, now guarded against in `sweep_dimension_enum.py`
-itself, but leaving the underlying question open again: no confirmed BLE
-write path for Sensor Area has been found on either camera.
+itself. §10.6 then closed the investigation's spec-guided avenue for
+good: the operator searched the full official 115-page protocol PDF
+directly (every "sensor" occurrence, 26/26) and confirmed no parameter
+named or resembling "Sensor Area" exists anywhere in it — the windowed-
+mode bit already found (§10.1/§10.3/§10.4) is the *only* officially
+documented concept related to sensor readout area in the entire spec,
+confirming it as the ceiling of what's discoverable here, not just this
+codebase's best guess.
 
 Target camera for first bring-up: `POCKET_6K_G2 v7.9`, per CLAUDE.md's
 camera registry ("start all new features with `POCKET_6K_G2 v7.9`") —
@@ -1087,3 +1093,86 @@ neither pursued yet:
   `dimension_enum` — reopening the "does Sensor Area have any BLE
   representation at all" question §10.1's bottom line already left open,
   now with one more closed-off hypothesis.
+
+---
+
+### 10.6 Official spec search — no "Sensor Area" parameter exists anywhere
+
+The operator located and directly searched the primary source: the
+official *Blackmagic Camera Control* developer PDF
+(`documents.blackmagicdesign.com/DeveloperManuals/BlackmagicCameraControl.pdf`,
+115 pages) — every occurrence of "sensor" in the entire document, 26/26,
+reviewed via in-PDF search. Two screenshots: category `10.0` (Codec) and
+the `1.9` Recording Format struct, the latter showing every "sensor"
+match in context.
+
+**Result: no parameter named or resembling "Sensor Area" exists anywhere
+in the spec.** Every "sensor"-prefixed term in the whole document belongs
+to one place, `1.9` Recording Format:
+
+- `[1] = sensor frame rate` — fps, valid only when sensor-off-speed is set
+- `flags[1] = sensor-M-rate` — valid when sensor-off-speed is set
+- `flags[2] = sensor-off-speed`
+- `1.12` Shutter Speed's minimum value description also references
+  "current sensor frame rate," the same concept, not a new one
+
+All four are about *frame rate* (off-speed/slow-motion recording), not a
+spatial crop or sensor-readout-region selection. The only genuinely
+spatial concept anywhere near "sensor" in the whole document is `1.9`'s
+own `flags[4] = windowed mode` — no "sensor" in its name, which is
+exactly why the earlier `docs/protocol.md` §3 provenance table (sourced
+from a machine-readable transcription of this same spec, not this direct
+search) already carried it as `windowed`, and why this codebase's own
+independently-derived "windowed bit" hypothesis (built purely from wire
+behavior — G2 settings work, then this whole §10 investigation) landed on
+the *same* bit as the spec's own answer, without knowing that in advance.
+
+#### What this settles
+
+This closes the "search the spec for a Sensor Area parameter" avenue
+definitively — not because the search was narrow, but because it wasn't:
+every one of 26 hits for the exact word this investigation has been
+chasing was checked, in the primary source, and none of them is it.
+Combined with §10.1's sniffer captures (nothing new reports),
+§10.5's dimension_enum hunt (no second enum found, `0x00`-`0x16`), and
+this: **"windowed mode" — flags bit 4 of `1.9` Recording Format — is not
+just this codebase's best available proxy signal for Sensor Area, it is
+now confirmed to be the *only* officially-documented concept in the
+entire protocol that has anything to do with sensor readout area.** If
+Sensor Area has any further BLE representation beyond this single bit,
+it is not in the official spec at all — it would have to be an
+undocumented, vendor-extension parameter the way `0x09`'s write-margin
+signal already is (`docs/protocol.md` §5, category 9), found only by
+further blind wire observation, not by reading the manual.
+
+#### Why this still can't be a full 3-way selector
+
+`windowed mode` is a single bit: on or off. Every capture so far (§10.1,
+§10.3, §10.4) is consistent with exactly two BLE-visible states — full
+sensor (`6K`, bit clear) and cropped (bit set) — never three. The
+official spec confirms there is no *second* bit or field nearby that
+could distinguish `2.8K` from `5.3K`/`5.7K` within the documented
+protocol. Two readings of this, both worth keeping open:
+
+- The camera's own UI genuinely offers three choices, but only two are
+  distinguishable over BLE — the third dimension (which specific crop,
+  not just cropped-or-not) may be a purely local, non-networked concept
+  with no wire representation at all.
+- Or a full encoding exists somewhere this investigation hasn't looked —
+  but per the spec search above, it would have to be undocumented.
+
+#### Recommendation
+
+Treat the Sensor Area BLE investigation as **effectively concluded** for
+now: the windowed bit is the ceiling of what's discoverable through
+spec-guided or passive/active wire investigation as currently scoped.
+Further progress would need either accepting the binary windowed-bit
+signal as-is (useful for "full sensor or not," not for which specific
+crop), or a substantially different investigative approach (e.g. blind
+full-channel monitoring across every category during a live sensor-area
+change, the way category 9's write-margin signal was originally found —
+a bigger undertaking than anything tried so far, and not undertaken
+here). Attention is better spent elsewhere: the photo-capture
+verification-strategy question (§7.3) and its USB TODO (§7.3's closing
+bullet) remain the higher-value open threads on the broader photo-capture
+effort this section grew out of.

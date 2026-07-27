@@ -648,7 +648,15 @@ sensor-area sweep (2.8K→6K→2.8K→6K) toggled the bit byte-identically on
 demand, `0x0010`↔`0x0000`, twice each way — no longer just "this bit
 happened to differ between two states observed once each," but a signal
 that flips cleanly and repeatably every time the operator changes the
-setting.
+setting. This bit's own name in the official spec turns out to be
+"windowed mode" — the operator located and directly searched the full
+115-page official protocol PDF (`docs/photo_capture.md` §10.6, every
+"sensor" occurrence, 26/26) and confirmed there is no dedicated "Sensor
+Area" parameter documented anywhere in it; this bit is the *only*
+officially-documented concept related to sensor readout area in the
+entire spec. This codebase's own "windowed bit" name was coined purely
+from wire behavior, well before that search — landing on the spec's own
+answer independently is itself a form of confirmation.
 
 This is the strongest evidence any settings value has received: a decoded,
 byte-exact echo *and* (per the operator's own summary of this round) a
