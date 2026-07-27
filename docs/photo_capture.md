@@ -17,7 +17,11 @@ section, now applying identically to both cameras — §9.2) blocking
 `examples/capture_photo.py` — all still planned (CLAUDE.md package
 structure) — since CLAUDE.md design principle 3 requires every write to
 be confirmed before reporting success, and no BLE channel currently does
-that for this command.
+that for this command. **TODO, not yet started:** the operator's proposed
+path for verification is out-of-band, over USB rather than BLE —
+`POCKET_6K_PRO v8.6` exposes clip/photo playback over an HTTP-over-USB
+interface, explicitly noted as v8.6-only, not assumed to exist on the G2.
+See §7.3's closing bullet. Picked up in a future session.
 
 Path so far: passive sniffing (§5) found no report at all on either
 camera; a first active INT8 sweep on the G2 (§6) came back inconclusive
@@ -444,6 +448,21 @@ detail, and is left open rather than decided unilaterally here:
 - Something else — e.g. an explicit, loudly-documented exception to
   principle 3 for this one command, with the caller told up front that
   "success" means "the write was sent," not "a photo was confirmed"?
+- **TODO, operator-proposed 2026-07-27, not yet started:** verify out of
+  band over USB instead of BLE. `POCKET_6K_PRO v8.6` exposes an HTTP
+  interface over USB where clips/photos can be browsed and played back
+  from a PC — a channel completely outside `INCOMING_CONTROL`/
+  `CAMERA_STATUS`. **Explicitly noted by the operator as v8.6-only** — not
+  claimed to exist or be usable on `POCKET_6K_G2 v7.9`; don't assume it
+  transfers the way the trigger coordinates did (§9.1's caveat about
+  independent-per-camera confirmation applies here too, if not more so,
+  since this is a different subsystem entirely, not the same BLE
+  protocol). Nothing has been investigated yet — no endpoint discovery,
+  no confirmation this can distinguish "this specific photo" from "any
+  recent photo," no design for how/whether `CameraSession` — which today
+  only composes the BLE transport and BMD protocol layers, design
+  principle 5 — would even compose with an out-of-band USB check. Picked
+  up in a future session.
 
 The protocol-level finding (§7.1) stands regardless of how this is
 resolved — it belongs in the profile now, per design principle 6, whether
