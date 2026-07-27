@@ -203,6 +203,7 @@ added, a new `docs/<feature>.md` must be created alongside the code change.
 | `docs/command_discovery.md` | Guided command discovery (`tools/control/discover_command.py`) — candidate sweep, operator confirmation, emitted profile blocks |
 | `docs/timecode.md` | `TIMECODE` wire format (wrapped BMD packet, confirmed by real capture), BCD decode, clip-duration math (`timecode.py`), and why the `frames` field isn't used in duration yet |
 | `docs/settings.md` | Settings families (codec/quality, video format, recording format) — byte layouts and value tables from an external RE doc, now hardware-verified for all three; why `codec_quality` can't switch BRAW↔ProRes but `video_format` can, the `0x82` data type, `set_camera_format`'s combination orchestration, and the verification runbook (`sniffer_settings.py`, `send_settings_command.py`, `change_codec.py`) |
+| `docs/photo_capture.md` | Photo-capture reverse engineering — passive sniffer (`sniffer_photo.py`) with its `idle_baseline` window rationale, the 10.3 [spec] starting point, the planned discovery path, and the void-payload tooling gap active probing would hit |
 
 ---
 

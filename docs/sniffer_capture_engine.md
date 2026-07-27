@@ -184,6 +184,15 @@ quality variant, resolution, FPS). Known passive limit (confirmed on the
 never appear in notifications and need the active
 `send_settings_command.py --dimension-enum` probe instead.
 
+`tools/sniffers/sniffer_photo.py` is the third consumer: same
+`--actions`-overridable pattern as the settings sniffer, with one
+methodological addition — its default labels include an `idle_baseline`
+window (operator does nothing) because photo capture is a single momentary
+action with no paired opposite action (unlike `record_start`/`record_stop`),
+so without an idle window `tools/common/discovery.py`'s
+`seed_triples_from_capture(exclude_ambient=True)` filter would have no
+contrast and keep everything. See `docs/photo_capture.md`.
+
 ---
 
 ## Testing
