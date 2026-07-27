@@ -353,6 +353,14 @@ verify via the `INCOMING_CONTROL` echo only. If a future sniffer capture
 discovers a recording-related `CAMERA_STATUS` bit (or this camera's status
 byte gets fully decoded), the secondary check can be added here.
 
+Recording's echo-only gap turns out not to be the floor. `commands.photo`
+(`docs/photo_capture.md` §7) has neither channel: its trigger is confirmed
+on real hardware, but no echo and no `CAMERA_STATUS` bit has ever been
+observed to respond to it, so there isn't even the fallback this section
+describes for recording. That's a harder open question than anything
+implemented in this file — no `CameraSession.capture_photo()` exists yet
+specifically because of it.
+
 ---
 
 ## What's deliberately out of scope
