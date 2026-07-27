@@ -41,14 +41,31 @@ For those, seed the coordinates and value tables from a
 profile as CANDIDATE, and confirm by sending the fully-formed packet with
 `tools/control/send_settings_command.py` instead.
 
-The same `encode_assign` dependency also means the sweep cannot send a
-**void (payloadless)** packet — `encode_assign` deliberately rejects
-`DataType.VOID` (`protocol/types.py` omits code 0 from
-`DATA_TYPE_STRUCT_FORMATS`). This matters for the photo-capture target: the
-[spec] types 10.3 "Still Capture" as void, so if a real capture shows the
-trigger genuinely carries no payload, a void-capable encode path must be
-built before this tool can sweep it — see `docs/photo_capture.md` §3 for
-why that isn't built speculatively.
+**VOID (trigger) sweeps** are supported (added 2026-07-27, when the
+passive photo captures on both cameras showed body-triggered stills
+produce no report at all to seed from — `docs/photo_capture.md` §5, the
+first real need). A void trigger has no payload axis, so the sweep is one
+candidate per reserved byte: `generate_candidates` requires an empty
+values list for `DataType.VOID`, `CandidateCommand` carries `value=None`
+(enforced both ways in `__post_init__`) and encodes via
+`encode_assign_void` — a separate encoder in `protocol/codec.py`, kept out
+of `encode_assign` so `DATA_TYPE_STRUCT_FORMATS` still guards fixed-width
+types against silent zero-byte payloads. The driver rejects `--values` and
+`--restore-value` for a VOID seed, and `build_command_block` omits the
+`values` map entirely from a VOID family's emitted block (the schema
+treats `values` as optional). Seed manually — a void report will rarely
+exist in a capture to pick from:
+
+```
+python tools/control/discover_command.py \
+    --model-key POCKET_6K_G2 --firmware v7.9 \
+    --label photo --category 0x0A --parameter 0x03 --data-type VOID \
+    --reserved 0,1 --outcomes photo_taken
+```
+
+One payload shape remains unsendable: data-type byte `0x00` *with* a
+one-byte boolean payload (a real camera-report shape — see
+`docs/photo_capture.md` §3). Build it only when a sweep actually needs it.
 
 For the specific case of sweeping many `video_format` `dimension_enum`
 candidates against one already-known (category, parameter, data_type) —

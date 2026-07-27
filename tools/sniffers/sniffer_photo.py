@@ -32,17 +32,31 @@ Default windows and why:
                     once (a one-time dump, like the connect-burst reports
                     seen during settings work — docs/settings.md).
 
+Operational note (learned on the first real runs, 2026-07-27, both
+cameras — see docs/photo_capture.md): after connect the camera drains a
+large state-report burst over the indication channel at a throttled ~180ms
+cadence, lasting 10s or more. Open the idle_baseline window only AFTER that
+burst has finished — wait until notifications slow to the ~1/s ambient
+cadence — or the burst contaminates the baseline and can even spill into
+the first photo window (on the G2 its ordered 0x0C lens-string tail landed
+inside photo_capture_1, where it could be misread as a photo-caused
+report; the ~180ms spacing and ascending parameter order are the burst's
+recognition signature).
+
 Since a photo consumes card space, also watch the category 0x09 signals in
 the output: 9.2 is a live remaining-recording-time hypothesis
 (docs/protocol.md §5) and a per-photo storage tick would be the first lead
 toward the remaining-photo-capacity state CLAUDE.md's storage gating needs.
 
-Known passive limit (precedent, not yet confirmed for photo): some channels
-never report passively at all — video_format (0x01/0x00) never appeared in
-any G2 notification (docs/settings.md §5). If every photo window dedupes to
-only the ambient triples the idle window also shows, the trigger needs
-active probing instead — which currently has a tooling gap for void
-payloads; see docs/photo_capture.md before building that.
+Known passive limit — CONFIRMED for photo on both cameras (2026-07-27, 3
+photo windows each on POCKET_6K_G2 v7.9 and POCKET_6K_PRO v8.6): a
+body-triggered still produces NO photo-specific report at all; every photo
+window contained only ambient telemetry (and, on the G2, connect-burst
+spillover — see the operational note above). The trigger therefore needs
+active probing (tools/control/discover_command.py --data-type VOID); this
+sniffer remains useful for re-checking that result on new models/firmware
+and for baseline windows around active probes. Full findings:
+docs/photo_capture.md.
 
 Override --actions for other attribution sessions, e.g. a photo while
 recording, or per-codec photo windows:

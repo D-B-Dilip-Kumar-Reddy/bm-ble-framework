@@ -145,21 +145,40 @@ doc:
 | 128 | fixed16 (signed 5.11 fixed point) | 2 | `FIXED16` |
 | 130 (`0x82`) | int16 array (per-element width 2) | 2 × N | `INT16_ARRAY` — **not official coding**, see below |
 
-**Provenance:** data-type bytes sniffer-verified over BLE so far, all on
-`POCKET_6K_G2 v7.9`:
+**Provenance:** data-type bytes sniffer-verified over BLE so far:
 
 - `0x01` (`INT8`) — the recording command/echo, agreeing with the spec's
   transport-mode parameter (§5, 10.1) being int8; also the codec report
-  (10.0, 2026-07-20 settings capture).
+  (10.0, 2026-07-20 settings capture). `POCKET_6K_G2 v7.9`.
 - `0x02` (`INT16`) — camera reports on 1.9 (recording format, five int16
   elements decoding exactly per the spec layout) and on the category-9
-  ambient parameters (2026-07-20 settings capture).
+  ambient parameters (2026-07-20 settings capture). `POCKET_6K_G2 v7.9`.
 - `0x03` (`INT32`) — a 1.11 shutter-angle report (`18000` = 180.00°,
   matching the spec's degrees × 100 exactly; 2026-07-20 settings capture).
+  `POCKET_6K_G2 v7.9`.
+- `0x00` (`VOID`/`BOOL`) — both flavors of code 0, in the 2026-07-27
+  photo-capture connect bursts on **both** cameras: payloadless void
+  reports on 0.1's coordinates (`FF 04 00 00 00 01 00 02` — one-shot AF, a
+  void trigger in the spec), and a one-byte boolean-shaped report on
+  `0x0C/0x04`.
+- `0x05` (`STRING`) — the `0x0C` lens-metadata strings ("Canon EF-S
+  18-55mm f/3.5-5.6 IS STM", "f4.0", "26mm", …) decoding as clean UTF-8;
+  2026-07-27 photo captures, both cameras (the PRO's lens bursts during
+  the 2026-07-22 settings work were the first sighting, `docs/settings.md`
+  §15).
+- `0x80` (`FIXED16`) — a `0x00/0x02` aperture report whose leading int16
+  ÷ 2048 lands exactly on the lens's true aperture: G2 `0x2000`/2048 =
+  AV 4.0 → f-number √(2^4.0) = f/4.0, matching the "f4.0" lens *string* in
+  the same burst; PRO `0x1CEA`/2048 = AV 3.61 → ≈f/3.5, a plausible real
+  aperture but with no in-window string to cross-check against, unlike the
+  G2's (2026-07-27 photo captures). Both reports carried **four** bytes
+  where the spec table lists one fixed16 element — the trailing int16 was
+  `0` on both cameras, unexplained.
 
-Every other code is [spec] only: before trusting any other multi-byte
-parameter (white balance int16, any fixed16), capture one on real hardware
-and check byte 6 against this table.
+Only `0x04` (`INT64`) among the official codes has never been observed on
+hardware. The fixed16 element-count surprise above is the standing reminder
+to keep checking byte 6 and the payload length against this table before
+trusting a decode.
 
 **`0x82` (`INT16_ARRAY`)** is not in the official document at all. It was
 reported on `POCKET_6K_G2 v7.9`'s recording-format write packet (category
@@ -340,9 +359,9 @@ telemetry (~1/s, category-wide, meaning unknown). One exception:
 
 | Param | Name | Type | Meaning |
 |---|---|---|---|
-| 9.0 | (unknown, ambient ticker) | int16 ×3 (observed) | [sniffer-verified] wire shape only: fires ~1/s in every capture, payload e.g. `9x 2E 64 00 1F 00` — element 0 jitters around a slowly-moving value, elements 1–2 constant (`100`, `31`) within a session. Meaning unknown. |
+| 9.0 | (unknown, ambient ticker) | int16 ×3 (observed) | [sniffer-verified] wire shape only: fires ~1/s in every capture, payload e.g. `9x 2E 64 00 1F 00` — element 0 jitters around a slowly-moving value (and once jumped regime by ~+4300 mid-session, G2 2026-07-27 photo capture, not repeatably correlated with anything); element 1 constant (`100`) in every capture so far; element 2 was constant within earlier sessions but moved during the G2's 2026-07-27 run (`0x19`→`0x1B`→`0x12`→`0x1F`). Meaning unknown. |
 | 9.1 | Write-margin warning | int8 (payload offset 1 of 3; offsets 0 and 2 constant/unexplained) | Not [spec] — no official documentation for this category exists. Wire bytes and values are [sniffer-verified]: `1` = nominal, `−2` = low_margin, observed to precede a camera-initiated recording stop by 0.1–1.4s on a known-slow SD card (6/6 occurrences, `POCKET_6K_G2 v7.9` + `POCKET_6K_PRO v8.6`); never `−2` in 7 unrelated normal sessions. The *semantic* attribution to "write speed" specifically is [hypothesis] — not yet isolated from other possible autostop causes (card full, card removed, power loss). Modeled in `payloads/models/*.json`'s `storage.write_margin_warning` (profile provenance status `CANDIDATE`), decoded via `protocol/categories/storage.py` — see `docs/recording.md`'s "Camera-initiated stop detection" section for the full evidence. |
-| 9.2 | (unknown — remaining recording time?) | int16 at payload offset 2 of 8 (observed) | [sniffer-verified] wire shape only: fired once after *every* settings change in the 2026-07-20 G2 settings capture, other offsets constant `0x00`. The moving int16's values tracked the new settings in bitrate-consistent order (higher bitrate ⇒ smaller value), so "remaining recording time at current settings" is a live [hypothesis] — needs a varying-card-fill session before it can enter a profile. See `docs/settings.md` §5. |
+| 9.2 | (unknown — remaining recording time?) | int16 at payload offset 2 of 8 (observed) | [sniffer-verified] wire shape only: fired once after *every* settings change in the 2026-07-20 G2 settings capture, other offsets constant `0x00`. The moving int16's values tracked the new settings in bitrate-consistent order (higher bitrate ⇒ smaller value), so "remaining recording time at current settings" is a live [hypothesis] — needs a varying-card-fill session before it can enter a profile. See `docs/settings.md` §5. New evidence 2026-07-27 (photo captures, both cameras, `docs/photo_capture.md` §5.3): also fires *without* any settings change — once per run on each camera, and on the PRO its value decreased by 1 (`11522`→`11521`) across three stills, consistent with a report-on-change remaining-time value ticking down as card space is consumed. Not per-event: three photos produced one report. |
 
 ### Category 10 — Media ← this project's home turf
 
@@ -356,9 +375,11 @@ telemetry (~1/s, category-wide, meaning unknown). One exception:
 10.1 is the parameter behind this repo's sniffer-verified recording
 command (category `0x0A`, parameter `0x01`) — see §6. 10.2/10.3 are the
 [spec] starting points for the playback and photo-capture target
-operations. Photo-capture reverse engineering has started from the 10.3
-seed — passive sniffer scaffold only, no capture yet; see
-`docs/photo_capture.md`.
+operations. For 10.3, the passive phase is done: 2026-07-27 captures on
+both cameras showed a body-triggered still produces **no** report — not on
+10.3, not anywhere — so the trigger needs active probing (the void sweep
+in `docs/photo_capture.md` §3). 10.3 has never been observed on the wire
+in either direction.
 
 ### Category 11 — PTZ Control
 

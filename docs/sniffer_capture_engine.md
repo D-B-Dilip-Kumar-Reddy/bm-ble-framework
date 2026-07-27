@@ -110,7 +110,21 @@ instead of calling `logging.basicConfig` directly.
 
 ---
 
-## Decode/normalize semantics
+## Connect-burst contamination of early windows
+
+Confirmed on the 2026-07-27 photo-capture runs (`POCKET_6K_G2 v7.9` and
+`POCKET_6K_PRO v8.6`, `docs/photo_capture.md` §5.2): after connect, both
+cameras drain a large state-report dump over the indication channel at a
+throttled ~180ms cadence lasting 10+ seconds. A window opened before the
+drain finishes records mid-burst packets that look action-caused — on the
+G2 run the burst's ordered `0x0C` lens-string tail landed inside the first
+*photo* window, two windows after connect.
+
+Operator rule for every sniffer built on this engine: open the first
+capture window only after notifications have slowed to the ~1/s ambient
+cadence. Recognition signature when reading a suspect capture after the
+fact: ~180ms inter-packet spacing continuing unbroken across a window
+boundary, and parameters arriving in ascending order.
 
 `decode_notification` calls `protocol.codec.decode_packet` and catches
 `ValueError`. This is expected, not a bug: `CAMERA_STATUS` notifications are

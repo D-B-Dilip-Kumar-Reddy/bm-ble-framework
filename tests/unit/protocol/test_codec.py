@@ -15,6 +15,7 @@ from bmd_ble.protocol.codec import (
     decode_packet,
     encode_assign,
     encode_assign_elements,
+    encode_assign_void,
     encode_packet,
 )
 from bmd_ble.protocol.types import DataType
@@ -261,6 +262,41 @@ class TestEncodeAssign:
         )
         assert packet[:7] == assign_packet[:7]
         assert packet[8:] == assign_packet[8:]
+
+
+class TestEncodeAssignVoid:
+    """Tests for the payloadless-trigger ``encode_assign_void``."""
+
+    def test_spec_still_capture_candidate_packet(self):
+        """The 10.3 still-capture probe packet: header only, length byte 4."""
+        packet = encode_assign_void(category=0x0A, parameter=0x03)
+
+        assert packet == bytes([0xFF, 0x04, 0x00, 0x00, 0x0A, 0x03, 0x00, 0x00])
+        assert len(packet) == HEADER_LENGTH
+
+    def test_matches_observed_void_report_shape(self):
+        """Same wire shape as the sniffer-verified 0.1 void camera report
+        (FF 04 00 00 00 01 00 02, 2026-07-27 photo-capture baselines) —
+        only the operation byte differs for a controller-issued ASSIGN."""
+        packet = encode_assign_void(
+            category=0x00, parameter=0x01, operation=Operation.CAMERA_REPORT
+        )
+
+        assert packet == bytes([0xFF, 0x04, 0x00, 0x00, 0x00, 0x01, 0x00, 0x02])
+
+    def test_reserved_is_overridable(self):
+        packet = encode_assign_void(category=0x0A, parameter=0x03, reserved=0x01)
+
+        assert packet[3] == 0x01
+
+    def test_round_trips_through_decode(self):
+        header, payload = decode_packet(encode_assign_void(category=0x0A, parameter=0x03))
+
+        assert header.category == 0x0A
+        assert header.parameter == 0x03
+        assert header.data_type is DataType.VOID
+        assert header.operation is Operation.ASSIGN
+        assert payload == b""
 
 
 class TestEncodeAssignElements:

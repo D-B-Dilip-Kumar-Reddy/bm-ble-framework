@@ -203,7 +203,7 @@ added, a new `docs/<feature>.md` must be created alongside the code change.
 | `docs/command_discovery.md` | Guided command discovery (`tools/control/discover_command.py`) — candidate sweep, operator confirmation, emitted profile blocks |
 | `docs/timecode.md` | `TIMECODE` wire format (wrapped BMD packet, confirmed by real capture), BCD decode, clip-duration math (`timecode.py`), and why the `frames` field isn't used in duration yet |
 | `docs/settings.md` | Settings families (codec/quality, video format, recording format) — byte layouts and value tables from an external RE doc, now hardware-verified for all three; why `codec_quality` can't switch BRAW↔ProRes but `video_format` can, the `0x82` data type, `set_camera_format`'s combination orchestration, and the verification runbook (`sniffer_settings.py`, `send_settings_command.py`, `change_codec.py`) |
-| `docs/photo_capture.md` | Photo-capture reverse engineering — passive sniffer (`sniffer_photo.py`) with its `idle_baseline` window rationale, the 10.3 [spec] starting point, the planned discovery path, and the void-payload tooling gap active probing would hit |
+| `docs/photo_capture.md` | Photo-capture reverse engineering — passive phase complete (2026-07-27, both cameras): a body-triggered still produces NO report at all, so the path is the active 10.3 void-trigger probe via `discover_command.py --data-type VOID` (void sweep support added for exactly this); also the connect-burst contamination hazard, the `0x09/0x02` remaining-time lead (moved −1 across three stills on the PRO, not per-photo), and the open verification question |
 
 ---
 
@@ -264,14 +264,18 @@ Information* document:
 | 128 | fixed16 | signed 5.11 fixed point: `encoded = round(real × 2048)` |
 | 130 (`0x82`) | int16 array | NOT official coding — CANDIDATE wire byte reported on the `POCKET_6K_G2 v7.9` recording-format packet (five LE int16 elements), see `docs/settings.md` §3 |
 
-Provenance: data-type bytes sniffer-verified over BLE so far (all on
-`POCKET_6K_G2 v7.9`): `0x01` (int8 — recording command/echo, codec reports),
-`0x02` (int16 — recording-format and category-9 reports; note the camera
-reports the recording-format parameter with `0x02` even though the claimed
-*write* byte is `0x82`), and `0x03` (int32 — a shutter-angle report). All
-other official codes come from the spec and have not yet been observed on
-real hardware — capture one before trusting a multi-byte decode. Full
-discussion: `docs/protocol.md` §3.
+Provenance: data-type bytes sniffer-verified over BLE so far: `0x01` (int8 —
+recording command/echo, codec reports), `0x02` (int16 — recording-format and
+category-9 reports; note the camera reports the recording-format parameter
+with `0x02` even though the claimed *write* byte is `0x82`), `0x03` (int32 —
+a shutter-angle report) — all on `POCKET_6K_G2 v7.9` — plus, from the
+2026-07-27 photo-capture connect bursts on both cameras: `0x00` (both
+flavors — payloadless void reports and a one-byte boolean report), `0x05`
+(UTF-8 lens strings), and `0x80` (fixed16 — an aperture report decoding to
+exactly the lens's stated f-stop, though with an unexplained second, zero
+element). Only int64 (`0x04`) has never been observed on hardware — capture
+one before trusting a multi-byte decode. Full discussion:
+`docs/protocol.md` §3.
 
 ---
 
