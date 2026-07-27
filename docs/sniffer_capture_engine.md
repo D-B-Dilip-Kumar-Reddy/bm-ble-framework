@@ -210,10 +210,12 @@ contrast and keep everything. See `docs/photo_capture.md`.
 `tools/sniffers/sniffer_sensor_area.py` is the fourth consumer, built the
 same way — `idle_baseline` plus one window per concrete setting value
 (`sensor_area_2_8k`/`5_7k`/`6k`) — investigating a ProRes-only still-photo
-concept the operator reported (docs/photo_capture.md §8) that has no
-known BLE representation yet, unlike anything the settings sniffer
-already covers. Scaffold only as of this writing; no capture run. See
-`docs/photo_capture.md` §10.
+concept the operator reported (docs/photo_capture.md §8). First run
+2026-07-27 (G2): real report activity appeared (`recording_format`,
+`codec_quality`, and a capacity-shaped signal), but neither already-known
+channel's payload actually varies with the chosen sensor area — see
+`docs/photo_capture.md` §10.1 for the full result and the one promising,
+unconfirmed lead it left.
 
 ---
 

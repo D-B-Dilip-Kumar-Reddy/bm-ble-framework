@@ -35,10 +35,15 @@ dimensions/format: BRAW stills inherit the current recording resolution
 (independently cross-confirmed against all six of the profile's BRAW
 `resolutions` entries), but ProRes stills use a separate sensor-area
 concept (2.8K/5.7K/6K) unrelated to ProRes's own UHD/HD video
-resolutions — and every still is DNG regardless of codec. §10 scaffolds
-`tools/sniffers/sniffer_sensor_area.py` to find out whether that
-sensor-area concept has any BLE representation at all — no capture run
-yet.
+resolutions — and every still is DNG regardless of codec. §10's first
+capture with `tools/sniffers/sniffer_sensor_area.py` found that changing
+Sensor Area does trigger real report activity (`recording_format`,
+`codec_quality`, and the `0x09/0x02` capacity-shaped signal) but no
+directly-encoded sensor-area value on either already-known channel — a
+promising but single-sample lead sits in `0x09/0x02`'s monotonic values
+(§10.1). §10.2 records the operator's cross-model sensor-area option
+matrix, including a genuine G2/PRO difference (5.7K vs 5.3K) and both
+cameras disabling sensor-area choice entirely at ProRes/4K DCI.
 
 Target camera for first bring-up: `POCKET_6K_G2 v7.9`, per CLAUDE.md's
 camera registry ("start all new features with `POCKET_6K_G2 v7.9`").
@@ -620,14 +625,17 @@ since nothing camera-specific has shown up in this investigation so far.
 
 ## 10. Sniffing "Sensor Area" — `tools/sniffers/sniffer_sensor_area.py`
 
-Scaffold only — no capture has been run yet. This is the natural next
-reverse-engineering step §8 opened up: §8.1 established that ProRes
-stills follow a "sensor area" concept (2.8K/5.7K/6K) with no relationship
-to `resolutions.*.dimension_enums`'s ProRes entries (`UHD`/`HD`, the
-video recording resolutions) — but that finding was operator-reported
-camera behavior, not a BLE capture, so nothing is known yet about whether
-"Sensor Area" has any BLE representation at all, or what it looks like on
-the wire if it does.
+**First capture run 2026-07-27, G2 — result: real report activity, but no
+directly-encoded sensor-area value found on either already-known channel.
+See §10.1 for the full finding and §10.2 for the operator's cross-model
+sensor-area matrix.** This was the natural next reverse-engineering step
+§8 opened up: §8.1 established that ProRes stills follow a "sensor area"
+concept (2.8K/5.7K/6K) with no relationship to
+`resolutions.*.dimension_enums`'s ProRes entries (`UHD`/`HD`, the video
+recording resolutions) — but that finding was operator-reported camera
+behavior, not a BLE capture, so nothing was known about whether "Sensor
+Area" has any BLE representation at all, or what it looks like on the
+wire if it does.
 
 The new sniffer follows the same pattern as `sniffer_photo.py` and
 `sniffer_settings.py` (see `docs/sniffer_capture_engine.md` — fourth
@@ -643,24 +651,156 @@ python tools/sniffers/sniffer_sensor_area.py
 python tools/sniffers/sniffer_sensor_area.py --model-key POCKET_6K_PRO --firmware v8.6
 ```
 
-### What the result would mean
+### What the result would mean (as planned; see §10.1 for what happened)
 
 - **If a category/parameter reports on the wire when Sensor Area
   changes:** seed `tools/control/discover_command.py --from-capture` with
   it and follow the standard discovery workflow (`docs/command_discovery.md`)
   to find the write coordinates — this would become a new command family,
   `commands.sensor_area` or similar, structurally independent of
-  `video_format`/`recording_format`.
+  `video_format`/`recording_format`. **Half right: reports appeared, but
+  see §10.1 — their payloads didn't carry a sensor-area-specific value.**
 - **If nothing reports** (matching the still-capture trigger's own null
   result, §5, and consistent with a menu setting that only affects local
   image-processing/readout without a corresponding BLE-visible state
   change): that's a real finding too, and would mean this codebase has no
   way to read or set Sensor Area over BLE at all — worth knowing before
-  any future photo-capabilities work assumes it's controllable.
+  any future photo-capabilities work assumes it's controllable. **Not
+  quite what happened either — something did report, just not something
+  useful yet.**
 - **A third possibility, not yet ruled out:** "Sensor Area" could turn out
   to just be a display name for something the `dimension_enum` sweep
   already touched (e.g. if a ProRes dimension_enum below the currently
   unexplained gap actually selects a sensor-area readout rather than a
   video resolution) — the capture would settle this by showing whether
   changing Sensor Area moves `recording_format`/`codec_quality`'s existing
-  channels or something new entirely.
+  channels or something new entirely. **This is the closest of the
+  three: it does move those exact channels — see §10.1.**
+
+### 10.1 First capture result — 2026-07-27, G2
+
+Default windows, camera pre-set to ProRes/Proxy/HD before the sensor-area
+windows (the idle_baseline window still shows the connect-burst leftover
+state, BRAW/Q5/6K 3:2 — the ProRes/HD switch happened between
+idle_baseline and the first sensor-area window, off-wire, as the
+operator's own menu setup). Capture:
+`tools/captures/POCKET_6K_G2_v7.9/POCKET_6K_G2_v7.9_20260727T153744.json`.
+
+**Real report activity, unlike the still-capture trigger.** Each of the
+three sensor-area windows fired the same three-triple burst:
+`recording_format` (`0x01/0x09`), `codec_quality` (`0x0A/0x00`), and the
+`0x09/0x02` remaining-capacity-shaped signal (`docs/protocol.md` §5, 9.2)
+— on top of the ordinary `0x09/0x00` ambient ticker. This alone is a
+genuine, useful finding: Sensor Area is not wire-silent the way the
+still-capture trigger is.
+
+**But neither of the two settings channels' payload actually encodes
+which sensor area was chosen.** Decoding all three windows'
+`recording_format` reports:
+
+| Window | Payload (hex) | Decoded (fps, sensor_fps, width, height, flags) |
+|---|---|---|
+| `sensor_area_2_8k` | `18 00 18 00 80 07 38 04 13 00` | (24, 24, 1920, 1080, `0x0013`) |
+| `sensor_area_5_7k` | `18 00 18 00 80 07 38 04 13 00` | (24, 24, 1920, 1080, `0x0013`) — byte-identical to 2.8K |
+| `sensor_area_6k`   | `18 00 18 00 80 07 38 04 03 00` | (24, 24, 1920, 1080, `0x0003`) |
+
+`width`/`height` decode to exactly `1920×1080` — the profile's `"HD"`
+resolution — in **all three** windows, matching the ProRes/HD base the
+operator set up before testing, not the chosen sensor area. Sensor area
+is layered on top of a video resolution the camera picks independently
+(consistent with the operator's own framing: "ProRes HD has 2.8K, 5.7K,
+6K" as *options*, not resolutions in their own right) — but this channel
+only reports the video resolution, never which option was picked.
+`codec_quality` is the same story: all three windows report `codec_id=2
+(ProRes), variant_id=3 (Proxy)`, byte-identical, matching the base codec
+setup, not the sensor area.
+
+**One partial, theory-consistent signal: the flags nibble.** `0x0013` for
+2.8K and 5.7K vs `0x0003` for 6K — bit 4 (`0x10`) set only for the two
+non-6K windows. This lines up exactly with the pre-existing "windowed
+bit" hypothesis from the settings investigation (`docs/settings.md`,
+`docs/protocol.md` §5 1.9): bit 4 clear = full-sensor/unwindowed readout,
+bit 4 set = a windowed/cropped readout. `6K` here is presumably the
+*full* sensor area (matching `"6K 3:2"`'s own established full-sensor
+reading, `docs/settings.md` §7), so its unwindowed flag is consistent;
+2.8K and 5.7K are both smaller crops of the sensor, so both windowed is
+also consistent. This is real corroborating evidence for the windowed-bit
+theory, but it is **not** a 3-way encoding — 2.8K and 5.7K are
+indistinguishable on this channel, both reporting `0x0013`. A binary
+"is this the full sensor or not" bit cannot be the sole mechanism by
+which the camera or this codebase could select a specific sensor area.
+
+**A more promising, but single-sample, lead: `0x09/0x02`.** Its moving
+int16 (payload offset 2, per `docs/protocol.md` §5) took three genuinely
+different values — 2.8K → `18620`, 5.7K → `4791`, 6K → `3928` — a
+monotonic decrease as the sensor-area crop widens. This is consistent
+with the existing 9.2 hypothesis ("remaining recording time,
+bitrate-ordered": a wider sensor readout downsampled to the same HD
+output plausibly costs more data/bitrate, leaving less "remaining"
+capacity) — the *direction* makes physical sense, and it is the only one
+of the three reporting channels whose value actually varies with sensor
+area at all. But it is one sample per setting, from one session, and this
+signal already free-runs on its own (`docs/protocol.md` §5, 9.0/9.2) —
+it needs a repeat/interleaved test (e.g. 2.8K → 6K → 2.8K, checking
+whether the value returns to roughly the same reading) before trusting it
+as a real per-setting correlate rather than coincidental drift.
+
+**Bottom line:** this matches `docs/settings.md` §7's "the report isn't
+an ack, it's a state reflection" mechanistic insight, extended to a
+parameter this codebase doesn't model at all — *some* settings change
+(Sensor Area) triggered the camera to re-emit its currently-tracked state
+on the channels it already reports on, without that state actually
+containing the new setting's own value. No `commands.sensor_area` write
+coordinates were found. No profile changes made from this capture — there
+is nothing here that meets this codebase's evidentiary bar for even a
+CANDIDATE entry (design principle 6).
+
+**Next steps, not yet done:**
+1. A repeat/interleaved run to check whether `0x09/0x02`'s per-setting
+   values are stable and reproducible, or just time-based drift.
+2. A genuine full-channel decode is effectively already done here — all
+   notifications in all three windows are accounted for above (ambient
+   `0x09/0x00` plus the three-triple burst); nothing else appeared. If a
+   real sensor-area parameter exists on the wire, it isn't in this
+   capture at all — worth trying `Operation.OFFSET` isolation-style
+   probing (per the `docs/settings.md` §16 precedent) or a wider
+   `--listen-seconds` in case of a delayed report, rather than re-reading
+   this same capture for a signal that isn't in it.
+3. Repeat on `POCKET_6K_PRO v8.6` — not yet run; design principle 6 means
+   this needs its own capture, especially since §10.2 shows the PRO's own
+   sensor-area option set differs from the G2's.
+
+### 10.2 Operator-provided: sensor-area options per model/video-resolution
+
+Not wire-observed — camera-menu behavior reported directly by the
+operator (2026-07-27), the same evidence category as §8's photo-dimension
+notes:
+
+| Camera | ProRes HD | ProRes UHD | ProRes 4K DCI |
+|---|---|---|---|
+| `POCKET_6K_G2 v7.9` | 2.8K, 5.7K, 6K | 5.7K, 6K | disabled |
+| `POCKET_6K_PRO v8.6` | 2.8K, 5.3K, 6K | 5.3K, 6K | disabled |
+
+Two things worth flagging:
+
+- **The PRO's option set is genuinely different, not just relabeled** —
+  `5.3K`, not `5.7K` — confirming design principle 6's stance is right
+  even for operator-provided (non-wire) knowledge: nothing here should be
+  assumed to transfer from the G2 to the PRO without its own check, and
+  this table is the proof it doesn't always.
+- **Disabled at ProRes/4K DCI on both cameras** lines up with, but is not
+  proven to be the same fact as, this codebase's own independently-found
+  `resolutions."4K DCI".known_unreachable.ProRes` gap on both profiles
+  (`docs/settings.md` §16, §7-§9) — two different subsystems (video
+  *recording* resolution selection vs. still-photo sensor-area selection)
+  that happen to both go dark at exactly the same label. Worth noting as
+  a real coincidence-or-connection, not worth claiming as one and the
+  same finding without more evidence — the video-resolution gap is a
+  write-path failure this codebase's own commands hit, while the
+  sensor-area disablement is a camera-body UI state the operator observed
+  directly; either could explain the other, or they could be unrelated
+  symptoms of the same underlying camera limitation (ProRes/4K DCI may
+  simply not be a real, fully-supported combination on either camera at
+  all, only reachable through a body-menu quirk already documented
+  elsewhere — `docs/settings.md` §16's addendum). Left as an open
+  observation.
