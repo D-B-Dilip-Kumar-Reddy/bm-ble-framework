@@ -209,13 +209,16 @@ contrast and keep everything. See `docs/photo_capture.md`.
 
 `tools/sniffers/sniffer_sensor_area.py` is the fourth consumer, built the
 same way — `idle_baseline` plus one window per concrete setting value
-(`sensor_area_2_8k`/`5_7k`/`6k`) — investigating a ProRes-only still-photo
-concept the operator reported (docs/photo_capture.md §8). First run
-2026-07-27 (G2): real report activity appeared (`recording_format`,
-`codec_quality`, and a capacity-shaped signal), but neither already-known
-channel's payload actually varies with the chosen sensor area — see
-`docs/photo_capture.md` §10.1 for the full result and the one promising,
-unconfirmed lead it left.
+(`sensor_area_2_8k`/`5_7k`/`6k`, G2-shaped; the PRO's own middle option is
+named differently — pass `--actions` explicitly there, see the script's
+docstring) — investigating a ProRes-only still-photo concept the operator
+reported (docs/photo_capture.md §8). First runs 2026-07-27, both cameras:
+real report activity appeared (`recording_format`, `codec_quality`, and,
+G2-only, a capacity-shaped signal), but neither already-known channel's
+payload actually varies with the chosen sensor area on either camera —
+see `docs/photo_capture.md` §10.1/§10.3 for the full results, including a
+genuine cross-model reconfirmation of the pre-existing "windowed bit"
+hypothesis found along the way.
 
 ---
 

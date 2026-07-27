@@ -41,12 +41,16 @@ active codec, `.braw` for BRAW and DNG for ProRes, not a uniform DNG.
 §10's first capture with `tools/sniffers/sniffer_sensor_area.py` found
 that changing
 Sensor Area does trigger real report activity (`recording_format`,
-`codec_quality`, and the `0x09/0x02` capacity-shaped signal) but no
-directly-encoded sensor-area value on either already-known channel — a
-promising but single-sample lead sits in `0x09/0x02`'s monotonic values
-(§10.1). §10.2 records the operator's cross-model sensor-area option
-matrix, including a genuine G2/PRO difference (5.7K vs 5.3K) and both
-cameras disabling sensor-area choice entirely at ProRes/4K DCI.
+`codec_quality`, and, on the G2 only, the `0x09/0x02` capacity-shaped
+signal) but no directly-encoded sensor-area value on either channel — a
+promising but single-sample-and-not-PRO-reproduced lead sits in
+`0x09/0x02`'s monotonic G2 values (§10.1). §10.3 independently reran the
+capture on the PRO: same negative result, plus a genuine cross-model
+reconfirmation of the "windowed" flag bit tracking full-sensor-vs-cropped
+sensor area on both cameras. §10.2 records the operator's cross-model
+sensor-area option matrix, including a genuine G2/PRO difference (5.7K
+vs 5.3K) and both cameras disabling sensor-area choice entirely at
+ProRes/4K DCI.
 
 Target camera for first bring-up: `POCKET_6K_G2 v7.9`, per CLAUDE.md's
 camera registry ("start all new features with `POCKET_6K_G2 v7.9`").
@@ -842,3 +846,67 @@ Two things worth flagging:
   all, only reachable through a body-menu quirk already documented
   elsewhere — `docs/settings.md` §16's addendum). Left as an open
   observation.
+
+### 10.3 Second capture — 2026-07-27, PRO — same negative result, one new cross-model reconfirmation
+
+`sniffer_sensor_area.py --model-key POCKET_6K_PRO --firmware v8.6`, default
+windows and labels, camera pre-set to ProRes/422/HD. Capture:
+`tools/captures/POCKET_6K_PRO_v8.6/POCKET_6K_PRO_v8.6_20260727T155824.json`.
+
+**Labeling caveat, worth flagging plainly:** the default `--actions` label
+the operator did not override is `sensor_area_5_7k` — but §10.2's own
+table says the PRO's real middle option is **5.3K**, not 5.7K. The
+operator almost certainly selected the PRO's actual 5.3K option on the
+body (there is no 5.7K choice to select on this camera), and the window
+is simply mislabeled by the sniffer's G2-shaped default. This doesn't
+change the finding below (the window's wire data turned out identical to
+the 2.8K window regardless of which of the two it was), but it does mean
+this run cannot be cited as "5.7K tested on the PRO" — it wasn't, and
+can't have been. Fixed going forward: `sniffer_sensor_area.py`'s
+docstring now calls out that the PRO's option set differs and to pass
+explicit `--actions ...,sensor_area_5_3k,...` on that camera rather than
+relying on the G2-shaped defaults.
+
+**Same shape of result as the G2 (§10.1), with one channel missing.**
+`recording_format` and `codec_quality` fired for every window, matching
+§10.1 exactly — but **`0x09/0x02` did not fire at all**, in any of the
+three windows, unlike its consistent one-per-window appearance on the G2.
+This is a real negative data point against §10.1's "promising lead":
+either the signal is genuinely intermittent/not-reliably-triggered by a
+Sensor Area change (weakening it as a usable correlate), or this
+particular run's `--listen-seconds` window simply closed before a delayed
+report arrived. Either way, it did not reproduce here, so it should not
+yet be treated as an established per-camera correlate — more testing
+needed on both cameras before trusting it either way.
+
+`recording_format` decoded across all three windows:
+
+| Window | Payload tail (flags) | Decoded width/height | Flags |
+|---|---|---|---|
+| `sensor_area_2_8k` | `10 00` | 1920×1080 (HD) | `0x0010` |
+| `sensor_area_5_7k` (see caveat above — actually 5.3K) | `10 00` | 1920×1080 (HD) — byte-identical to 2.8K | `0x0010` |
+| `sensor_area_6k` | `00 00` | 1920×1080 (HD) | `0x0000` |
+
+Exactly the G2's pattern, independently: width/height pinned to the
+active video resolution (HD) regardless of sensor area; `codec_quality`
+likewise pinned to `codec_id=2/variant_id=1` (ProRes/422) in all three
+windows, matching the base setup, not the sensor area. **New cross-model
+evidence: the windowed bit (`0x10`) is clear only for `6K` and set for
+both smaller crops, on this camera too** — independently reproducing
+§10.1's finding on a second camera with a different underlying flags
+baseline (G2 showed `0x13`/`0x03`, carrying two extra low bits from a
+different fps/M-rate combination; PRO shows a clean `0x10`/`0x00` — the
+bit-4 boundary is what's common, not the exact byte value). This is now a
+real cross-model reconfirmation of the windowed-bit hypothesis via the
+sensor-area angle, on top of its original settings-investigation
+provenance (`docs/settings.md` §6-§7) — see `docs/protocol.md` §5, 1.9.
+
+**Bottom line, both cameras now captured:** no `commands.sensor_area`
+write coordinates found on either camera. The only signal that
+distinguishes sensor-area choices at all is the binary windowed bit
+(full-sensor "6K" vs a smaller crop), confirmed independently on both
+cameras — genuinely useful as corroboration for the existing
+windowed-bit theory, but not a usable 3-way selector, and not something
+this codebase can act on for reading/writing a specific sensor area. No
+profile changes from either capture — nothing here clears design
+principle 6's bar.

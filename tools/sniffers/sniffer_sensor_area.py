@@ -4,18 +4,26 @@ tools/sniffers/sniffer_sensor_area.py
 Passive sniffer for the ProRes "Sensor Area" setting — see
 docs/photo_capture.md §8 and §10.
 
-No BLE coordinates are known for this setting yet — that is exactly what
-this sniffer exists to discover. It is not the same thing as
-commands.video_format's dimension_enum: that table only offers ProRes at
-"UHD" and "HD" (the *video recording* resolutions), while the operator has
-reported (docs/photo_capture.md §8) that a ProRes *still photo*'s pixel
-dimensions are instead decided by one of three sensor-area readouts —
-2.8K, 5.7K, or 6K — unrelated to whichever UHD/HD video resolution is
-active at the time. Whether "Sensor Area" is a distinct camera-menu
-setting with its own BLE parameter, or turns out to secretly be the same
-dimension_enum mechanism observed from a different angle, is an open
-question this capture is meant to help answer — do not assume either way
-before reading the result.
+It is not the same thing as commands.video_format's dimension_enum: that
+table only offers ProRes at "UHD" and "HD" (the *video recording*
+resolutions), while the operator has reported (docs/photo_capture.md §8)
+that a ProRes *still photo*'s pixel dimensions are instead decided by one
+of three sensor-area readouts, unrelated to whichever UHD/HD video
+resolution is active at the time.
+
+First runs completed 2026-07-27 on both cameras (docs/photo_capture.md
+§10.1, §10.3): changing Sensor Area DOES trigger real report activity
+(recording_format and codec_quality both fire), unlike the still-capture
+trigger's total silence — but on both cameras, neither channel's payload
+actually varies with which sensor area was picked; both stay pinned to
+the active video resolution/codec instead. The one real, cross-model-
+reconfirmed signal is binary, not a 3-way selector: recording_format's
+"windowed" flag bit is clear only for the full-sensor "6K" option and set
+for every smaller crop, on both cameras independently. No write
+coordinates for Sensor Area have been found — this sniffer remains
+useful for re-checking that on other models/firmware or after further
+hypotheses (e.g. Operation.OFFSET probing, per docs/settings.md §16's
+precedent) are tried.
 
 Precondition: the camera must already be set to ProRes before running this
 sniffer (set via CameraSession.set_camera_format or the body menu) — the
@@ -60,11 +68,25 @@ find the write coordinates, the same workflow used for recording
 still-capture trigger's own null result (docs/photo_capture.md §5) — that
 is itself a finding worth recording, not a failure.
 
+MODEL-SPECIFIC OPTION NAMES — pass --actions explicitly per camera. The
+default labels (sensor_area_2_8k/5_7k/6k) match the G2's own reported
+sensor-area names (docs/photo_capture.md §8, §10.2), but the PRO's real
+middle option is 5.3K, not 5.7K (confirmed 2026-07-27: a PRO run left on
+the G2-shaped defaults produced a window mislabeled "sensor_area_5_7k"
+when the operator necessarily selected 5.3K, since 5.7K isn't offered on
+that camera — docs/photo_capture.md §10.3). On the PRO, use e.g.:
+
+    python tools/sniffers/sniffer_sensor_area.py \\
+        --model-key POCKET_6K_PRO --firmware v8.6 \\
+        --actions idle_baseline,sensor_area_2_8k,sensor_area_5_3k,sensor_area_6k
+
 This tool only listens — it never writes to OUTGOING_CONTROL.
 
 Usage:
     python tools/sniffers/sniffer_sensor_area.py
-    python tools/sniffers/sniffer_sensor_area.py --model-key POCKET_6K_PRO --firmware v8.6
+    python tools/sniffers/sniffer_sensor_area.py \\
+        --model-key POCKET_6K_PRO --firmware v8.6 \\
+        --actions idle_baseline,sensor_area_2_8k,sensor_area_5_3k,sensor_area_6k
     python tools/sniffers/sniffer_sensor_area.py --actions idle_baseline,sensor_area_2_8k
 """
 
@@ -92,6 +114,10 @@ DEFAULT_MODEL_KEY = "POCKET_6K_G2"
 DEFAULT_FIRMWARE = "v7.9"
 # idle_baseline first: it must capture the ambient floor before any
 # sensor-area change has been made, so a slow after-effect can't leak in.
+# These labels match the G2's own reported sensor-area names (docs/photo_
+# capture.md §8) — the PRO's middle option is 5.3K, not 5.7K (confirmed
+# 2026-07-27, §10.3); pass --actions explicitly with sensor_area_5_3k
+# when running against the PRO rather than relying on these defaults.
 DEFAULT_ACTION_LABELS = [
     "idle_baseline",
     "sensor_area_2_8k",
