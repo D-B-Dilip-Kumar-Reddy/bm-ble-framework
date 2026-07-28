@@ -125,12 +125,20 @@ recorded here.
   still trigger reconnect attempts after the `threshold_s` window. This is a
   conservative safe default — idle cameras get reconnected unnecessarily but data
   is never lost.
-- GAP identity reads (`read_gap_identity_metadata`) are disabled for most
-  profiles (`gap_meta_data.readable: false`) — the 6K G2 disconnects if GAP
-  reads are attempted at the wrong time. Device Information reads are
-  per-profile too (`device_info_meta_data.readable`).
-- Both camera profiles remain `"_meta.status": "UNVERIFIED"` as *whole
-  profiles* — the recording command family is hardware-verified
-  (`commands.recording.provenance.status: "VERIFIED"`), but the profile-level
-  flag stays `UNVERIFIED` until every populated section is tested (see
-  `docs/payload_profiles.md`).
+- GAP identity reads (`read_gap_identity_metadata`) are gated per profile on
+  `gap_meta_data.readable`, as are Device Information reads on
+  `device_info_meta_data.readable`. The known hazard — the camera disconnecting
+  when GAP reads are attempted at the wrong time — was observed on
+  **`POCKET_6K_G2` v7.9**, which is why that profile sets both flags `false`.
+  It is **firmware-specific, not model-specific**: re-checked on the same
+  physical unit after its v8.6 upgrade (2026-07-28), both GAP characteristics
+  read back with no disconnect, so `POCKET_6K_G2 v8.6` sets both flags `true`
+  — as `POCKET_6K_PRO v8.6` already did. Don't generalize the v7.9 hazard to a
+  model; re-check it per firmware.
+- Every camera profile remains `"_meta.status": "UNVERIFIED"` as a *whole
+  profile* — on the G2 v7.9 and PRO v8.6 the recording command family is
+  hardware-verified (`commands.recording.provenance.status: "VERIFIED"`), but
+  the profile-level flag stays `UNVERIFIED` until every populated section is
+  tested (see `docs/payload_profiles.md`). `POCKET_6K_G2 v8.6` is `UNVERIFIED`
+  for a different reason: it has completed Phase 1 only, so it has no command
+  families to verify yet.

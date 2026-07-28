@@ -44,9 +44,11 @@ Constants live in `src/bmd_ble/constants.py`. All BMD UUIDs below are
 Standard services: **Generic Access** (`1800`: device name `2a00`,
 appearance `2a01`) and **Device Information** (`180a`: manufacturer `2a29` —
 always "Blackmagic Design" [spec] — and model `2a24`). Whether these are
-readable varies per camera — recorded per-profile as
+readable varies per camera *and per firmware* — recorded per-profile as
 `gap_meta_data.readable` / `device_info_meta_data.readable`
-([sniffer-verified]: G2 v7.9 exposes neither; PRO v8.6 exposes both).
+([sniffer-verified]: G2 v7.9 exposes neither; PRO v8.6 exposes both; G2 v8.6
+exposes both, re-checked on the same physical unit after the v7.9 → v8.6
+upgrade — so this is a firmware property, not a model property).
 
 ### 1.2 Camera Status byte
 
