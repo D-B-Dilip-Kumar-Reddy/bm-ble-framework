@@ -5,10 +5,18 @@
     "firmware": "v8.6",
     "ble_name": "A:AF3DC814",
     "status": "UNVERIFIED",
-    "_comment": "Phase 1 scaffold (2026-07-28): the operator's physical G2 unit was upgraded from v7.9 to v8.6 on 2026-07-27, so ble_name carries over from the same physical unit (hardware identity, not firmware) — confirm via examples/scan_camera.py before relying on it. No protocol values may be copied from POCKET_6K_G2_v7.9.json without fresh sniffing on v8.6 (design principle 6)."
+    "_comment": "Phase 1 complete on real hardware 2026-07-28 (transport sanity only — scan, connect, GATT, GAP/device-info reads, notification stream). ble_name re-confirmed by examples/scan_camera.py on v8.6 rather than inherited: the physical unit (BLE address CC:86:EC:72:E0:A6) is the same one upgraded from v7.9 on 2026-07-27, and the advertisement name identifies the hardware, not the firmware. status stays UNVERIFIED until Phase 4 — no protocol values (commands/codecs/resolutions/fps_modes) have been sniffed on v8.6 yet, and none may be inherited from POCKET_6K_G2_v7.9.json (design principle 6)."
   },
   "ble": {
     "incoming_property": "indicate",
-    "_comment": "Add characteristic_incoming only to override the default INCOMING_CONTROL UUID in constants.py"
+    "_comment": "Confirmed 2026-07-28 by tools/query/ble_services_chars.py on real v8.6 hardware: INCOMING_CONTROL (b864e140-76a0-416a-bf30-5876504537d9) advertises property 'indicate'. All 3 expected services and all 10 expected characteristics in constants.py were found with 0 missing and 0 extra, so no characteristic_incoming override is needed on this firmware."
+  },
+  "gap_meta_data": {
+    "readable": true,
+    "_comment": "Confirmed readable 2026-07-28 by tools/query/gap_meta_data.py on real v8.6 hardware: DEVICE_NAME read back 'A:AF3DC814' and APPEARANCE read back 0x8403 (33795), after which the session disconnected only on its own intentional teardown. NOTE — this is a behavioural CHANGE FROM v7.9, where reading GAP characteristics disconnected the camera and the field was therefore set false. Re-checked on this firmware per the workflow's firmware-upgrade rule; the v7.9 hazard did not reproduce."
+  },
+  "device_info_meta_data": {
+    "readable": true,
+    "_comment": "Confirmed readable 2026-07-28 by tools/query/device_meta_data.py on real v8.6 hardware: MANUFACTURER read back 'Blackmagic Design' and MODEL read back 'Pocket Cinema Camera 6K G2' (both NUL-padded), with no disconnect. Also a change from the v7.9 profile, which records false."
   }
 }

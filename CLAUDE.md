@@ -22,7 +22,7 @@ Python package (`bmd_ble`) for automated Blackmagic Design camera control over B
 
 | Model Key | Model Name | Firmware | Status | Notes |
 |---|---|---|---|---|
-| `POCKET_6K_G2` | Pocket Cinema Camera 6K G2 | v8.6 | In progress | **Primary reference.** The operator's physical unit was upgraded from v7.9 to v8.6 on 2026-07-27, so this is the only G2 firmware that can be tested against real hardware. Phase 1 scaffold only (`_meta` + `ble`) as of 2026-07-28 — every protocol value must be re-sniffed on v8.6 and nothing may be inherited from the v7.9 profile (design principle 6). All Python defaults (`DEFAULT_FIRMWARE` in `tools/`, `FIRMWARE` in `examples/`) point here |
+| `POCKET_6K_G2` | Pocket Cinema Camera 6K G2 | v8.6 | In progress | **Primary reference.** The operator's physical unit was upgraded from v7.9 to v8.6 on 2026-07-27, so this is the only G2 firmware that can be tested against real hardware. **Phase 1 complete** (2026-07-28): scan, connect, GATT UUIDs, GAP/device-info reads, and the notification stream all confirmed on hardware — GAP and device-info metadata are both `readable: true` here, unlike v7.9. Phase 2 (recording) is next; every protocol value must be re-sniffed on v8.6 and nothing may be inherited from the v7.9 profile (design principle 6). All Python defaults (`DEFAULT_FIRMWARE` in `tools/`, `FIRMWARE` in `examples/`) point here |
 | `POCKET_6K_G2` | Pocket Cinema Camera 6K G2 | v7.9 | Frozen | Former primary reference; most reverse-engineered profile in the repo and still the reference for how a fully-populated profile looks. **No longer testable** — the physical unit was upgraded to v8.6, so nothing here can be re-confirmed or extended. Kept as-is for its evidentiary record and because the settings-table unit tests still load it |
 | `POCKET_6K_PRO` | Pocket Cinema Camera 6K Pro | v8.6 | In progress | Second target |
 | `URSA_BROADCAST_G2` | URSA Broadcast G2 | v7.5 | Planned | Different category/param combos expected |
@@ -438,7 +438,7 @@ behind. Derived from three bring-ups at different stages:
 |---|---|---|
 | `POCKET_6K_G2 v7.9` | All phases (frozen — hardware upgraded away, see the registry) | `docs/recording.md`, `docs/settings.md` |
 | `POCKET_6K_PRO v8.6` | Phase 2 done; Phase 3 in progress — resolutions, dimension_enums, and codec ids transcribed, nothing yet promoted past CANDIDATE | `docs/settings.md` §15–§17 |
-| `POCKET_6K_G2 v8.6` | **Phase 1 scaffold only** (2026-07-28) — the current primary reference, and the live worked example of the firmware-upgrade variant below | — (nothing sniffed yet) |
+| `POCKET_6K_G2 v8.6` | **Phase 1 complete** (2026-07-28) — the current primary reference, and the live worked example of the firmware-upgrade variant below. Phase 2 is next | — (transport sanity only; no protocol values sniffed yet) |
 
 `docs/command_discovery.md` covers Phase 2's tooling; `docs/settings.md` covers Phase 3's.
 
@@ -511,8 +511,12 @@ Two concrete rules for this variant:
    Record the result in `gap_meta_data.readable`. Known hazard: on `POCKET_6K_G2 v7.9`,
    reading GAP characteristics disconnects the camera — if the new model does the same,
    set `readable: false` and don't retry the read anywhere else for this camera.
-   That hazard has **not** been re-checked on `POCKET_6K_G2 v8.6`; per the
-   firmware-upgrade rules above, treat it as a hypothesis to confirm, not a known fact.
+   **That hazard is firmware-specific, not model-specific** — re-checked on
+   `POCKET_6K_G2 v8.6` (2026-07-28) on the same physical unit and it did not reproduce:
+   both GAP characteristics read back cleanly with no disconnect, so that profile
+   records `readable: true` where v7.9 records `false`. A worked example of the
+   firmware-upgrade rule above: the old profile's value was a hypothesis, and the
+   camera refuted it.
 6. **Check device-info metadata readability** —
    `python tools/query/device_meta_data.py --model-key <MODEL_KEY> --firmware <FIRMWARE>`.
    Record the result in `device_info_meta_data.readable`.
