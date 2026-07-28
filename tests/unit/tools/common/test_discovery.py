@@ -25,13 +25,21 @@ from discovery import (  # noqa: E402
 )
 
 from bmd_ble.camera_profile import load_schema, validate_profile  # noqa: E402
-from bmd_ble.protocol.codec import encode_assign  # noqa: E402
+from bmd_ble.protocol.codec import encode_assign, encode_assign_void  # noqa: E402
 from bmd_ble.protocol.types import DataType  # noqa: E402
 
 
 def make_candidate(value=2, reserved=1, **overrides) -> CandidateCommand:
     defaults = dict(
         category=0x0A, parameter=0x01, data_type=DataType.INT8, value=value, reserved=reserved
+    )
+    defaults.update(overrides)
+    return CandidateCommand(**defaults)
+
+
+def make_void_candidate(reserved=0, **overrides) -> CandidateCommand:
+    defaults = dict(
+        category=0x0A, parameter=0x03, data_type=DataType.VOID, value=None, reserved=reserved
     )
     defaults.update(overrides)
     return CandidateCommand(**defaults)
@@ -93,6 +101,26 @@ class TestCandidateCommand:
             make_candidate().describe() == "category=0x0A parameter=0x01 INT8 value=2 reserved=0x01"
         )
 
+    def test_void_candidate_encodes_via_encode_assign_void(self):
+        candidate = make_void_candidate(reserved=1)
+
+        assert candidate.encode() == encode_assign_void(category=0x0A, parameter=0x03, reserved=1)
+        assert candidate.encode() == bytes([0xFF, 0x04, 0x00, 0x01, 0x0A, 0x03, 0x00, 0x00])
+
+    def test_void_candidate_describe_says_no_payload(self):
+        assert (
+            make_void_candidate().describe()
+            == "category=0x0A parameter=0x03 VOID void (no payload) reserved=0x00"
+        )
+
+    def test_void_candidate_with_a_value_raises(self):
+        with pytest.raises(ValueError, match="must be None"):
+            make_void_candidate(value=1)
+
+    def test_non_void_candidate_without_a_value_raises(self):
+        with pytest.raises(ValueError, match="must be None"):
+            make_candidate(value=None)
+
 
 class TestGenerateCandidates:
     def test_sweep_order_is_reserved_outer_values_inner(self):
@@ -112,6 +140,19 @@ class TestGenerateCandidates:
         )
 
         assert [c.value for c in candidates] == [5, 3, 4]
+
+    def test_void_sweep_is_one_candidate_per_reserved(self):
+        candidates = generate_candidates(
+            category=0x0A, parameter=0x03, data_type=DataType.VOID, values=[], reserveds=[0, 1]
+        )
+
+        assert [(c.reserved, c.value) for c in candidates] == [(0, None), (1, None)]
+
+    def test_void_sweep_with_values_raises(self):
+        with pytest.raises(ValueError, match="takes no payload values"):
+            generate_candidates(
+                category=0x0A, parameter=0x03, data_type=DataType.VOID, values=[1], reserveds=[0]
+            )
 
 
 class TestSeedTriplesFromCapture:
@@ -288,6 +329,36 @@ class TestBuildCommandBlock:
         with pytest.raises(ValueError, match="more than once"):
             build_command_block(
                 name="recording", confirmed=confirmed, capture_ref=None, discovered_on="2026-07-08"
+            )
+
+    def test_void_block_omits_values_and_validates_against_real_schema(self):
+        confirmed = [
+            ConfirmedOutcome(
+                outcome="photo_taken", candidate=make_void_candidate(reserved=1), echo_operation=2
+            )
+        ]
+
+        block = build_command_block(
+            name="photo", confirmed=confirmed, capture_ref=None, discovered_on="2026-07-27"
+        )
+        schema = load_schema()
+        jsonschema.validate(block, {"$ref": "#/$defs/command", "$defs": schema["$defs"]})
+
+        assert "values" not in block
+        assert block["data_type"] == "VOID"
+        assert block["reserved"] == 1
+        assert block["echo_operation"] == 2
+        assert "photo_taken" in block["provenance"]["notes"]
+
+    def test_void_block_still_raises_on_duplicate_outcome(self):
+        confirmed = [
+            ConfirmedOutcome(outcome="photo_taken", candidate=make_void_candidate(reserved=0)),
+            ConfirmedOutcome(outcome="photo_taken", candidate=make_void_candidate(reserved=0)),
+        ]
+
+        with pytest.raises(ValueError, match="more than once"):
+            build_command_block(
+                name="photo", confirmed=confirmed, capture_ref=None, discovered_on="2026-07-27"
             )
 
 

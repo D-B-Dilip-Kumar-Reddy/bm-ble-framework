@@ -390,6 +390,42 @@ the body menu, so the state is real and an exhaustive sweep is the most
 promising way to find whatever `dimension_enum` (if any) reaches it
 directly through this codebase's own writes.
 
+A second, structurally different use case (`docs/photo_capture.md` §10.1's
+"Next steps"): hunting for a *second* `dimension_enum` that aliases to a
+resolution already known, rather than one reaching an unknown resolution.
+Both profiles record exactly one ProRes/HD enum (`3`); the Sensor Area
+investigation (§10.1/§10.3) found that a still-photo sensor readout choice
+sits underneath the displayed video resolution without changing
+`recording_format`'s width/height at all, only its flags nibble — so if
+Sensor Area is written via `video_format` the way ordinary resolution
+changes are, its enum bytes would all decode to the *same* `HD`
+width/height as the one already known, distinguishable only by that flags
+bit. This needs `--no-stop-on-match` (the tool's default stops at the
+first match, which would hide a second/third one) and `--include-known`
+(to get a fresh baseline flags reading from the already-known enum in the
+same session) — the opposite defaults from the motivating case above,
+since here every match matters, not just the first one. **Run on
+`POCKET_6K_PRO v8.6`, 2026-07-27 (`docs/photo_capture.md` §10.5): the
+result was a genuine methodology lesson, not a confirmed second enum** —
+see the stale-match guard below.
+
+**Stale-match guard (added 2026-07-27, from that same run).** `is_match`
+only ever checked a candidate's decoded state against the caller's
+*target* — nothing checked whether that state was actually *caused* by
+the candidate, versus already being true before the write (an invalid or
+unassigned enum still gets a report; the camera just reflects whatever it
+already held, the same "report isn't an ack, it's a state reflection"
+mechanism `docs/settings.md` §7 already established for `video_format`
+writes generally). Candidate `0x00` demonstrated this directly: it
+"matched" `HD` in one sweep and a completely different resolution in an
+identical immediate rerun, both times exactly reproducing whatever the
+camera held right before `0x00` was sent — not a result `0x00` itself
+produced. The tool now tracks the last confirmed `(width, height, flags)`
+state across candidates (carried forward through silent ones) and flags
+any `MATCH` identical to it as a **possible stale match**, both inline
+during the sweep and in the closing summary, rather than reporting it
+as an unqualified hit.
+
 ---
 
 ## `tools/control/sweep_camera_format.py`
@@ -504,7 +540,11 @@ the profile block does **not** exist yet and the command must be
 reverse-engineered. It sweeps operator-supplied candidate values/reserved
 bytes over a seeded (category, parameter, data_type), asks the operator to
 confirm what the camera physically did after each send, and emits a
-ready-to-paste `commands` block. Full writeup: `docs/command_discovery.md`.
+ready-to-paste `commands` block. A VOID seed sweeps payloadless trigger
+packets — reserved bytes only, no `--values` — added 2026-07-27 for the
+10.3 still-capture probe after the passive photo captures showed there is
+no report to seed from (`docs/photo_capture.md`). Full writeup:
+`docs/command_discovery.md`.
 
 ---
 

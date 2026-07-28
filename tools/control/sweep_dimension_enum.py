@@ -50,6 +50,25 @@ typed-yes gated once for the whole sweep (like
 tools/control/discover_command.py), not per candidate — reading the sweep
 plan before confirming is the operator's chance to trim it down with
 `--enums`/`--range`/`--include-known` first.
+
+STALE-MATCH GUARD (added 2026-07-27, real false positive on
+`POCKET_6K_PRO v8.6` — see docs/photo_capture.md §10.1's dimension_enum-
+aliasing hunt). `is_match` only checks whether a candidate's decoded state
+equals the target — it has no way to know whether that state was actually
+*caused* by this candidate, versus already being true beforehand (an
+invalid/no-op enum produces no real write, but the camera still reflects
+whatever it was already at — the same "report isn't an ack, it's a state
+reflection" mechanism documented in `docs/settings.md` §7). Candidate
+`0x00` demonstrated this directly: an apparent MATCH against ProRes/HD in
+one run, and a completely different, non-matching resolution in an
+otherwise-identical rerun — both times exactly reproducing whatever the
+camera held immediately *before* `0x00` was sent, not a result of `0x00`
+itself. The sweep now tracks the last confirmed `(width, height, flags)`
+state across candidates (carried forward through silent ones) and flags
+any MATCH that is byte-identical to it as a **possible stale match**,
+both inline and in the final summary — real matches should still show up
+clean unless the immediately preceding candidate happened to reach the
+same state by coincidence, which a repeat/interleaved run resolves.
 """
 
 from __future__ import annotations
@@ -220,6 +239,19 @@ def is_match(
     return codec_quality is not None and codec_quality[0] == target_codec_id
 
 
+def recording_format_state(
+    recording_format: RecordingFormat | None,
+) -> tuple[int, int, int] | None:
+    """(width, height, flags) fingerprint used to detect a stale match — a
+    report whose content is identical to whatever the camera was already
+    reporting before this candidate was sent, i.e. leftover state rather
+    than something this candidate itself caused. `None` when nothing
+    decoded (a genuinely silent candidate carries no state to compare)."""
+    if recording_format is None:
+        return None
+    return (recording_format.width, recording_format.height, recording_format.frame_flags)
+
+
 async def prompt(text: str) -> str:
     loop = asyncio.get_running_loop()
     return (await loop.run_in_executor(None, input, text)).strip()
@@ -273,6 +305,11 @@ async def run(args: argparse.Namespace) -> int:
     combined = CaptureSession()
     results: list[tuple[int, RecordingFormat | None, tuple | None, bool]] = []
     matched: list[int] = []
+    stale_matches: list[int] = []
+    # Carries forward across silent candidates: the most recent decoded
+    # (width, height, flags), so a match can be checked against what the
+    # camera was already reporting BEFORE this specific candidate was sent.
+    last_state: tuple[int, int, int] | None = None
 
     await cam.connect()
     try:
@@ -308,13 +345,28 @@ async def run(args: argparse.Namespace) -> int:
             results.append((candidate, recording_format, codec_quality, matched_this))
             print(f"  {describe_result(recording_format, codec_quality)}")
 
+            current_state = recording_format_state(recording_format)
+
             if matched_this:
                 matched.append(candidate)
                 print(f"  ★★★ MATCH: enum=0x{candidate:02X} reached the target ★★★")
+                if current_state is not None and current_state == last_state:
+                    stale_matches.append(candidate)
+                    print(
+                        "  ⚠ POSSIBLE STALE MATCH: this report is byte-identical to what the "
+                        "camera was already reporting BEFORE this candidate was sent — it may "
+                        "be leftover state, not a result this candidate caused (the report "
+                        "isn't an ack, it's a state reflection — docs/settings.md §7). Do not "
+                        "trust this as a confirmed dimension_enum without an independent "
+                        "repeat from a genuinely different starting state."
+                    )
                 if args.stop_on_match:
                     answer = await prompt("Stop the sweep here? [Y/n]: ")
                     if answer.strip().lower() != "n":
                         break
+
+            if current_state is not None:
+                last_state = current_state
 
             if index < len(candidates):
                 await asyncio.sleep(args.pause_seconds)
@@ -349,17 +401,34 @@ async def run(args: argparse.Namespace) -> int:
 
     print("\n=== Sweep summary ===")
     for candidate, recording_format, codec_quality, matched_this in results:
-        marker = " <-- MATCH" if matched_this else ""
+        if matched_this:
+            marker = (
+                " <-- STALE MATCH (see warning above)"
+                if candidate in stale_matches
+                else " <-- MATCH"
+            )
+        else:
+            marker = ""
         print(f"  0x{candidate:02X}: {describe_result(recording_format, codec_quality)}{marker}")
 
     if matched:
-        enums = ", ".join(f"0x{c:02X}" for c in matched)
-        print(
-            f"\n{len(matched)} candidate(s) matched: {enums}. Add the confirmed enum to the "
-            "profile's resolutions table (dimension_enums) and re-run the family's normal "
-            "write+echo confirmation (docs/settings.md's runbook) before trusting it."
-        )
-        return 0
+        clean = [c for c in matched if c not in stale_matches]
+        if clean:
+            enums = ", ".join(f"0x{c:02X}" for c in clean)
+            print(
+                f"\n{len(clean)} candidate(s) matched: {enums}. Add the confirmed enum to the "
+                "profile's resolutions table (dimension_enums) and re-run the family's normal "
+                "write+echo confirmation (docs/settings.md's runbook) before trusting it."
+            )
+        if stale_matches:
+            enums = ", ".join(f"0x{c:02X}" for c in stale_matches)
+            print(
+                f"\n{len(stale_matches)} candidate(s) matched but look STALE: {enums}. Their "
+                "reported state was identical to whatever the camera already held before that "
+                "candidate was sent, so the report may not be a genuine result of this write. "
+                "Re-run from a different starting state (or interleaved) before trusting these."
+            )
+        return 0 if clean else 1
 
     print(
         "\nNo candidate matched the target. If every candidate in range is now tried, "

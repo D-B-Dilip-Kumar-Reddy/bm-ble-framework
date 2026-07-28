@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
-from bmd_ble.protocol.codec import Operation, encode_assign
+from bmd_ble.protocol.codec import Operation, encode_assign, encode_assign_void
 from bmd_ble.protocol.types import DataType
 
 # Characteristic name used by tools/common/capture.py's saved JSON for the
@@ -28,15 +28,33 @@ INCOMING_CONTROL_NAME = "INCOMING_CONTROL (Indicate)"
 
 @dataclass(frozen=True)
 class CandidateCommand:
-    """One candidate command packet in a discovery sweep."""
+    """One candidate command packet in a discovery sweep.
+
+    ``value`` is ``None`` exactly when ``data_type`` is VOID: a void trigger
+    has no payload to sweep, so the candidate is fully determined by its
+    coordinates and reserved byte.
+    """
 
     category: int
     parameter: int
     data_type: DataType
-    value: int
+    value: int | None
     reserved: int
 
+    def __post_init__(self) -> None:
+        if (self.value is None) != (self.data_type is DataType.VOID):
+            raise ValueError(
+                "CandidateCommand.value must be None for a VOID candidate "
+                "and an int for every other data type"
+            )
+
     def encode(self) -> bytes:
+        if self.value is None:
+            return encode_assign_void(
+                category=self.category,
+                parameter=self.parameter,
+                reserved=self.reserved,
+            )
         return encode_assign(
             category=self.category,
             parameter=self.parameter,
@@ -46,9 +64,10 @@ class CandidateCommand:
         )
 
     def describe(self) -> str:
+        payload = "void (no payload)" if self.value is None else f"value={self.value}"
         return (
             f"category=0x{self.category:02X} parameter=0x{self.parameter:02X} "
-            f"{self.data_type.name} value={self.value} reserved=0x{self.reserved:02X}"
+            f"{self.data_type.name} {payload} reserved=0x{self.reserved:02X}"
         )
 
 
@@ -63,7 +82,26 @@ def generate_candidates(
     """Deterministic sweep: for each reserved byte, each payload value, in
     the order given — the operator's ordering is meaningful (put the most
     likely candidate first so the camera spends the least time in odd
-    states)."""
+    states).
+
+    A VOID data type has no payload axis: ``values`` must be empty and the
+    sweep is one candidate per reserved byte.
+    """
+    if data_type is DataType.VOID:
+        if values:
+            raise ValueError(
+                "A VOID (trigger) sweep takes no payload values — pass an empty values list."
+            )
+        return [
+            CandidateCommand(
+                category=category,
+                parameter=parameter,
+                data_type=data_type,
+                value=None,
+                reserved=reserved,
+            )
+            for reserved in reserveds
+        ]
     return [
         CandidateCommand(
             category=category,
@@ -195,10 +233,17 @@ def build_command_block(
                 f"data_type, reserved) family."
             )
 
+    # For a VOID family every candidate's value is None (enforced by
+    # CandidateCommand) and the block carries no `values` map at all — the
+    # schema treats it as optional, same as the multi-element families.
+    seen_outcomes: list[str] = []
     values: dict[str, int] = {}
     for outcome in confirmed:
-        if outcome.outcome in values:
+        if outcome.outcome in seen_outcomes:
             raise ValueError(f"Outcome '{outcome.outcome}' confirmed more than once.")
+        seen_outcomes.append(outcome.outcome)
+        if outcome.candidate.value is None:
+            continue
         if outcome.candidate.value in values.values():
             raise ValueError(
                 f"Payload value {outcome.candidate.value} is confirmed for two outcomes — "
@@ -214,14 +259,15 @@ def build_command_block(
         "parameter": first.parameter,
         "data_type": first.data_type.name,
         "reserved": first.reserved,
-        "values": values,
-        "provenance": {
-            "status": "VERIFIED",
-            "method": "guided-discovery (tools/control/discover_command.py)",
-            "capture_refs": [capture_ref] if capture_ref else [],
-            "verified_on": discovered_on,
-            "notes": f"Operator-confirmed outcomes: {', '.join(values)}.",
-        },
+    }
+    if values:
+        block["values"] = values
+    block["provenance"] = {
+        "status": "VERIFIED",
+        "method": "guided-discovery (tools/control/discover_command.py)",
+        "capture_refs": [capture_ref] if capture_ref else [],
+        "verified_on": discovered_on,
+        "notes": f"Operator-confirmed outcomes: {', '.join(seen_outcomes)}.",
     }
     if echo_operation is not None:
         block["echo_operation"] = echo_operation

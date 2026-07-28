@@ -353,6 +353,20 @@ verify via the `INCOMING_CONTROL` echo only. If a future sniffer capture
 discovers a recording-related `CAMERA_STATUS` bit (or this camera's status
 byte gets fully decoded), the secondary check can be added here.
 
+Recording's echo-only gap turns out not to be the floor. `commands.photo`
+(`docs/photo_capture.md` §7, §9) has neither channel on **either**
+camera: its trigger is confirmed on real hardware — independently, on
+both `POCKET_6K_G2 v7.9` and `POCKET_6K_PRO v8.6` — but no echo and no
+`CAMERA_STATUS` bit has ever been observed to respond to it on either
+one, so there isn't even the fallback this section describes for
+recording. That's a harder open question than anything implemented in
+this file — no `CameraSession.capture_photo()` exists yet specifically
+because of it. One proposed direction, noted but not yet started
+(`docs/photo_capture.md` §7.3): verify out-of-band over USB instead of
+BLE, using `POCKET_6K_PRO v8.6`'s HTTP clip-playback interface — a
+channel this file's dual-check strategy (echo + `CAMERA_STATUS`, both
+BLE) doesn't cover at all, and explicitly not assumed to exist on the G2.
+
 ---
 
 ## What's deliberately out of scope

@@ -110,7 +110,21 @@ instead of calling `logging.basicConfig` directly.
 
 ---
 
-## Decode/normalize semantics
+## Connect-burst contamination of early windows
+
+Confirmed on the 2026-07-27 photo-capture runs (`POCKET_6K_G2 v7.9` and
+`POCKET_6K_PRO v8.6`, `docs/photo_capture.md` §5.2): after connect, both
+cameras drain a large state-report dump over the indication channel at a
+throttled ~180ms cadence lasting 10+ seconds. A window opened before the
+drain finishes records mid-burst packets that look action-caused — on the
+G2 run the burst's ordered `0x0C` lens-string tail landed inside the first
+*photo* window, two windows after connect.
+
+Operator rule for every sniffer built on this engine: open the first
+capture window only after notifications have slowed to the ~1/s ambient
+cadence. Recognition signature when reading a suspect capture after the
+fact: ~180ms inter-packet spacing continuing unbroken across a window
+boundary, and parameters arriving in ascending order.
 
 `decode_notification` calls `protocol.codec.decode_packet` and catches
 `ValueError`. This is expected, not a bug: `CAMERA_STATUS` notifications are
@@ -183,6 +197,33 @@ quality variant, resolution, FPS). Known passive limit (confirmed on the
 2026-07-20 G2 run, `docs/settings.md` §5): video_format dimension enums
 never appear in notifications and need the active
 `send_settings_command.py --dimension-enum` probe instead.
+
+`tools/sniffers/sniffer_photo.py` is the third consumer: same
+`--actions`-overridable pattern as the settings sniffer, with one
+methodological addition — its default labels include an `idle_baseline`
+window (operator does nothing) because photo capture is a single momentary
+action with no paired opposite action (unlike `record_start`/`record_stop`),
+so without an idle window `tools/common/discovery.py`'s
+`seed_triples_from_capture(exclude_ambient=True)` filter would have no
+contrast and keep everything. See `docs/photo_capture.md`.
+
+`tools/sniffers/sniffer_sensor_area.py` is the fourth consumer, built the
+same way — `idle_baseline` plus one window per concrete setting value
+(`sensor_area_2_8k`/`5_7k`/`6k`, G2-shaped; the PRO's own middle option is
+named differently — pass `--actions` explicitly there, see the script's
+docstring) — investigating a ProRes-only still-photo concept the operator
+reported (docs/photo_capture.md §8). First runs 2026-07-27, both cameras:
+real report activity appeared (`recording_format`, `codec_quality`, and,
+G2-only, a capacity-shaped signal), but neither already-known channel's
+payload actually varies with the chosen sensor area on either camera —
+see `docs/photo_capture.md` §10.1/§10.3 for the full results, including a
+genuine cross-model reconfirmation of the pre-existing "windowed bit"
+hypothesis found along the way. §10.4 then reused `--actions` a third
+way: repeating labels to interleave a value twice (`--actions
+idle_baseline,sensor_area_2_8k,sensor_area_6k,sensor_area_2_8k,sensor_area_6k`)
+turned a single-sample correlation into a demonstrated, on-demand-toggling
+signal — `run_capture_windows` has no dedicated "repeat" concept, since a
+duplicated label in `--actions` already gets its own fresh window.
 
 ---
 

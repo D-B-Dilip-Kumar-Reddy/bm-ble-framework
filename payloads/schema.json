@@ -115,7 +115,7 @@
         "values": {
           "type": "object",
           "minProperties": 1,
-          "description": "Named payload values, e.g. {\"start\": 2, \"stop\": 0}. Names are what code and the discovery tool address; integers are the sniffer-captured payload bytes. Optional: a multi-element command family (codec_quality, video_format, recording_format) composes its payload from the top-level lookup tables (codecs/resolutions/fps_modes) instead and omits this map.",
+          "description": "Named payload values, e.g. {\"start\": 2, \"stop\": 0}. Names are what code and the discovery tool address; integers are the sniffer-captured payload bytes. Optional, for two reasons: a multi-element command family (codec_quality, video_format, recording_format) composes its payload from the top-level lookup tables (codecs/resolutions/fps_modes) instead, and a VOID trigger family has no payload at all — both omit this map.",
           "patternProperties": { "^_": {} },
           "additionalProperties": { "type": "integer" }
         },

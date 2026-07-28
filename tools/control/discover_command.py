@@ -30,6 +30,16 @@ Example — recording start/stop on the Pocket 6K Pro:
         --label recording --from-capture tools/captures/POCKET_6K_PRO_v8.6/<file>.json \
         --values 2,0 --reserved 1,0 --outcomes start,stop
 
+Example — probing a void (payloadless) trigger, seeded manually because the
+2026-07-27 passive photo captures showed body-triggered stills produce no
+report at all to seed from (docs/photo_capture.md). A VOID sweep has no
+payload axis, so --values is omitted and only reserved bytes are swept:
+
+    python tools/control/discover_command.py \
+        --model-key POCKET_6K_G2 --firmware v7.9 \
+        --label photo --category 0x0A --parameter 0x03 --data-type VOID \
+        --reserved 0,1 --outcomes photo_taken
+
 The tool never edits the profile JSON itself — paste the emitted block into
 payloads/models/<MODEL_KEY>_<FIRMWARE>.json and run `pytest tests/unit`
 (the schema tests validate it immediately).
@@ -164,6 +174,13 @@ async def probe_candidates(
             echo_operation, echo_payload = extract_echo(
                 notifications, category=candidate.category, parameter=candidate.parameter
             )
+            conflicting = [
+                c
+                for c in confirmed
+                if c.outcome == outcome
+                and (c.candidate.value, c.candidate.reserved)
+                != (candidate.value, candidate.reserved)
+            ]
             confirmed.append(
                 ConfirmedOutcome(
                     outcome=outcome,
@@ -175,6 +192,21 @@ async def probe_candidates(
             if outcome in remaining:
                 remaining.remove(outcome)
             print(f"Confirmed: '{outcome}' <- {candidate.describe()}")
+            if conflicting:
+                prior = conflicting[-1].candidate
+                print(
+                    f"\nWARNING: outcome '{outcome}' was already confirmed for a DIFFERENT "
+                    f"candidate:\n  earlier: {prior.describe()}\n  now:     {candidate.describe()}"
+                    "\nA command block needs exactly one candidate per outcome name — this will "
+                    "be REJECTED at the end unless every remaining confirmation of this outcome "
+                    "agrees on one value. If several different values are all genuinely "
+                    "triggering the same effect, that's real evidence the camera ignores the "
+                    "payload — but confirming every candidate identically is also the signature "
+                    "of an unreliable read (e.g. confirming out of habit, or manually triggering "
+                    "the action yourself instead of observing the write's own effect). Verify "
+                    "with an independent signal (an on-camera counter, not just a glance) before "
+                    "trusting this."
+                )
             if echo_payload is not None:
                 print(f"Echo: operation={echo_operation} payload={echo_payload}")
             else:
@@ -215,7 +247,17 @@ async def probe_candidates(
 
 async def run(args: argparse.Namespace) -> int:
     category, parameter, data_type = await resolve_seed(args)
-    values = parse_int_list(args.values, "--values")
+    if data_type is DataType.VOID:
+        # A void trigger has no payload axis — the sweep is reserved-only.
+        if args.values:
+            raise SystemExit("--values does not apply to a VOID (trigger) sweep — omit it.")
+        if args.restore_value is not None:
+            raise SystemExit("--restore-value does not apply to a VOID (trigger) sweep — omit it.")
+        values: list[int] = []
+    else:
+        if not args.values:
+            raise SystemExit("--values is required unless the data type is VOID.")
+        values = parse_int_list(args.values, "--values")
     reserveds = parse_int_list(args.reserved, "--reserved")
     outcomes = [name.strip() for name in args.outcomes.split(",") if name.strip()]
     if not outcomes:
@@ -291,8 +333,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--values",
-        required=True,
-        help="Comma-separated payload values to sweep, most likely first (e.g. 2,0)",
+        help=(
+            "Comma-separated payload values to sweep, most likely first (e.g. 2,0). "
+            "Required unless --data-type VOID (a trigger sweep has no payload axis "
+            "and sweeps reserved bytes only)."
+        ),
     )
     parser.add_argument(
         "--reserved",

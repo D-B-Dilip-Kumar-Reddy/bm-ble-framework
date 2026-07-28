@@ -133,6 +133,41 @@ def encode_assign(
     return encode_packet(header, payload)
 
 
+def encode_assign_void(
+    *,
+    category: int,
+    parameter: int,
+    reserved: int = RESERVED_BYTE,
+    command_id: int = 0x00,
+    operation: Operation = Operation.ASSIGN,
+) -> bytes:
+    """Encode an ASSIGN command with a void (empty) payload — a trigger.
+
+    The spec's void parameters (one-shot autofocus 0.1, still capture 10.3,
+    ...) carry no payload: the packet ends at the operation byte and the
+    length field is exactly ``LENGTH_FIELD_OFFSET``. Camera-originated void
+    *reports* with this shape are sniffer-verified on both cameras (e.g. a
+    0.1 report ``FF 04 00 00 00 01 00 02`` in the 2026-07-27 photo-capture
+    baselines) — whether any camera *accepts* a void write is exactly what
+    discovery probing with this encoder determines.
+
+    Kept separate from `encode_assign` deliberately: the fixed-width gate
+    there (``DATA_TYPE_STRUCT_FORMATS``) is what stops a caller from
+    silently encoding a zero-byte payload for a type that needs bytes, and
+    VOID staying out of that table preserves the guarantee.
+    """
+    header = CommandHeader(
+        destination=DESTINATION_CAMERA,
+        command_id=command_id,
+        category=category,
+        parameter=parameter,
+        data_type=DataType.VOID,
+        operation=operation,
+        reserved=reserved,
+    )
+    return encode_packet(header)
+
+
 def encode_assign_elements(
     *,
     category: int,

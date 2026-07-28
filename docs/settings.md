@@ -628,12 +628,55 @@ RX (0x01/0x09): 19 00 19 00 00 18 80 0D 00 00
 here — at 25fps, in a completely separate session from §6's 50fps sighting
 — **independently reconfirms** §6's "windowed bit" finding: 6K 3:2 (the
 G2's only full-sensor mode) reports `0x0000` regardless of frame rate,
-while every other resolution here reports `0x0010`.
+while every other resolution here reports `0x0010`. A third, later
+reconfirmation arrived from an unrelated investigation entirely:
+`docs/photo_capture.md` §10.1's first Sensor Area capture (2026-07-27,
+G2) found the same bit tracking full-sensor-vs-cropped exactly (clear for
+a full-sensor "6K" ProRes sensor-area choice, set for the smaller
+2.8K/5.7K crops) while `recording_format`'s width/height stayed pinned to
+an unrelated video resolution throughout — evidence for the windowed-bit
+theory from a completely different settings axis than the one that
+originally established it. A fourth reconfirmation followed immediately,
+this time cross-model: `docs/photo_capture.md` §10.3's PRO rerun of the
+same Sensor Area capture found the identical clear-only-for-full-sensor
+pattern independently, on that camera's own different baseline flags byte
+(`0x10`/`0x00` vs the G2's `0x13`/`0x03`) — the bit-4 boundary, not the
+exact byte value, is what holds across both cameras. A fifth
+reconfirmation then upgraded this from correlation to demonstrated
+causation: `docs/photo_capture.md` §10.4's PRO-only interleaved A-B-A-B
+sensor-area sweep (2.8K→6K→2.8K→6K) toggled the bit byte-identically on
+demand, `0x0010`↔`0x0000`, twice each way — no longer just "this bit
+happened to differ between two states observed once each," but a signal
+that flips cleanly and repeatably every time the operator changes the
+setting. This bit's own name in the official spec turns out to be
+"windowed mode" — the operator located and directly searched the full
+115-page official protocol PDF (`docs/photo_capture.md` §10.6, every
+"sensor" occurrence, 26/26) and confirmed there is no dedicated "Sensor
+Area" parameter documented anywhere in it; this bit is the *only*
+officially-documented concept related to sensor readout area in the
+entire spec. This codebase's own "windowed bit" name was coined purely
+from wire behavior, well before that search — landing on the spec's own
+answer independently is itself a form of confirmation.
+
+**Read-only, confirmed 2026-07-27** (`docs/photo_capture.md` §10.7, the
+closing test of the Sensor Area investigation): the windowed bit is a
+genuine, reproducible *read* signal, but a single isolated-write test —
+same fps/width/height as an already-confirmed state, only flags flipped
+— produced no echo and, decisively, no change in a photo taken
+immediately after (identical dimensions to one taken immediately
+before, both checked on the SD card). Five reconfirmations of this bit
+as a read signal, zero as a write path — this is where the investigation
+that grew this hypothesis stops.
 
 This is the strongest evidence any settings value has received: a decoded,
 byte-exact echo *and* (per the operator's own summary of this round) a
 confirmed physical camera change, for 8 independent resolution/codec
-combinations in one sweep. It also settles the open question from §6:
+combinations in one sweep. A second, independent cross-check arrived later
+from a completely different evidence channel: `docs/photo_capture.md` §8.1
+notes that all six BRAW `resolutions` entries also match the operator's
+separately-reported still-photo output dimensions exactly (2026-07-27) —
+camera file output, not a BLE write/report, corroborating this table from
+outside the wire protocol entirely. It also settles the open question from §6:
 **`0x01/0x00` still never echoes** — every one of these 16 sends confirmed
 on `0x01/0x09` (and, for codec, `0x0A/0x00`) — the same channels
 `CameraSession.set_video_format` was already arming.
@@ -1931,6 +1974,14 @@ resolution's `codecs` list, since the camera genuinely supports the
 combination; `known_unreachable` records only that this codebase's current
 write path can't reach it, so the entry can be deleted the moment a future fix
 is found without touching anything else in the profile.
+
+A later, unrelated investigation turned up a suggestive parallel, not
+proof of the same underlying cause: `docs/photo_capture.md` §10.2 records
+that both cameras' own body menus disable choosing a still-photo "Sensor
+Area" entirely at ProRes/4K DCI — a different subsystem (still-photo
+sensor readout selection, not video recording resolution), but the same
+label going dark on both cameras. Left as an open observation there, not
+claimed as this same write-path gap.
 
 To reduce the chance of a similar gap going unnoticed for as long as this one
 did on a *different* (codec, resolution, fps) combination, on either camera,

@@ -1,6 +1,6 @@
 # Guided Command Discovery
 
-**Status:** implemented — used to populate `POCKET_6K_PRO v8.6`'s recording block on real hardware.
+**Status:** implemented — used to populate `POCKET_6K_PRO v8.6`'s recording block, and (via its VOID sweep support) `commands.photo` on both `POCKET_6K_G2 v7.9` and `POCKET_6K_PRO v8.6`, on real hardware.
 
 ## Overview
 
@@ -32,14 +32,41 @@ It is model- and command-agnostic: nothing recording-specific is hardcoded.
 results — the same tool sweeps recording on a Pocket 6K Pro today and, say,
 still-capture on an URSA later.
 
-**Known limitation — scalar payloads only.** The sweep generates
-single-value ASSIGN payloads (`encode_assign`), so it cannot probe the
+**Known limitation — scalar and void payloads only.** The sweep generates
+single-value ASSIGN payloads (`encode_assign`) or payloadless VOID triggers
+(`encode_assign_void` — see below), so it cannot probe the
 multi-element settings families (codec_quality's id pair, video_format's
 five int8 elements, recording_format's five int16s — `docs/settings.md`).
 For those, seed the coordinates and value tables from a
 `tools/sniffers/sniffer_settings.py` capture, transcribe them into the
 profile as CANDIDATE, and confirm by sending the fully-formed packet with
 `tools/control/send_settings_command.py` instead.
+
+**VOID (trigger) sweeps** are supported (added 2026-07-27, when the
+passive photo captures on both cameras showed body-triggered stills
+produce no report at all to seed from — `docs/photo_capture.md` §5, the
+first real need). A void trigger has no payload axis, so the sweep is one
+candidate per reserved byte: `generate_candidates` requires an empty
+values list for `DataType.VOID`, `CandidateCommand` carries `value=None`
+(enforced both ways in `__post_init__`) and encodes via
+`encode_assign_void` — a separate encoder in `protocol/codec.py`, kept out
+of `encode_assign` so `DATA_TYPE_STRUCT_FORMATS` still guards fixed-width
+types against silent zero-byte payloads. The driver rejects `--values` and
+`--restore-value` for a VOID seed, and `build_command_block` omits the
+`values` map entirely from a VOID family's emitted block (the schema
+treats `values` as optional). Seed manually — a void report will rarely
+exist in a capture to pick from:
+
+```
+python tools/control/discover_command.py \
+    --model-key POCKET_6K_G2 --firmware v7.9 \
+    --label photo --category 0x0A --parameter 0x03 --data-type VOID \
+    --reserved 0,1 --outcomes photo_taken
+```
+
+One payload shape remains unsendable: data-type byte `0x00` *with* a
+one-byte boolean payload (a real camera-report shape — see
+`docs/photo_capture.md` §3). Build it only when a sweep actually needs it.
 
 For the specific case of sweeping many `video_format` `dimension_enum`
 candidates against one already-known (category, parameter, data_type) —
@@ -59,7 +86,7 @@ See `docs/active_camera_control.md`'s section on it and `docs/settings.md`
 |---|---|---|
 | `tools/common/discovery.py` | All pure logic — candidate generation, capture-seeding, echo extraction, block building/rendering. No BLE, no `input()`, no filesystem | `tests/unit/tools/common/test_discovery.py` |
 | `tools/control/discover_command.py` | Interactive driver — prompts, BLE session, sweep loop | Manual (matches `docs/sniffer_capture_engine.md`'s stance on interactive tools) |
-| `protocol/codec.py` `encode_assign` | Category-agnostic ASSIGN-packet encoder the candidates use (also now the body of `recording.py`'s encoder) | `tests/unit/protocol/test_codec.py` |
+| `protocol/codec.py` `encode_assign` / `encode_assign_void` | Category-agnostic ASSIGN-packet encoders the candidates use — scalar payload and payloadless void trigger respectively (`encode_assign` is also the body of `recording.py`'s encoder) | `tests/unit/protocol/test_codec.py` |
 
 `tools/common/discovery.py` key functions:
 
@@ -131,20 +158,79 @@ unknown operation/data-type bytes; the capture still records the raw hex
 with a `decode_error`). A confirmed outcome without a decodable echo simply
 emits a block without `echo_operation` — the schema permits that.
 
-**Known latent risk — connect-settle race.** This tool writes the first
-candidate immediately after connecting, with no wait for the camera's
-post-connect initial-payload burst to drain (the same hazard
-`CameraSession.connect_settle_s` exists for — see
-`docs/session_and_verification.md`). `tools/control/send_settings_command.py`
-hit exactly this on real hardware 2026-07-20 (`docs/settings.md` §6): its
-first three captures showed the initial burst instead of a response to the
-write, and it was fixed there with a `--connect-settle-seconds` wait. This
-tool has not needed the same fix yet — every candidate after the first
-naturally waits out `--listen-seconds` plus operator think-time before the
-next write, so only the very first candidate is at risk, and the operator's
-own eyes (not the echo) are ground truth anyway. Worth the same fix if a
-future sweep's first-candidate echo looks suspiciously like unrelated
-camera state.
+**"Ground truth" still needs a real signal to read, not a glance.** The
+G2's first photo-capture sweep (2026-07-27, `docs/photo_capture.md` §6)
+showed this the hard way: all 6 candidates in an INT8 sweep were confirmed
+`photo_taken`, and the tool correctly refused to emit a block from that (a
+single outcome name can't hold 6 disagreeing candidates — see below), but
+the deeper problem is that "confirmed every single candidate regardless of
+value" is *itself* evidence the confirmations weren't discriminating
+between "the write did this" and "the operator answered yes" — plausibly a
+reflex carried over from the immediately-prior passive sniffer session,
+where manually triggering the action on the body every window is the
+correct protocol. The fix isn't in this tool (it did its job); it's
+operator discipline for triggers with no independently-observable
+confirmation channel: check a real state marker (an on-camera counter, not
+an impression) before answering, and consider a deliberate negative-control
+answer partway through a sweep to catch drift. See
+`docs/photo_capture.md` §6.3 for the concrete redo protocol this produced.
+
+**Immediate outcome-conflict warning (added 2026-07-27, from the same
+run).** Previously, two candidates confirmed under the same outcome name
+with disagreeing `value`/`reserved` only surfaced as a `ValueError` from
+`build_command_block` at the very end — after the BLE session had already
+closed, discarding a reconnect's worth of camera time to fix. The
+photo-capture sweep above hit this: 6 confirmations, all named
+`photo_taken`, only 1 of which could ever have been used. `probe_candidates`
+now prints a warning immediately after any confirmation that reuses an
+outcome name for a candidate whose `value`/`reserved` disagrees with an
+earlier confirmation of that name — including the same "verify this isn't
+just a confirmation-reliability problem" reminder — so the operator can
+react while still connected instead of discovering the conflict from a
+traceback.
+
+**The same conflict, but this time a real finding, not an artifact
+(2026-07-27, same day).** A follow-up VOID sweep on the same G2
+coordinates hit the identical warning and end-of-run `ValueError` — two
+candidates (`reserved=0x00`, `reserved=0x01`) both confirmed under
+`photo_taken` — but this time the operator had independently verified each
+confirmation against the SD card's actual contents, not impression alone
+(`docs/photo_capture.md` §7). The crash still meant no block could be
+auto-emitted (the schema's `reserved` field is singular, and rightly so —
+a command block records the one value that was captured, not a set), but
+this time the conflict *was* the finding: the reserved byte is genuinely
+indifferent for this trigger, not a value the camera checks. The block
+was written into the profile by hand from the saved capture evidence,
+picking `0x00` as the conventional default with `0x01` noted as an
+equally-confirmed alternative in `provenance.notes` — the tool's
+one-candidate-per-outcome design stayed correct throughout; only the
+last step (emission) needed a human because the finding itself doesn't
+fit a single-`reserved` block by nature, not because anything was wrong.
+The identical sweep, repeated on `POCKET_6K_PRO v8.6` the same day
+(`docs/photo_capture.md` §9), hit the exact same warning/crash/manual-
+transcription sequence and reached the identical reserved-indifference
+finding independently — this pattern is now established, not a one-off.
+
+**Known latent risk — connect-settle race — materialized in practice
+2026-07-27.** This tool writes the first candidate immediately after
+connecting, with no wait for the camera's post-connect initial-payload
+burst to drain (the same hazard `CameraSession.connect_settle_s` exists
+for — see `docs/session_and_verification.md`). `tools/control/
+send_settings_command.py` hit exactly this on real hardware 2026-07-20
+(`docs/settings.md` §6): its first three captures showed the initial burst
+instead of a response to the write, and it was fixed there with a
+`--connect-settle-seconds` wait. This tool had not needed the same fix
+yet — every candidate after the first naturally waits out `--listen-seconds`
+plus operator think-time before the next write, so only the very first
+candidate is at risk, and the operator's own eyes (not the echo) are
+ground truth anyway. **Confirmed live on the G2's first photo-capture
+discovery sweep** (`docs/photo_capture.md` §6.1): candidate 1's first send
+landed mid-burst (the `0x0C` lens-string cadence from
+`docs/sniffer_capture_engine.md`'s connect-burst section), and the operator
+correctly used `[r] repeat` rather than confirm on contaminated data — the
+existing mitigation (operator judgment on the first candidate) worked as
+designed, so the `--connect-settle-seconds` fix still isn't required, but
+this is the first real evidence the risk isn't just theoretical.
 
 **Sibling tool note.** `send_settings_command.py` gained a `--repeat N`
 flag (2026-07-21) for a different discovery question than this tool
@@ -176,8 +262,9 @@ gap is now exhausted (`docs/settings.md` §16) and accepted as a guarded
 software capability gap (`resolutions."4K DCI".known_unreachable.ProRes`,
 `docs/payload_profiles.md`). `discover_command.py`
 itself still has no equivalent: its `CandidateCommand.encode()` always
-uses `Operation.ASSIGN` via `encode_assign`'s (now overridable, but
-unused-by-default) `operation` parameter.
+uses `Operation.ASSIGN`, via `encode_assign` or `encode_assign_void`
+(both carry a now-overridable, but unused-by-default, `operation`
+parameter).
 
 A different kind of sibling tool, `tools/control/sweep_camera_format.py`
 (2026-07-24, `docs/active_camera_control.md`), exists precisely because that
@@ -359,9 +446,13 @@ raw hex is still captured as evidence either way (see "Safety model" above).
 `tests/unit/tools/common/test_discovery.py` covers: candidate sweep order
 and operator-ordering preservation; `CandidateCommand.encode` parity with
 `encode_assign` (including a byte-for-byte match with the known G2 start
-packet); capture seeding with and without ambient filtering, single-window
-behaviour, and skipping of non-INCOMING_CONTROL/undecoded notifications;
-echo extraction; block building — including validation of emitted blocks
-against the real `payloads/schema.json` — and every rejection path; snippet
-JSON round-trip. `tests/unit/protocol/test_codec.py` covers `encode_assign`
-directly.
+packet) and with `encode_assign_void` for VOID candidates; the
+`value`/VOID consistency invariant (both rejection directions); VOID sweep
+generation (one candidate per reserved byte; values rejected); capture
+seeding with and without ambient filtering, single-window behaviour, and
+skipping of non-INCOMING_CONTROL/undecoded notifications; echo extraction;
+block building — including validation of emitted blocks (scalar and VOID,
+the latter omitting `values`) against the real `payloads/schema.json` —
+and every rejection path; snippet JSON round-trip.
+`tests/unit/protocol/test_codec.py` covers `encode_assign` and
+`encode_assign_void` directly.

@@ -68,9 +68,12 @@ deprecated) with three structured sections:
 The tables carry no `provenance` block of their own: their provenance rides
 with the command blocks that consume them (`codec_quality`,
 `video_format`, `recording_format`), whose notes name the source captures
-or documents. Relatedly, a command block's `values` map is now **optional**:
-those three multi-element families compose their payloads from the lookup
-tables, so a named-scalar `values` map has nothing to say for them
+or documents. Relatedly, a command block's `values` map is now **optional**,
+for two distinct reasons: those three multi-element families compose their
+payloads from the lookup tables, so a named-scalar `values` map has nothing
+to say for them; and a void trigger family (the shape the 10.3 still-capture
+probe would produce — `docs/photo_capture.md` §3) has no payload at all, so
+`build_command_block` omits the map from its emitted block entirely
 (`CommandSpec.values` defaults to `{}`; `require_command` with
 `value_names` still fails loudly on a family that *should* have values).
 
@@ -129,8 +132,10 @@ mirroring `$defs/command`.
   fields. Names are what code addresses (`spec.values["start"]`) and what
   the discovery tool's `--outcomes` flag produces; integers are the
   sniffer-captured payload bytes. Any command family fits without schema or
-  dataclass changes — photo capture might be `{"trigger": 1}`, playback
-  `{"play": 1, "pause": 0, "next": 2}`.
+  dataclass changes — playback might be `{"play": 1, "pause": 0, "next": 2}`;
+  `commands.photo` on `POCKET_6K_G2 v7.9` is the first real example of the
+  no-`values` case, since its trigger is confirmed genuinely void
+  (`docs/photo_capture.md` §7).
 - **`data_type` is a symbolic string** matching `protocol/types.py`
   `DataType` names (official spec coding — see `docs/protocol.md` §3) —
   human-readable in captures and diffs, and validated by the schema's
