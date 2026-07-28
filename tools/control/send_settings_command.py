@@ -563,7 +563,7 @@ def parse_args() -> argparse.Namespace:
         )
     )
     parser.add_argument("--model-key", required=True, help="Camera model key, e.g. POCKET_6K_G2")
-    parser.add_argument("--firmware", required=True, help="Camera firmware, e.g. v7.9")
+    parser.add_argument("--firmware", required=True, help="Camera firmware, e.g. v8.6")
     parser.add_argument(
         "--packet",
         required=True,

@@ -93,7 +93,7 @@ from bmd_ble.camera_profile import CameraProfile  # noqa: E402
 from bmd_ble.scanner import scan_for_camera  # noqa: E402
 
 DEFAULT_MODEL_KEY = "POCKET_6K_G2"
-DEFAULT_FIRMWARE = "v7.9"
+DEFAULT_FIRMWARE = "v8.6"
 # idle_baseline first: it must capture the ambient floor before any photo
 # has been taken, so a slow after-effect of a capture can't leak into it.
 DEFAULT_ACTION_LABELS = [

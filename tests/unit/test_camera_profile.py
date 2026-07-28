@@ -82,6 +82,9 @@ class TestKnownProfiles:
     def test_known_profiles_contains_pocket_6k_g2_v79(self):
         assert ("POCKET_6K_G2", "v7.9") in KNOWN_PROFILES
 
+    def test_known_profiles_contains_pocket_6k_g2_v86(self):
+        assert ("POCKET_6K_G2", "v8.6") in KNOWN_PROFILES
+
     def test_known_profiles_contains_pocket_6k_pro_v86(self):
         assert ("POCKET_6K_PRO", "v8.6") in KNOWN_PROFILES
 
@@ -670,10 +673,20 @@ def test_pocket_6k_pro_profile_resolves_recording_command():
 
 @pytest.mark.parametrize(("model_key", "firmware"), KNOWN_PROFILES)
 def test_every_known_profile_resolves_write_margin_warning_storage_signal(model_key, firmware):
-    """Both real profiles carry an identical CANDIDATE write_margin_warning
-    block — passive real-hardware evidence, not sent by this repo's code,
-    see docs/recording.md's Camera-initiated stop detection section."""
+    """Every profile that has reached the sniffing phases carries an identical
+    CANDIDATE write_margin_warning block — passive real-hardware evidence, not
+    sent by this repo's code, see docs/recording.md's Camera-initiated stop
+    detection section.
+
+    A profile still at the Phase 1 scaffold stage (``_meta``/``ble`` only, no
+    ``storage`` section at all) is skipped: it has nothing sniffed yet, and
+    design principle 6 forbids copying another profile's values into it. Once
+    the section exists, a missing or altered signal still fails here.
+    """
     profile = CameraProfile.for_model(model_key, firmware)
+
+    if not profile.storage:
+        pytest.skip(f"{model_key}_{firmware} is a Phase 1 scaffold — nothing sniffed yet")
 
     spec = profile.require_storage_signal("write_margin_warning", ("nominal", "low_margin"))
     assert spec.category == 9

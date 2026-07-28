@@ -6,6 +6,9 @@ from bmd_ble.camera_controller import BMDCameraController
 from bmd_ble.camera_profile import CameraProfile
 from bmd_ble.scanner import scan_for_camera
 
+DEFAULT_MODEL_KEY = "POCKET_6K_G2"
+DEFAULT_FIRMWARE = "v8.6"
+
 
 async def run(args: argparse.Namespace):
     model_key = args.model_key
@@ -28,11 +31,13 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=("Get Device Info. data via BLE."))
     parser.add_argument(
         "--model-key",
-        help="Camera model key used to load CameraProfile.",
+        default=DEFAULT_MODEL_KEY,
+        help=f"Camera model key used to load CameraProfile. Default: {DEFAULT_MODEL_KEY}",
     )
     parser.add_argument(
         "--firmware",
-        help="Camera firmware used to load CameraProfile.",
+        default=DEFAULT_FIRMWARE,
+        help=f"Camera firmware used to load CameraProfile. Default: {DEFAULT_FIRMWARE}",
     )
     parser.add_argument(
         "--timeout",

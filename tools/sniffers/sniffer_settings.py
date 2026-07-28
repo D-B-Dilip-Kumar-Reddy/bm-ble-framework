@@ -70,7 +70,7 @@ from bmd_ble.camera_profile import CameraProfile  # noqa: E402
 from bmd_ble.scanner import scan_for_camera  # noqa: E402
 
 DEFAULT_MODEL_KEY = "POCKET_6K_G2"
-DEFAULT_FIRMWARE = "v7.9"
+DEFAULT_FIRMWARE = "v8.6"
 # One window per settings change the docs/settings.md families cover. The
 # two codec windows come first deliberately: a BRAW -> ProRes -> BRAW round
 # trip leaves the camera in its starting family before the smaller changes.

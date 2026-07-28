@@ -22,13 +22,20 @@ Python package (`bmd_ble`) for automated Blackmagic Design camera control over B
 
 | Model Key | Model Name | Firmware | Status | Notes |
 |---|---|---|---|---|
-| `POCKET_6K_G2` | Pocket Cinema Camera 6K G2 | v7.9 | In progress | Primary reference; most reverse-engineered. **The operator's physical unit was upgraded to v8.6 on 2026-07-27** — v7.9 can no longer be tested against real hardware; further G2 work needs a new `POCKET_6K_G2_v8.6` profile scaffolded from Phase 1 (see the reverse-engineering workflow below), not assumed to inherit anything from this v7.9 profile without its own fresh sniffing (design principle 6) |
+| `POCKET_6K_G2` | Pocket Cinema Camera 6K G2 | v8.6 | In progress | **Primary reference.** The operator's physical unit was upgraded from v7.9 to v8.6 on 2026-07-27, so this is the only G2 firmware that can be tested against real hardware. Phase 1 scaffold only (`_meta` + `ble`) as of 2026-07-28 — every protocol value must be re-sniffed on v8.6 and nothing may be inherited from the v7.9 profile (design principle 6). All Python defaults (`DEFAULT_FIRMWARE` in `tools/`, `FIRMWARE` in `examples/`) point here |
+| `POCKET_6K_G2` | Pocket Cinema Camera 6K G2 | v7.9 | Frozen | Former primary reference; most reverse-engineered profile in the repo and still the reference for how a fully-populated profile looks. **No longer testable** — the physical unit was upgraded to v8.6, so nothing here can be re-confirmed or extended. Kept as-is for its evidentiary record and because the settings-table unit tests still load it |
 | `POCKET_6K_PRO` | Pocket Cinema Camera 6K Pro | v8.6 | In progress | Second target |
 | `URSA_BROADCAST_G2` | URSA Broadcast G2 | v7.5 | Planned | Different category/param combos expected |
 | `URSA_MINI_PRO_12K` | URSA Mini Pro 12K | v8.1 | Planned | Different category/param combos expected |
 | `POCKET_4K` | Pocket Cinema Camera 4K | v8.6 | Planned | |
 
-Start all new features with `POCKET_6K_G2 v7.9`. Add `POCKET_6K_PRO v8.6` second.
+Start all new features with `POCKET_6K_G2 v8.6`. Add `POCKET_6K_PRO v8.6` second.
+
+v8.6 also brings the reason for the upgrade: the camera exposes its recorded video
+and photos to a PC over USB/HTTP. That gives photo capture and playback work an
+out-of-band verification channel that BLE alone never provided — see
+`docs/photo_capture.md` §7/§9, where the absence of any BLE-observable photo
+confirmation is what currently blocks `CameraSession.capture_photo()`.
 
 The `ble_name` field in every profile JSON is the real BLE advertisement name broadcast by the camera — not a placeholder.
 

@@ -1,0 +1,14 @@
+{
+  "_meta": {
+    "model": "Pocket Cinema Camera 6K G2",
+    "model_key": "POCKET_6K_G2",
+    "firmware": "v8.6",
+    "ble_name": "A:AF3DC814",
+    "status": "UNVERIFIED",
+    "_comment": "Phase 1 scaffold (2026-07-28): the operator's physical G2 unit was upgraded from v7.9 to v8.6 on 2026-07-27, so ble_name carries over from the same physical unit (hardware identity, not firmware) — confirm via examples/scan_camera.py before relying on it. No protocol values may be copied from POCKET_6K_G2_v7.9.json without fresh sniffing on v8.6 (design principle 6)."
+  },
+  "ble": {
+    "incoming_property": "indicate",
+    "_comment": "Add characteristic_incoming only to override the default INCOMING_CONTROL UUID in constants.py"
+  }
+}

@@ -31,7 +31,7 @@ from bmd_ble.constants import (
 from bmd_ble.scanner import DiscoveredCamera
 
 MODEL_KEY = "POCKET_6K_G2"
-FIRMWARE = "v7.9"
+FIRMWARE = "v8.6"
 ADDRESS = "AA:BB:CC:DD:EE:01"
 BLE_NAME = "A:AF3DC814"
 MANUFACTURER_NAME = "Blackmagic Design"
