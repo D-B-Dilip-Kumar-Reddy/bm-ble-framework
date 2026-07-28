@@ -432,24 +432,71 @@ The echo must be buffered *before* the write is issued. A router that only start
 This is the concrete, tool-by-tool procedure for bringing up a new `(MODEL_KEY, FIRMWARE)`
 pair — which tool to run in which order, and what profile change each step produces.
 Follow the phases in order; each one depends on the profile state the previous phase left
-behind. Derived from reverse-engineering `POCKET_6K_G2 v7.9` (all phases) and
-`POCKET_6K_PRO v8.6` (Phase 2 done, Phase 3 in progress — resolutions, dimension_enums,
-and codec ids transcribed, but nothing yet promoted past CANDIDATE) — see
-`docs/settings.md` and `docs/command_discovery.md` for the full evidentiary write-ups
-behind Phase 3 and Phase 2 respectively.
+behind. Derived from three bring-ups at different stages:
 
-Two flag conventions to keep straight: `tools/query/`, `tools/sniffers/`, and
-`tools/control/` scripts all take `--model-key`/`--firmware` CLI flags. `examples/*.py`
-scripts do **not** — they hardcode `MODEL_KEY`/`FIRMWARE` as module-level constants near
-the top of the file (edit that constant, or uncomment the alternate model's line where
-one is already present, to point at a different camera).
+| Bring-up | Stage reached | Evidentiary write-up |
+|---|---|---|
+| `POCKET_6K_G2 v7.9` | All phases (frozen — hardware upgraded away, see the registry) | `docs/recording.md`, `docs/settings.md` |
+| `POCKET_6K_PRO v8.6` | Phase 2 done; Phase 3 in progress — resolutions, dimension_enums, and codec ids transcribed, nothing yet promoted past CANDIDATE | `docs/settings.md` §15–§17 |
+| `POCKET_6K_G2 v8.6` | **Phase 1 scaffold only** (2026-07-28) — the current primary reference, and the live worked example of the firmware-upgrade variant below | — (nothing sniffed yet) |
+
+`docs/command_discovery.md` covers Phase 2's tooling; `docs/settings.md` covers Phase 3's.
+
+### Which camera a script talks to
+
+Three conventions to keep straight — the defaults all point at the primary reference
+(`POCKET_6K_G2 v8.6`), so **any of these run with no flags will target it**:
+
+| Script group | How the camera is selected |
+|---|---|
+| `tools/query/*`, `tools/sniffers/*`, `tools/control/send_record_command.py` | `--model-key`/`--firmware` flags, **defaulted** via module-level `DEFAULT_MODEL_KEY`/`DEFAULT_FIRMWARE` constants |
+| `tools/control/discover_command.py`, `send_settings_command.py`, `sweep_dimension_enum.py`, `sweep_camera_format.py` | `--model-key`/`--firmware` flags, **`required=True` — no default**. Deliberate: these change real camera state or emit profile blocks, so the target is never implicit |
+| `examples/*.py` | No CLI flags at all — `MODEL_KEY`/`FIRMWARE` are module-level constants near the top of the file. Edit them, or uncomment the alternate model's line where one is already present |
+
+When bringing up a *non-primary* camera, pass `--model-key`/`--firmware` explicitly on
+every command in the phases below (as they are written) rather than relying on the
+default — a defaulted run against the wrong camera is silent, not an error.
+
+### Two variants of this procedure
+
+**A brand-new model** (e.g. `URSA_BROADCAST_G2 v7.5`) starts from nothing: every phase
+runs in full, with no prior expectations about any value.
+
+**A new firmware for a model already reverse-engineered** (e.g. `POCKET_6K_G2`
+v7.9 → v8.6, the 2026-07-27 upgrade) is the same procedure with one difference in
+posture, not in steps. Design principle 6 still forbids inheriting any protocol value
+from the old profile — but the old profile is the best available *hypothesis source*,
+so seed each phase's candidates from it and let the camera confirm or refute them.
+Phase 2 step 8.2's `--values 2,0 --reserved 1,0` is exactly this pattern in practice.
+Two concrete rules for this variant:
+
+- `_meta.ble_name` **does** carry over when it is the same physical unit — the
+  advertisement name identifies the hardware, not the firmware. Re-confirm it with
+  `examples/scan_camera.py` (Phase 1 step 2) anyway; that step is cheap and the whole
+  bring-up depends on it.
+- Nothing else carries over. Every codec id, dimension_enum, category/parameter pair,
+  and fps encoding must be re-sniffed on the new firmware even when you fully expect
+  it to be unchanged, and each lands in the new profile with its own `provenance`
+  naming its own capture.
 
 ### Phase 1 — Profile scaffold and transport sanity
 
 1. **Scaffold the profile.** Add `payloads/models/<MODEL_KEY>_<FIRMWARE>.json` with only
    `_meta` (`model`, `model_key`, `firmware`, `ble_name` — the real advertised name, never
    a placeholder — `status: "UNVERIFIED"`) and `ble` populated. No `commands` yet.
-   Validate against `payloads/schema.json`.
+   Validate against `payloads/schema.json` — only `_meta` is schema-required, so a
+   two-section scaffold is a valid profile and loads cleanly (`commands` is simply `{}`).
+   `POCKET_6K_G2_v8.6.json` is the reference for what this stage looks like.
+
+   **Register it in `KNOWN_PROFILES` now, not at Phase 4**, if any Python default is
+   going to point at this camera (see step 14 — the rule is only ever "never before the
+   JSON exists"; the scaffold *is* the JSON). Two consequences to expect immediately:
+   - Every `KNOWN_PROFILES`-parametrized unit test starts running against the scaffold.
+     Tests asserting sniffed content must skip a profile that has none rather than
+     demand it — `test_every_known_profile_resolves_write_margin_warning_storage_signal`
+     skips when `profile.storage` is empty, and is the pattern to copy.
+   - Loading it logs the design-principle-8 `status is UNVERIFIED` warning on every run.
+     That is working as intended for the whole bring-up; it clears at Phase 4.
 2. **Confirm discoverability** — `python examples/scan_camera.py` (after setting
    `MODEL_KEY`/`FIRMWARE`). Confirms the camera actually advertises under `ble_name`.
 3. **Confirm a bare connect works** — `python examples/connect_to_camera.py`. Connect,
@@ -464,6 +511,8 @@ one is already present, to point at a different camera).
    Record the result in `gap_meta_data.readable`. Known hazard: on `POCKET_6K_G2 v7.9`,
    reading GAP characteristics disconnects the camera — if the new model does the same,
    set `readable: false` and don't retry the read anywhere else for this camera.
+   That hazard has **not** been re-checked on `POCKET_6K_G2 v8.6`; per the
+   firmware-upgrade rules above, treat it as a hypothesis to confirm, not a known fact.
 6. **Check device-info metadata readability** —
    `python tools/query/device_meta_data.py --model-key <MODEL_KEY> --firmware <FIRMWARE>`.
    Record the result in `device_info_meta_data.readable`.
@@ -573,14 +622,53 @@ one is already present, to point at a different camera).
 
 ### Phase 4 — Finish
 
-14. Add the `(MODEL_KEY, FIRMWARE)` tuple to `KNOWN_PROFILES` in `camera_profile.py` —
-    only after the profile JSON exists (never before — see "What Not To Do").
-15. Run `pytest tests/unit` and `ruff check . && ruff format --check .` — both must pass
+14. Add the `(MODEL_KEY, FIRMWARE)` tuple to `KNOWN_PROFILES` in `camera_profile.py`, if
+    Phase 1 step 1 didn't already. The rule is "never before the profile JSON exists"
+    (see "What Not To Do") — not "never before Phase 4".
+15. **Promote `_meta.status` to `"VERIFIED"`** now that every populated section has been
+    confirmed on real hardware. This is the whole-profile status; each command block's
+    own `provenance.status` was promoted as its phase completed.
+16. Run `pytest tests/unit` and `ruff check . && ruff format --check .` — both must pass
     before committing.
-16. Update the camera registry table at the top of this file (status column, notes).
+17. Update the camera registry table at the top of this file (status column, notes).
+
+#### If this camera becomes the primary reference
+
+Making a camera the primary reference is a separate, deliberate change — the registry
+table's "Primary reference" designation and every Python default must move together, or
+a defaulted run silently targets the old camera. The `POCKET_6K_G2` v7.9 → v8.6 move
+(2026-07-28) is the worked example:
+
+1. Repoint every default named in "Which camera a script talks to" above —
+   `DEFAULT_MODEL_KEY`/`DEFAULT_FIRMWARE` in `tools/query/`, `tools/sniffers/`, and
+   `tools/control/send_record_command.py`; `MODEL_KEY`/`FIRMWARE` in every
+   `examples/*.py`. Grep for the outgoing firmware string to confirm none were missed.
+2. Repoint the `MODEL_KEY`/`FIRMWARE` identity constants in the **mocked** unit tests
+   (`test_session.py`, `test_camera_controller.py`) — they are labels on
+   `_from_raw`/`SimpleNamespace` profiles, so this is free. Tests that call
+   `CameraProfile.for_model(...)` against a **real** JSON for its populated
+   `codecs`/`resolutions`/`fps_modes` tables must stay on the old profile until the new
+   one is populated (`test_send_settings_command.py`, `test_sweep_camera_format.py`,
+   `test_sweep_dimension_enum.py` are still on v7.9 for exactly this reason).
+3. Update the registry table: the new primary gets the **Primary reference** note, and
+   the outgoing one is marked `Frozen` with why it can no longer be tested and why it is
+   nonetheless kept (evidentiary record, and tests that still load it).
+4. Leave the `docs/` write-ups alone. They are the historical evidence for the camera
+   and firmware they were gathered on; a primary-reference move does not invalidate a
+   single finding in them, and rewriting them to the new firmware would fabricate
+   provenance.
 
 Every profile JSON change in this procedure needs a doc touch in the same commit, per the
 "Feature doc convention": `docs/recording.md` for Phase 2, `docs/settings.md` for Phase 3.
+
+### Phases not yet defined
+
+Photo capture, playback, and metadata have **no phase here** because no camera has
+completed them. The photo trigger itself is confirmed on two cameras, but with no
+BLE-observable confirmation signal it cannot satisfy design principle 3, so there is no
+repeatable procedure to write down yet — see `docs/photo_capture.md` §7/§9 for the open
+verification-strategy question that blocks it. `POCKET_6K_G2 v8.6`'s USB/HTTP media
+access is the most promising route to an out-of-band confirmation channel.
 
 ---
 
