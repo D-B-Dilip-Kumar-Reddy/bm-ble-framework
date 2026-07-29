@@ -103,6 +103,23 @@ See `docs/active_camera_control.md`'s section on it and `docs/settings.md`
   `record_start` and `record_stop`) or the filter has no contrast and
   keeps everything.
 
+  **This assumption is wrong for a start/stop pair — confirmed the hard way
+  2026-07-29.** A command family that reports *state* appears in every
+  window by construction: the `POCKET_6K_G2 v8.6` recording capture has
+  `(0x0A, 0x01, INT8)` in both the `record_start` window (payload
+  `02 00 40 00 01 03`) and the `record_stop` window (`00 00 40 00 01 03`),
+  so the filter dropped the one triple the sweep existed to find. All three
+  candidates it did offer were dead ends, confirmed `nothing observed`
+  across two full sweeps. The recording family — this tool's headline
+  use case, and the one Phase 2 of the bring-up workflow runs — is
+  therefore exactly the case the heuristic mishandles, not an edge case.
+  Work around it by seeding manually with
+  `--category`/`--parameter`/`--data-type` once the capture has shown you
+  the coordinates. A discriminator that would have got this right: a triple
+  whose payload is *stable within* each window but *differs between* windows
+  is a state report, while genuine ambient telemetry (`0x09/0x00`,
+  `0x09/0x02` here) varies within a single window too.
+
   **Known limitation:** this heuristic would also filter out a signal like
   `protocol/categories/storage.py`'s CANDIDATE write-margin warning
   (category `0x09`, parameter `0x01`) — it ticks frequently enough, and its
@@ -211,6 +228,21 @@ The identical sweep, repeated on `POCKET_6K_PRO v8.6` the same day
 transcription sequence and reached the identical reserved-indifference
 finding independently — this pattern is now established, not a one-off.
 
+**Third occurrence, and the first outside photo capture (2026-07-29).**
+`POCKET_6K_G2 v8.6`'s recording sweep hit it again: all four
+`(value, reserved)` candidates were acted on, so both `start` and `stop`
+each had two disagreeing confirmations and `build_command_block` raised.
+So reserved-byte indifference is not specific to a VOID trigger — it also
+holds for a payload-carrying INT8 family. What made this one easier to
+trust than a glance was the *wire*: three of the four candidates produced a
+genuine `operation=0x02` echo whose leading payload byte tracked the
+requested value, which is evidence independent of the operator's eyes. That
+also drove the tie-break — `reserved=0x00` was recorded as canonical
+because it was the only value with a clean echo for **both** outcomes,
+with `0x01` noted as equally accepted in `provenance.notes`
+(`docs/recording.md`). When resolving one of these by hand, prefer the
+reserved value that echoed for every outcome over the one that didn't.
+
 **Known latent risk — connect-settle race — materialized in practice
 2026-07-27.** This tool writes the first candidate immediately after
 connecting, with no wait for the camera's post-connect initial-payload
@@ -231,6 +263,20 @@ correctly used `[r] repeat` rather than confirm on contaminated data — the
 existing mitigation (operator judgment on the first candidate) worked as
 designed, so the `--connect-settle-seconds` fix still isn't required, but
 this is the first real evidence the risk isn't just theoretical.
+
+**Hit again on `POCKET_6K_G2 v8.6`'s recording sweep (2026-07-29), this
+time with a lasting cost.** Candidate 1's window caught the burst again, so
+that candidate ended up operator-confirmed with `No decodable echo
+captured` while the other three all echoed cleanly. It didn't break the
+sweep — the operator's eyes are ground truth, as designed — but it did
+decide a downstream question: with the reserved byte turning out to be
+indifferent (above), the tie-break went to `reserved=0x00` precisely
+because candidate 1 (`reserved=0x01`, `start`) had no echo of its own. The
+mitigation is still adequate for confirming *outcomes*, but the first
+candidate's missing echo is not free when the echoes themselves become the
+evidence. Ordering a sweep so the first candidate is one you don't mind
+losing the echo for — or using `[r] repeat` on it as a matter of routine —
+costs nothing and avoids this.
 
 **Sibling tool note.** `send_settings_command.py` gained a `--repeat N`
 flag (2026-07-21) for a different discovery question than this tool
