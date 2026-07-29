@@ -103,35 +103,49 @@ See `docs/active_camera_control.md`'s section on it and `docs/settings.md`
   `record_start` and `record_stop`) or the filter has no contrast and
   keeps everything.
 
-  **This assumption is wrong for a start/stop pair — confirmed the hard way
-  2026-07-29.** A command family that reports *state* appears in every
-  window by construction: the `POCKET_6K_G2 v8.6` recording capture has
+  **Presence alone is not enough — the state-report exception (added
+  2026-07-29).** A command family that reports *state* appears in every
+  window by construction, so presence-only filtering dropped the very triple
+  the sweep exists to find. The `POCKET_6K_G2 v8.6` recording capture has
   `(0x0A, 0x01, INT8)` in both the `record_start` window (payload
-  `02 00 40 00 01 03`) and the `record_stop` window (`00 00 40 00 01 03`),
-  so the filter dropped the one triple the sweep existed to find. All three
-  candidates it did offer were dead ends, confirmed `nothing observed`
-  across two full sweeps. The recording family — this tool's headline
-  use case, and the one Phase 2 of the bring-up workflow runs — is
-  therefore exactly the case the heuristic mishandles, not an edge case.
-  Work around it by seeding manually with
-  `--category`/`--parameter`/`--data-type` once the capture has shown you
-  the coordinates. A discriminator that would have got this right: a triple
-  whose payload is *stable within* each window but *differs between* windows
-  is a state report, while genuine ambient telemetry (`0x09/0x00`,
-  `0x09/0x02` here) varies within a single window too.
+  `02 00 40 00 01 03`) and the `record_stop` window (`00 00 40 00 01 03`);
+  the filter removed it, and all three candidates it did offer were dead
+  ends, confirmed `nothing observed` across two full sweeps on hardware.
+  The recording family is this tool's headline use case and the one Phase 2
+  of the bring-up workflow runs, so this was the common case, not an edge
+  case.
 
-  **Known limitation:** this heuristic would also filter out a signal like
+  `_is_state_report` now rescues these: a triple present in every window is
+  still seeded when its payload is **stable within** each window but
+  **differs between** windows. That is what a family reporting state looks
+  like — the camera settles on one value per operator action and holds it —
+  whereas genuine telemetry keeps changing inside a single window. On the
+  real capture above the recording family is rescued and comes out as
+  candidate **[1]** — ahead of the three dead ends — while `0x09/0x00`, a
+  storage counter taking three different values inside each window, stays
+  filtered. (`0x09/0x02` and `0x0C/0x03` were never filtered in the first
+  place: they appear in only one of the two windows, so presence alone
+  already kept them.) `tests/unit/tools/common/test_discovery.py` replays
+  that exact capture as a regression test.
+
+  A triple that is stable within *and* identical across every window is
+  still dropped: nothing about it tracks the operator's action.
+
+  **Known limitation:** the rescue is payload-shaped, so it does not help a
+  signal that varies within a window for reasons unrelated to the action.
+  This heuristic would still filter out a signal like
   `protocol/categories/storage.py`'s CANDIDATE write-margin warning
   (category `0x09`, parameter `0x01`) — it ticks frequently enough, and its
   category/parameter pair is present across essentially every window, to
   look like ordinary ambient telemetry even though its *value* carries real
   meaning. That signal was found by comparing raw log bytes directly
   (`docs/recording.md`'s "Camera-initiated stop detection"), not through
-  this tool. `exclude_ambient` filters on `(category, parameter)` presence,
-  not on whether the *values* within a triple vary meaningfully — a future
-  improvement here could look for exactly this pattern (a triple present
-  everywhere, but whose payload takes on a rare/different value in one
-  specific window).
+  this tool. The state-report rescue does not reach it: it demands *one*
+  payload per window, and the write-margin warning interleaves its
+  `nominal` and `low_margin` values inside a single window. Catching that
+  one would need a different rule — a triple present everywhere whose
+  payload takes a rare value in one specific window, rather than a stable
+  one in each — which is not implemented.
 - `extract_echo(notifications, category, parameter)` — first
   cleanly-decoded matching echo as `(operation_int, payload_hex)`.
 - `build_command_block(name, confirmed, capture_ref, discovered_on)` —

@@ -541,8 +541,11 @@ Two concrete rules for this variant:
         drops triples present in *every* window as ambient telemetry, but a start/stop
         pair reports the same `(category, parameter)` in *both* windows — so the
         recording family itself was excluded and all three offered candidates were
-        dead ends. Seed it manually with `--category`/`--parameter`/`--data-type`
-        when you already know the coordinates from the capture.
+        dead ends. **Fixed 2026-07-29**: a triple whose payload is stable within each
+        window but differs between them is now recognised as a state report and kept
+        (`docs/command_discovery.md`). If a family still goes missing from the seeded
+        list, seed it manually with `--category`/`--parameter`/`--data-type` — the
+        capture shows you the coordinates.
       - **A reserved-byte-indifferent family is rejected at emit time.** If the camera
         acts on more than one reserved byte, two candidates confirm the same outcome
         and `build_command_block` raises — correctly, since a block describes exactly

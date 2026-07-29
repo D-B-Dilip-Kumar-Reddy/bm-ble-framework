@@ -185,6 +185,80 @@ class TestSeedTriplesFromCapture:
 
         assert seed_triples_from_capture(capture) == [(0x09, 0x00, "INT8")]
 
+    def test_state_report_in_every_window_survives_the_ambient_filter(self):
+        """A start/stop family reports the same (category, parameter) in BOTH
+        windows by construction, so presence alone would drop the very triple
+        the sweep exists to find. One payload per window, differing between
+        them, marks it as a state report — see POCKET_6K_G2 v8.6, 2026-07-29."""
+        capture = make_capture(
+            {
+                "record_start": [make_notification(payload_hex="02 00 40 00 01 03")],
+                "record_stop": [make_notification(payload_hex="00 00 40 00 01 03")],
+            }
+        )
+
+        assert seed_triples_from_capture(capture) == [(0x0A, 0x01, "INT8")]
+
+    def test_telemetry_that_varies_within_a_window_is_still_dropped(self):
+        """The counterpart: genuine ambient telemetry takes several values
+        inside a single window, so it never looks stable-within."""
+        capture = make_capture(
+            {
+                "record_start": [
+                    make_notification(category=0x09, parameter=0x00, payload_hex="15 2E 64 00"),
+                    make_notification(category=0x09, parameter=0x00, payload_hex="19 2E 64 00"),
+                ],
+                "record_stop": [
+                    make_notification(category=0x09, parameter=0x00, payload_hex="EF 2D 64 00"),
+                    make_notification(category=0x09, parameter=0x00, payload_hex="F3 2D 64 00"),
+                ],
+            }
+        )
+
+        assert seed_triples_from_capture(capture) == []
+
+    def test_unchanging_report_in_every_window_is_dropped(self):
+        """Stable within *and* identical across windows is not a state report —
+        nothing about it tracks the operator's action."""
+        capture = make_capture(
+            {
+                "a": [make_notification(category=0x09, parameter=0x06, payload_hex="00 01")],
+                "b": [make_notification(category=0x09, parameter=0x06, payload_hex="00 01")],
+            }
+        )
+
+        assert seed_triples_from_capture(capture) == []
+
+    def test_real_pocket_6k_g2_v86_recording_capture_surfaces_the_recording_family(self):
+        """Replay of the actual 2026-07-29 capture that defeated the old filter.
+
+        Payloads are the real ones from
+        tools/captures/POCKET_6K_G2_v8.6/POCKET_6K_G2_v8.6_20260729T121900.json.
+        The old heuristic returned [(9,6), (9,2), (12,3)] — three dead ends,
+        all confirmed 'nothing observed' on hardware — and dropped (10,1),
+        which is the family that was later confirmed."""
+        start_window = [
+            make_notification(category=0x09, parameter=0x00, payload_hex="15 2E 64 00 0F 00"),
+            make_notification(category=0x09, parameter=0x00, payload_hex="19 2E 64 00 0F 00"),
+            make_notification(category=0x09, parameter=0x00, payload_hex="16 2E 64 00 0F 00"),
+            make_notification(category=0x0A, parameter=0x01, payload_hex="02 00 40 00 01 03"),
+            make_notification(category=0x09, parameter=0x06, payload_hex="00 01"),
+        ]
+        stop_window = [
+            make_notification(category=0x09, parameter=0x00, payload_hex="EF 2D 64 00 0F 00"),
+            make_notification(category=0x09, parameter=0x00, payload_hex="F3 2D 64 00 0F 00"),
+            make_notification(category=0x09, parameter=0x02, payload_hex="00 00 2F 29 00 00 00 00"),
+            make_notification(category=0x09, parameter=0x02, payload_hex="00 00 2E 29 00 00 00 00"),
+            make_notification(category=0x0A, parameter=0x01, payload_hex="00 00 40 00 01 03"),
+            make_notification(category=0x0C, parameter=0x03, payload_hex="03 FF"),
+        ]
+        capture = make_capture({"record_start": start_window, "record_stop": stop_window})
+
+        triples = seed_triples_from_capture(capture)
+
+        assert (0x0A, 0x01, "INT8") in triples, "the recording family must be seeded"
+        assert (0x09, 0x00, "INT8") not in triples, "storage tick is still ambient"
+
     def test_non_incoming_and_undecoded_notifications_are_ignored(self):
         cam_status = make_notification(
             characteristic_name="CAMERA_STATUS (Read/Notify/Write)",
