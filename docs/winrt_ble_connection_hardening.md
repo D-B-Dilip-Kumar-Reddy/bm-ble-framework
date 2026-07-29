@@ -66,6 +66,31 @@ Behaviour unchanged. The `monitor_incoming.py` example now wraps every session i
   - Calls through to `handler` only if the generation matches.
 - Stores the **raw** `handler` (not the wrapper) in `_incoming_callback` so that an
   explicit reconnect creates a fresh wrapper with the new generation.
+- Before sleeping between attempts, consults `_subscribe_retry_blocked_by(my_gen)`
+  and aborts immediately when the retry provably cannot succeed (see below).
+  `subscribe_timecode` and `subscribe_camera_status` carry the identical loop.
+
+### `_subscribe_retry_blocked_by(my_gen)`
+
+```python
+def _subscribe_retry_blocked_by(self, my_gen: int) -> str | None
+```
+
+Returns the reason a `start_notify` retry cannot succeed, or `None` when the
+failure looks transient and the retry is worth waiting for. Two blocking
+conditions:
+
+1. `self._conn_gen != my_gen` — a newer `connect()` superseded this session, so
+   retrying would attach a handler that `guarded_handler` will drop anyway.
+2. `self._client is None or not self._client.is_connected` — the link is gone.
+
+The distinction matters because the retry loop exists for a real firmware
+timing gap (the camera not yet accepting CCCD writes), and that case *does*
+deserve the sleep. WinRT makes the two hard to tell apart: a link that drops
+mid-CCCD surfaces as `OSError` — `[WinError -2147023673] The operation was
+canceled by the user` — which is indistinguishable by exception type from a
+transient failure. The disconnect callback has already fired by then, so
+connection state, not the exception, is what separates them.
 
 ### `_is_receiving_data(threshold_s=3.0)` *(new)*
 
@@ -105,6 +130,7 @@ where `BleakClient.is_connected` is unreliable.
 | 6 | False CRITICAL "Camera offline" even though notifications were flowing (gen 1, current 4) | WinRT `is_connected` returns `False` even when the BLE link is live; all 3 `connect()` attempts failed and incremented `_conn_gen`, making the guarded handler drop every notification | `_last_rx_time` stamped in `guarded_handler` before the gen check; `_is_receiving_data()` checked in the reconnect loop — RX activity overrides `is_connected` as the liveness signal |
 | 7 | Camera screen stayed "Connected" after stopping `monitor_incoming.py` | `cam.disconnect()` was a bare call at the bottom of `main()`; Ctrl+C raised `CancelledError` before it was reached | `try/finally` wraps the connect–monitor block; `disconnect()` is now guaranteed on every exit path |
 | 8 | Ctrl+C did not stop `monitor_incoming.py` on Windows | `asyncio.Event().wait()` is not reliably interruptible by task cancellation on the WinRT ProactorEventLoop | Replaced with `while True: await asyncio.sleep(0.5)`; `asyncio.sleep` uses Win32 waitable timers which are reliably cancelled |
+| 9 | `discover_command.py` died with `start_notify failed … connection lost mid-subscribe` ~10 s after connect, before any sweep command was sent (POCKET_6K_G2 v8.6, 2026-07-29, twice) | Camera dropped the link ~300 ms into `connect()`'s own `subscribe_all()`. WinRT reported it as `OSError`, which the loop treats as transient, so it slept `retry_delay_s` (10 s) **holding `_connect_lock`** — starving the `_reconnect_loop` that `on_disconnect` had already scheduled. The retry then ran against the dead client and raised the misleading hard error | `_subscribe_retry_blocked_by()` checked before every retry sleep; a dropped link or superseded generation aborts at once, releasing `_connect_lock` ~10 s earlier so the reconnect loop can actually run |
 
 ---
 

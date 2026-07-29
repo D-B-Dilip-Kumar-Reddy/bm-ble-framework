@@ -230,6 +230,32 @@ class BMDCameraController:
 
     # ── Notifications ────────────────────────────────────────────────────────────────────
 
+    def _subscribe_retry_blocked_by(self, my_gen: int) -> str | None:
+        """Why a ``start_notify`` retry cannot possibly succeed, or ``None`` when
+        the failure looks transient and the retry is worth waiting for.
+
+        A CCCD write can fail for two very different reasons. The camera may
+        simply not be ready yet — the firmware timing gap ``retries`` exists
+        for — in which case sleeping and retrying is correct. Or the link may
+        already be gone, in which case every remaining attempt is doomed and
+        the sleep is actively harmful: ``connect()`` holds ``_connect_lock``
+        across ``subscribe_all()``, so a doomed retry sleep blocks
+        ``_reconnect_loop`` from acquiring the lock for the whole
+        ``retry_delay_s`` — the reconnect that could have recovered the session
+        is starved by the failure it is trying to recover from.
+
+        WinRT makes this distinction easy to miss: a link that drops mid-CCCD
+        surfaces as ``OSError`` ("The operation was canceled by the user"),
+        which is indistinguishable from a transient failure by exception type
+        alone. The disconnect callback has already fired by then, so the
+        connection state — not the exception — is what tells them apart.
+        """
+        if self._conn_gen != my_gen:
+            return f"connection generation {my_gen} superseded by {self._conn_gen}"
+        if self._client is None or not self._client.is_connected:
+            return "connection lost mid-subscribe"
+        return None
+
     async def subscribe_incoming(
         self,
         callback: Callable[[Any, bytearray], None] | None = None,
@@ -296,6 +322,12 @@ class BMDCameraController:
                 last_exc = exc
             except OSError as exc:
                 last_exc = exc
+            blocked_by = self._subscribe_retry_blocked_by(my_gen)
+            if blocked_by is not None:
+                raise RuntimeError(
+                    f"[{self.discovered.ble_name}] start_notify failed for "
+                    f"{CHARACTERISTIC_INCOMING}: {blocked_by}. {last_exc}"
+                ) from last_exc
             if last_exc and attempt < retries:
                 self._logger.warning(
                     "[%s @ %s] start_notify attempt %d/%d failed (%s) — retrying in %.1f s",
@@ -368,6 +400,12 @@ class BMDCameraController:
                 last_exc = exc
             except OSError as exc:
                 last_exc = exc
+            blocked_by = self._subscribe_retry_blocked_by(my_gen)
+            if blocked_by is not None:
+                raise RuntimeError(
+                    f"[{self.discovered.ble_name}] start_notify failed for "
+                    f"{CHARACTERISTIC_TIMECODE}: {blocked_by}. {last_exc}"
+                ) from last_exc
             if last_exc and attempt < retries:
                 self._logger.warning(
                     "[%s @ %s] start_notify attempt %d/%d failed (%s) — retrying in %.1f s",
@@ -440,6 +478,12 @@ class BMDCameraController:
                 last_exc = exc
             except OSError as exc:
                 last_exc = exc
+            blocked_by = self._subscribe_retry_blocked_by(my_gen)
+            if blocked_by is not None:
+                raise RuntimeError(
+                    f"[{self.discovered.ble_name}] start_notify failed for "
+                    f"{CHARACTERISTIC_CAM_STATUS}: {blocked_by}. {last_exc}"
+                ) from last_exc
             if last_exc and attempt < retries:
                 self._logger.warning(
                     "[%s @ %s] start_notify attempt %d/%d failed (%s) — retrying in %.1f s",
