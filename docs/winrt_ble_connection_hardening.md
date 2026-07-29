@@ -193,9 +193,9 @@ recorded here.
   — as `POCKET_6K_PRO v8.6` already did. Don't generalize the v7.9 hazard to a
   model; re-check it per firmware.
 - Every camera profile remains `"_meta.status": "UNVERIFIED"` as a *whole
-  profile* — on the G2 v7.9 and PRO v8.6 the recording command family is
-  hardware-verified (`commands.recording.provenance.status: "VERIFIED"`), but
-  the profile-level flag stays `UNVERIFIED` until every populated section is
-  tested (see `docs/payload_profiles.md`). `POCKET_6K_G2 v8.6` is `UNVERIFIED`
-  for a different reason: it has completed Phase 1 only, so it has no command
-  families to verify yet.
+  profile*, even though all three now carry a hardware-verified recording
+  family (`commands.recording.provenance.status: "VERIFIED"` — the G2 v8.6's
+  promoted 2026-07-29). The profile-level flag stays `UNVERIFIED` until every
+  populated section is tested, which is the point of keeping the two statuses
+  separate: per-command provenance advances as each family is confirmed, while
+  `_meta.status` waits for the whole profile (see `docs/payload_profiles.md`).
