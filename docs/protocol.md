@@ -440,11 +440,23 @@ FF 05 00 01 0A 01 01 00 00      record stop
 │  │  │  │  │  │  └─ data type: 0x01 (INT8 — see §3)
 │  │  │  │  │  └─ parameter: 1
 │  │  │  │  └─ category: 10 (Media)
-│  │  │  └─ reserved: 0x01  (not 0x00!)
+│  │  │  └─ reserved: 0x01  (not 0x00 — but see below)
 │  │  └─ command id: 0
 │  └─ length: 5 (bytes 4..8)
 └─ fixed 0xFF prefix
 ```
+
+**On the reserved byte** [sniffer-verified]: `0x01` is what this `v7.9`
+capture shows, and it is what that profile records — but it is not a
+requirement of the family. The `POCKET_6K_G2 v8.6` discovery sweep
+(2026-07-29) sent both `reserved=0x00` and `reserved=0x01` for each of
+`start` and `stop`, and the camera acted on all four; `0x00` echoed cleanly
+for both outcomes and is what that profile records. So the byte is
+**indifferent** here, not a value the camera checks — the same conclusion
+photo capture reached independently on both cameras
+(`docs/photo_capture.md` §7/§9). Read the `(not 0x00!)` above as "don't
+assume `0x00` by default, capture it", not as "this family rejects `0x00`".
+Per-camera values live in each profile's `commands.recording.reserved`.
 
 Spec alignment: category 10 parameter 1 is Transport mode, whose element
 [0] "mode" is `2 = record`, `0 = preview` [spec] — exactly the payload
