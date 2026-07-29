@@ -5,7 +5,7 @@
     "firmware": "v8.6",
     "ble_name": "A:AF3DC814",
     "status": "UNVERIFIED",
-    "_comment": "Phase 1 complete on real hardware 2026-07-28 (transport sanity only — scan, connect, GATT, GAP/device-info reads, notification stream). ble_name re-confirmed by examples/scan_camera.py on v8.6 rather than inherited: the physical unit (BLE address CC:86:EC:72:E0:A6) is the same one upgraded from v7.9 on 2026-07-27, and the advertisement name identifies the hardware, not the firmware. status stays UNVERIFIED until Phase 4 — no protocol values (commands/codecs/resolutions/fps_modes) have been sniffed on v8.6 yet, and none may be inherited from POCKET_6K_G2_v7.9.json (design principle 6)."
+    "_comment": "Phase 1 complete on real hardware 2026-07-28 (transport sanity — scan, connect, GATT, GAP/device-info reads, notification stream). Phase 2 in progress 2026-07-29: commands.recording discovered and echo-confirmed, awaiting its session round trip before promotion (see that block's provenance). ble_name re-confirmed by examples/scan_camera.py on v8.6 rather than inherited: the physical unit (BLE address CC:86:EC:72:E0:A6) is the same one upgraded from v7.9 on 2026-07-27, and the advertisement name identifies the hardware, not the firmware. status stays UNVERIFIED until Phase 4 — no settings values (codecs/resolutions/fps_modes) have been sniffed on v8.6 yet, and nothing may be inherited from POCKET_6K_G2_v7.9.json (design principle 6)."
   },
   "ble": {
     "incoming_property": "indicate",
@@ -18,5 +18,28 @@
   "device_info_meta_data": {
     "readable": true,
     "_comment": "Confirmed readable 2026-07-28 by tools/query/device_meta_data.py on real v8.6 hardware: MANUFACTURER read back 'Blackmagic Design' and MODEL read back 'Pocket Cinema Camera 6K G2' (both NUL-padded), with no disconnect. Also a change from the v7.9 profile, which records false."
+  },
+  "commands": {
+    "recording": {
+      "category": 10,
+      "parameter": 1,
+      "data_type": "INT8",
+      "reserved": 0,
+      "values": {
+        "start": 2,
+        "stop": 0
+      },
+      "echo_operation": 2,
+      "provenance": {
+        "status": "CANDIDATE",
+        "method": "passive sniffer (sniffer_recording.py) + guided discovery (discover_command.py, manual --category/--parameter seed) with per-candidate operator confirmation and wire echoes",
+        "capture_refs": [
+          "tools/captures/POCKET_6K_G2_v8.6/POCKET_6K_G2_v8.6_20260729T121900.json (passive, local/gitignored)",
+          "tools/captures/POCKET_6K_G2_v8.6/POCKET_6K_G2_v8.6_20260729T134321.json (active sweep, local/gitignored)"
+        ],
+        "verified_on": "2026-07-29",
+        "notes": "Re-sniffed on v8.6, not inherited from the v7.9 profile (design principle 6) — and the reserved byte genuinely differs, which is why that matters. RESERVED BYTE INDIFFERENT: the 2026-07-29 sweep sent all four (value, reserved) combinations and the camera acted on every one, so 0x00 and 0x01 both work; v7.9 records 0x01, this profile records 0x00. 0x00 is canonical here because it is the only reserved value with a clean wire echo for BOTH outcomes (start 'FF 0A 00 00 0A 01 01 02 02 00 40 00 01 03', stop 'FF 0A 00 00 0A 01 01 02 00 00 40 00 01 03'), and because it matches the reserved byte the camera itself uses in every camera-originated report on this family. The reserved=0x01 start candidate was operator-confirmed only — its capture window caught the post-connect initial-payload burst instead of the response (the known first-candidate race in docs/command_discovery.md's safety model), so it has no echo of its own; reserved=0x01 stop did echo cleanly. Echo payload trailing bytes '00 40 00 01 03' are identical to v7.9's and remain not understood (hypothesis: SDI Cat 10 Param 1 transport-mode struct, docs/protocol.md). STATUS IS CANDIDATE, NOT VERIFIED: Phase 2 steps 8.4 (tools/control/send_record_command.py) and 8.5 (examples/record_start_stop.py, the real CameraSession echo-verified round trip) have not been run on v8.6 yet — passing 8.5 is this repo's promotion gate for this family, matching how the v7.9 block was promoted."
+      }
+    }
   }
 }

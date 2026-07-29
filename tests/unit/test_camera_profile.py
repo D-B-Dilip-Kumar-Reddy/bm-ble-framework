@@ -671,6 +671,39 @@ def test_pocket_6k_pro_profile_resolves_recording_command():
     assert spec.provenance.method == "guided-discovery (tools/control/discover_command.py)"
 
 
+def test_pocket_6k_g2_v86_profile_resolves_recording_command():
+    """POCKET_6K_G2_v8.6.json's recording block, discovered on real hardware
+    2026-07-29. Same coordinates and values as v7.9, but ``reserved`` is 0
+    where v7.9 uses 1 — the camera accepted both, and 0 is the one with a
+    clean wire echo for both outcomes (see docs/recording.md). The assertion
+    below is the regression net for that difference: it must not silently
+    drift back to the v7.9 value."""
+    profile = CameraProfile.for_model("POCKET_6K_G2", "v8.6")
+
+    spec = profile.require_command("recording", ("start", "stop"))
+    assert (spec.category, spec.parameter) == (10, 1)
+    assert spec.data_type is DataType.INT8
+    assert spec.values == {"start": 2, "stop": 0}
+    assert spec.reserved == 0
+    assert spec.echo_operation == 2
+    assert spec.provenance is not None
+    # Not VERIFIED until Phase 2 steps 8.4/8.5 run on this firmware.
+    assert spec.provenance.status == "CANDIDATE"
+
+
+def test_pocket_6k_g2_reserved_byte_differs_between_firmwares():
+    """Design principle 6 in one assertion: the same command family on the same
+    physical camera carries a different reserved byte across a firmware
+    upgrade, so nothing may be inherited between profiles without re-sniffing."""
+    v79 = CameraProfile.for_model("POCKET_6K_G2", "v7.9").require_command("recording")
+    v86 = CameraProfile.for_model("POCKET_6K_G2", "v8.6").require_command("recording")
+
+    assert (v79.category, v79.parameter) == (v86.category, v86.parameter)
+    assert v79.values == v86.values
+    assert v79.reserved == 1
+    assert v86.reserved == 0
+
+
 @pytest.mark.parametrize(("model_key", "firmware"), KNOWN_PROFILES)
 def test_every_known_profile_resolves_write_margin_warning_storage_signal(model_key, firmware):
     """Every profile that has reached the sniffing phases carries an identical
