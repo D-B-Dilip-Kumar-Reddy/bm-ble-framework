@@ -687,8 +687,9 @@ def test_pocket_6k_g2_v86_profile_resolves_recording_command():
     assert spec.reserved == 0
     assert spec.echo_operation == 2
     assert spec.provenance is not None
-    # Not VERIFIED until Phase 2 steps 8.4/8.5 run on this firmware.
-    assert spec.provenance.status == "CANDIDATE"
+    # Promoted 2026-07-29 on Phase 2 step 8.5: examples/record_start_stop.py
+    # confirmed 3/3 start and 3/3 stop by echo through the real CameraSession.
+    assert spec.provenance.status == "VERIFIED"
 
 
 def test_pocket_6k_g2_reserved_byte_differs_between_firmwares():

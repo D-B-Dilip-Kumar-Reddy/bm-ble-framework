@@ -1,13 +1,13 @@
 # Recording (Record Start / Stop)
 
-**Status:** implemented and hardware-verified on `POCKET_6K_G2 v7.9` (echo-verified 3/3 cycles); CANDIDATE on `POCKET_6K_G2 v8.6` (discovered and echo-confirmed 2026-07-29, awaiting its session round trip — see "Per-camera status" below); storage preconditions are still planned.
+**Status:** implemented and hardware-verified on `POCKET_6K_G2 v7.9` and `POCKET_6K_G2 v8.6` (echo-verified 3/3 cycles each); storage preconditions are still planned.
 
 ## Per-camera status
 
 | Profile | `commands.recording` | Notes |
 |---|---|---|
 | `POCKET_6K_G2 v7.9` | `VERIFIED` | 3/3 echo-verified cycles via `examples/record_start_stop.py`. Frozen — hardware upgraded away |
-| `POCKET_6K_G2 v8.6` | `CANDIDATE` | Discovered 2026-07-29; **`reserved` is `0`, not v7.9's `1`** — see below |
+| `POCKET_6K_G2 v8.6` | `VERIFIED` | 3/3 echo-verified cycles, 2026-07-29. **`reserved` is `0`, not v7.9's `1`** — see below |
 | `POCKET_6K_PRO v8.6` | `CANDIDATE` | See `docs/command_discovery.md` |
 
 ### `POCKET_6K_G2 v8.6`: same coordinates, different reserved byte
@@ -40,11 +40,19 @@ both cameras (`docs/photo_capture.md` §7/§9).
 The echo payload's trailing bytes `00 40 00 01 03` are byte-identical to
 v7.9's and remain unexplained; only the leading byte is used.
 
-**Why still `CANDIDATE`:** Phase 2 steps 8.4
-(`tools/control/send_record_command.py`) and 8.5
-(`examples/record_start_stop.py`, the real `CameraSession` echo-verified round
-trip) have not been run on v8.6. Passing 8.5 is this repo's promotion gate for
-this family, matching how the v7.9 block was promoted.
+**Promoted to `VERIFIED`, 2026-07-29.** Phase 2 step 8.4
+(`tools/control/send_record_command.py`) produced clean echoes in both
+directions, then step 8.5 (`examples/record_start_stop.py`, the real
+`CameraSession` echo-verified round trip) ran **3/3 start, 3/3 stop, 0/3
+stopped early**, with clip durations 7s/5s/4s.
+
+The detail that closes the reserved-byte question: every TX in that run was
+byte-exact to the profile block — `FF 05 00 00 0A 01 01 00 02` and
+`FF 05 00 00 0A 01 01 00 00`, three of each. So `reserved=0x00` is confirmed
+through the production write path, not only through the discovery tool that
+found it. `TIMECODE` also read `00:00:00:00` at every start, independently
+matching `docs/timecode.md`'s finding that the camera resets it on record
+start rather than carrying the previous clip's value.
 
 One methodological note from this sweep: the discovery tool **refused to emit**
 a block, because a command block describes exactly one
