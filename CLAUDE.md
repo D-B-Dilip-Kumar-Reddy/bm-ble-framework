@@ -546,11 +546,13 @@ Two concrete rules for this variant:
         (`docs/command_discovery.md`). If a family still goes missing from the seeded
         list, seed it manually with `--category`/`--parameter`/`--data-type` — the
         capture shows you the coordinates.
-      - **A reserved-byte-indifferent family is rejected at emit time.** If the camera
-        acts on more than one reserved byte, two candidates confirm the same outcome
-        and `build_command_block` raises — correctly, since a block describes exactly
-        one family. Resolve it by hand: prefer the reserved value with a clean wire
-        echo for every outcome, and record the indifference in `provenance.notes`.
+      - **A reserved-byte-indifferent family can't be emitted.** If the camera acts
+        on more than one reserved byte, two candidates confirm the same outcome and
+        no single block can describe them — a `commands` entry carries one scalar
+        `reserved`. The tool prints a summary of every confirmation with its echo
+        state and exits 1 (it does not emit, and does not traceback). Resolve it by
+        hand: prefer the reserved value with a clean wire echo for every outcome, and
+        record the indifference in `provenance.notes`.
    3. Paste the emitted block into the profile's `commands.recording`, then
       `pytest tests/unit` — no Python code should need to change; the protocol layer
       already handles the recording category generically.
