@@ -46,13 +46,15 @@ v7.9's and remain unexplained; only the leading byte is used.
 trip) have not been run on v8.6. Passing 8.5 is this repo's promotion gate for
 this family, matching how the v7.9 block was promoted.
 
-One methodological note from this sweep: the discovery tool **rejected** the
-emitted block, because a command block describes exactly one
+One methodological note from this sweep: the discovery tool **refused to emit**
+a block, because a command block describes exactly one
 `(category, parameter, data_type, reserved)` family and two different reserved
-bytes had each been confirmed for the same outcome. That rejection is correct
-— but it means a genuine "the camera ignores this byte" finding currently has
-no way to be expressed through the tool, and has to be resolved by hand as it
-was here.
+bytes had each been confirmed for the same outcome. That refusal is correct —
+but it means a genuine "the camera ignores this byte" finding has no way to be
+expressed through the tool, and has to be resolved by hand as it was here. The
+tool now explains that refusal and lists every confirmation with its echo
+state instead of surfacing a traceback (`docs/command_discovery.md`); the
+resolution is still the operator's.
 
 ## Overview
 

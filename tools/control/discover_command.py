@@ -245,6 +245,52 @@ async def probe_candidates(
     return confirmed, combined
 
 
+def print_unemittable_summary(
+    exc: ValueError,
+    confirmed: list[ConfirmedOutcome],
+    saved_path: Path,
+) -> None:
+    """Explain a `build_command_block` refusal instead of letting it surface
+    as a traceback.
+
+    Reaching here is not a crash and not lost work: the sweep ran, the capture
+    is on disk, and every confirmation is listed below. A block just can't be
+    emitted automatically, because one `commands` entry has a single scalar
+    `reserved` (and one value per outcome) and the confirmations disagree.
+
+    That disagreement can be either of two very different things, and the tool
+    cannot tell them apart — only the operator can (docs/command_discovery.md):
+    a genuine finding (the camera really does act on more than one reserved
+    byte — established on both cameras for photo capture and on
+    POCKET_6K_G2 v8.6 for recording), or an unreliable read (confirming out of
+    habit rather than observing each write's own effect).
+    """
+    print("\n" + "=" * 78)
+    print("NO BLOCK EMITTED — the confirmations can't be expressed as one block")
+    print("=" * 78)
+    print(f"\n{exc}\n")
+
+    print("Confirmed this run:")
+    for outcome in confirmed:
+        echo = (
+            f"echo operation={outcome.echo_operation} payload={outcome.echo_payload_hex}"
+            if outcome.echo_operation is not None
+            else "NO ECHO CAPTURED"
+        )
+        print(f"  {outcome.outcome:<12} {outcome.candidate.describe()}  ({echo})")
+
+    print(
+        f"\nNothing is lost — the capture evidence is saved at:\n  {saved_path}\n"
+        "\nIf the camera genuinely acts on several candidates, that is a real\n"
+        "finding this tool has no way to emit; transcribe the block by hand,\n"
+        "preferring the reserved value that echoed for EVERY outcome, and record\n"
+        "the indifference in provenance.notes. If instead the confirmations look\n"
+        "undiscriminating, re-run and verify each one against an independent\n"
+        "signal (an on-camera counter, not an impression) before answering.\n"
+        "See docs/command_discovery.md for both precedents."
+    )
+
+
 async def run(args: argparse.Namespace) -> int:
     category, parameter, data_type = await resolve_seed(args)
     if data_type is DataType.VOID:
@@ -290,12 +336,17 @@ async def run(args: argparse.Namespace) -> int:
         print("\nNo outcomes were confirmed — nothing to emit.")
         return 1
 
-    block = build_command_block(
-        name=args.label,
-        confirmed=confirmed,
-        capture_ref=str(saved_path),
-        discovered_on=date.today().isoformat(),
-    )
+    try:
+        block = build_command_block(
+            name=args.label,
+            confirmed=confirmed,
+            capture_ref=str(saved_path),
+            discovered_on=date.today().isoformat(),
+        )
+    except ValueError as exc:
+        print_unemittable_summary(exc, confirmed, saved_path)
+        return 1
+
     print(
         f"\nPaste this into payloads/models/{args.model_key}_{args.firmware}.json's"
         f' "commands" map, then run `python -m pytest tests/unit`:\n'

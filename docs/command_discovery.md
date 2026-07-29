@@ -220,6 +220,24 @@ just a confirmation-reliability problem" reminder — so the operator can
 react while still connected instead of discovering the conflict from a
 traceback.
 
+**And the end-of-run refusal is no longer a traceback either (added
+2026-07-29).** The `ValueError` above was still propagating uncaught out of
+`run()`, so a considered refusal was presented as a Python stack trace —
+which reads like the tool broke, when in fact the sweep completed, the
+capture was already on disk, and every confirmation was in the console
+scrollback. `run()` now catches it and calls `print_unemittable_summary`,
+which prints the reason, **every confirmation with its echo state**, the
+saved capture path, and both readings of the conflict (a genuine
+multi-candidate finding to transcribe by hand, or an undiscriminating read
+to re-run). It returns exit status 1 rather than raising.
+
+The echo column is the point: it is what the operator resolves the conflict
+on. In the `POCKET_6K_G2 v8.6` recording sweep the summary shows
+`reserved=0x01 start` as `NO ECHO CAPTURED` while all three `reserved=0x00`
+confirmations carry real echoes — making it obvious at a glance which
+reserved value belongs in the profile, which previously took reading the
+scrollback by hand.
+
 **The same conflict, but this time a real finding, not an artifact
 (2026-07-27, same day).** A follow-up VOID sweep on the same G2
 coordinates hit the identical warning and end-of-run `ValueError` — two
