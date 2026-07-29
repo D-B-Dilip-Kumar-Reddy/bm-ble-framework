@@ -19,6 +19,8 @@ from .constants import (
     CHARACTERISTIC_MODEL_INFO,
     CHARACTERISTIC_OUTGOING,
     CHARACTERISTIC_TIMECODE,
+    CONNECT_RETRY_DELAY_S,
+    CONNECT_SUBSCRIBE_MAX_ATTEMPTS,
     GAP_CHARACTERISTIC_APPEARANCE,
     GAP_CHARACTERISTIC_DEVICE_NAME,
     RECONNECT_DELAY_S,
@@ -27,6 +29,17 @@ from .constants import (
 from .scanner import DiscoveredCamera, scan_for_camera
 
 logger = logging.getLogger(__name__)
+
+# Marker text `_subscribe_retry_blocked_by` puts in its RuntimeError when the
+# link died during the CCCD writes. connect() retries on this specific failure
+# (transient, real-hardware-observed) but not on e.g. a missing characteristic.
+_MID_SUBSCRIBE_DROP_MARKERS = ("connection lost mid-subscribe", "superseded by")
+
+
+def _is_mid_subscribe_drop(exc: BaseException) -> bool:
+    """True when ``exc`` reports the link dying during the initial subscribe."""
+    message = str(exc)
+    return any(marker in message for marker in _MID_SUBSCRIBE_DROP_MARKERS)
 
 
 class BMDCameraController:
@@ -42,6 +55,7 @@ class BMDCameraController:
         self._connected = asyncio.Event()
         self._intentional_disconnect: bool = False
         self._reconnecting: bool = False
+        self._in_connect_subscribe: bool = False
         self._incoming_callback: Callable[[Any, bytearray], None] | None = None
         self._timecode_callback: Callable[[Any, bytearray], None] | None = None
         self._camera_status_callback: Callable[[Any, bytearray], None] | None = None
@@ -106,43 +120,95 @@ class BMDCameraController:
                     rssi=found.rssi,
                 )
 
-            self._conn_gen += 1
-            my_gen = self._conn_gen
-
-            def on_disconnect(client: BleakClient) -> None:
-                if self._conn_gen != my_gen:
-                    self._logger.debug(
-                        "Stale on_disconnect (gen %d, current %d) — ignored.",
-                        my_gen,
-                        self._conn_gen,
+            for attempt in range(1, CONNECT_SUBSCRIBE_MAX_ATTEMPTS + 1):
+                try:
+                    await self._connect_and_subscribe_once(address)
+                    return
+                except RuntimeError as exc:
+                    if attempt == CONNECT_SUBSCRIBE_MAX_ATTEMPTS or not _is_mid_subscribe_drop(exc):
+                        raise
+                    self._logger.warning(
+                        "[%s @ %s] connect attempt %d/%d lost the link during the initial "
+                        "subscribe (%s) — retrying in %.1f s",
+                        self.discovered.ble_name,
+                        address,
+                        attempt,
+                        CONNECT_SUBSCRIBE_MAX_ATTEMPTS,
+                        exc,
+                        CONNECT_RETRY_DELAY_S,
                     )
-                    return
-                self._connected.clear()
-                if self._intentional_disconnect:
-                    self._logger.info("Disconnected (intentional).")
-                    return
-                if self._reconnecting:
-                    self._logger.debug(
-                        "Reconnect already in progress — ignoring duplicate disconnect event."
-                    )
-                    return
-                self._logger.warning("Disconnected unexpectedly!")
-                asyncio.get_event_loop().create_task(self._reconnect_loop())
+                    await self._discard_client()
+                    await asyncio.sleep(CONNECT_RETRY_DELAY_S)
 
-            self._logger.info("Connecting to '%s' at %s …", self.discovered.ble_name, address)
+    async def _discard_client(self) -> None:
+        """Best-effort teardown of a client that failed mid-subscribe.
 
-            self._client = BleakClient(address, disconnected_callback=on_disconnect)
-            try:
-                await asyncio.wait_for(self._client.connect(), timeout=BLE_CONNECT_TIMEOUT_S)
-            except (TimeoutError, BleakError) as exc:
-                self._client = None
-                raise RuntimeError(f"[{self.discovered.ble_name}] Connect failed: {exc}") from exc
-            self._connected.set()
-            self._logger.info(
-                "Connected to %s (%s)", self.discovered.address, self.discovered.ble_name
-            )
+        Bumping the generation first makes any late notification or disconnect
+        callback from the abandoned session a no-op, so it cannot interfere
+        with the next attempt.
+        """
+        self._conn_gen += 1
+        self._connected.clear()
+        stale, self._client = self._client, None
+        if stale is None:
+            return
+        with contextlib.suppress(Exception):
+            await stale.disconnect()
 
+    async def _connect_and_subscribe_once(self, address: str) -> None:
+        """One connect + ``subscribe_all`` attempt; ``connect()` owns the retries.
+
+        While this is running, ``connect()`` is the owner of recovery for this
+        generation, so ``on_disconnect`` deliberately does **not** spawn
+        ``_reconnect_loop`` — that loop would block on ``_connect_lock``, which
+        ``connect()`` holds for its whole body, and both would then be trying to
+        rebuild the same session.
+        """
+        self._conn_gen += 1
+        my_gen = self._conn_gen
+
+        def on_disconnect(client: BleakClient) -> None:
+            if self._conn_gen != my_gen:
+                self._logger.debug(
+                    "Stale on_disconnect (gen %d, current %d) — ignored.",
+                    my_gen,
+                    self._conn_gen,
+                )
+                return
+            self._connected.clear()
+            if self._intentional_disconnect:
+                self._logger.info("Disconnected (intentional).")
+                return
+            if self._in_connect_subscribe:
+                self._logger.debug(
+                    "Disconnected during connect()'s initial subscribe — "
+                    "connect() owns the retry; not spawning a reconnect loop."
+                )
+                return
+            if self._reconnecting:
+                self._logger.debug(
+                    "Reconnect already in progress — ignoring duplicate disconnect event."
+                )
+                return
+            self._logger.warning("Disconnected unexpectedly!")
+            asyncio.get_event_loop().create_task(self._reconnect_loop())
+
+        self._logger.info("Connecting to '%s' at %s …", self.discovered.ble_name, address)
+
+        self._client = BleakClient(address, disconnected_callback=on_disconnect)
+        try:
+            await asyncio.wait_for(self._client.connect(), timeout=BLE_CONNECT_TIMEOUT_S)
+        except (TimeoutError, BleakError) as exc:
+            self._client = None
+            raise RuntimeError(f"[{self.discovered.ble_name}] Connect failed: {exc}") from exc
+        self._connected.set()
+        self._logger.info("Connected to %s (%s)", self.discovered.address, self.discovered.ble_name)
+
+        self._in_connect_subscribe = True
+        try:
             await self.subscribe_all()
+        finally:
+            self._in_connect_subscribe = False
 
     async def disconnect(self) -> None:
         self._intentional_disconnect = True

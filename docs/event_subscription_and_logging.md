@@ -22,8 +22,11 @@ is logged as uppercase hex pairs and written to a per-session file under `logs/`
 
 ### `subscribe_all()`
 
-The single entry point for establishing all three subscriptions. Called from `connect()`
-after the BLE link is confirmed up. Passes the stored callback for each characteristic:
+The single entry point for establishing all three subscriptions. Called from
+`connect()` (via `_connect_and_subscribe_once`) after the BLE link is confirmed up.
+If the camera drops the link during these CCCD writes, `connect()` rebuilds the whole
+session and calls `subscribe_all()` again — see `docs/winrt_ble_connection_hardening.md`
+issue 10. Passes the stored callback for each characteristic:
 
 - **First call** (just after connect): all three stored callbacks are `None` → default
   hex-logging handlers are used.

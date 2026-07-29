@@ -49,6 +49,36 @@ Internal fields that drive the hardening:
 - Nulls `_client` if `BleakClient.connect()` raises, preventing a partial reference
   from being left behind.
 
+### `connect()` retry loop and `_connect_and_subscribe_once()`
+
+`connect()` resolves the address, then calls `_connect_and_subscribe_once()` up to
+`CONNECT_SUBSCRIBE_MAX_ATTEMPTS` (3) times, sleeping `CONNECT_RETRY_DELAY_S` (2 s)
+and calling `_discard_client()` between attempts. It retries **only** when the
+failure is a mid-subscribe link drop (`_is_mid_subscribe_drop`, matching the
+markers `_subscribe_retry_blocked_by` emits); every other failure — a connect
+timeout, an unreachable characteristic, subscribe exhaustion on a live link —
+propagates on the first attempt, because rebuilding the session would only hide a
+real fault behind more attempts.
+
+Why this exists: on `POCKET_6K_G2 v8.6` (2026-07-29) the camera dropped the link
+roughly 300 ms after the link came up, *inside* `connect()`'s own `subscribe_all()`,
+on 3 of 6 observed connects. It is transient — the identical command succeeded on
+the other 3 — and it correlated with how long the connect itself took (every
+connect under 2 s survived, every one over 2.2 s dropped) rather than with anything
+being sent. Without this loop a one-shot tool like `discover_command.py` dies before
+it can send anything, which is exactly what blocked the v8.6 Phase 2 bring-up.
+
+`_discard_client()` bumps `_conn_gen` **before** dropping the client, so any late
+notification or disconnect callback from the abandoned session is a no-op against
+the next attempt, then best-effort `disconnect()`s the stale object.
+
+While `_connect_and_subscribe_once` is inside `subscribe_all()` it sets
+`_in_connect_subscribe`, and `on_disconnect` checks that flag and skips spawning
+`_reconnect_loop`. This is essential: `connect()` holds `_connect_lock` for its
+whole body, so a reconnect loop spawned here would block on that lock while
+`connect()` is already rebuilding the same session — the two recovery paths would
+fight, which is the deadlock shape behind issue 9.
+
 ### `disconnect()`
 
 Behaviour unchanged. The `monitor_incoming.py` example now wraps every session in
@@ -131,6 +161,7 @@ where `BleakClient.is_connected` is unreliable.
 | 7 | Camera screen stayed "Connected" after stopping `monitor_incoming.py` | `cam.disconnect()` was a bare call at the bottom of `main()`; Ctrl+C raised `CancelledError` before it was reached | `try/finally` wraps the connect–monitor block; `disconnect()` is now guaranteed on every exit path |
 | 8 | Ctrl+C did not stop `monitor_incoming.py` on Windows | `asyncio.Event().wait()` is not reliably interruptible by task cancellation on the WinRT ProactorEventLoop | Replaced with `while True: await asyncio.sleep(0.5)`; `asyncio.sleep` uses Win32 waitable timers which are reliably cancelled |
 | 9 | `discover_command.py` died with `start_notify failed … connection lost mid-subscribe` ~10 s after connect, before any sweep command was sent (POCKET_6K_G2 v8.6, 2026-07-29, twice) | Camera dropped the link ~300 ms into `connect()`'s own `subscribe_all()`. WinRT reported it as `OSError`, which the loop treats as transient, so it slept `retry_delay_s` (10 s) **holding `_connect_lock`** — starving the `_reconnect_loop` that `on_disconnect` had already scheduled. The retry then ran against the dead client and raised the misleading hard error | `_subscribe_retry_blocked_by()` checked before every retry sleep; a dropped link or superseded generation aborts at once, releasing `_connect_lock` ~10 s earlier so the reconnect loop can actually run |
+| 10 | After fixing 9 the error became immediate and accurate, but `discover_command.py` still died before sending anything — the camera kept dropping the link ~300 ms after connect (3 of 6 observed connects, POCKET_6K_G2 v8.6, 2026-07-29) | Making the failure honest did not make it recoverable. `connect()` had no retry of its own, and the `_reconnect_loop` that `on_disconnect` spawns cannot help a one-shot tool: it is a background task the dying process never awaits, and it would block on `_connect_lock` anyway | `connect()` now retries `_connect_and_subscribe_once()` up to `CONNECT_SUBSCRIBE_MAX_ATTEMPTS`, but only for a mid-subscribe drop; `_in_connect_subscribe` stops `on_disconnect` spawning a competing reconnect loop while it does |
 
 ---
 
