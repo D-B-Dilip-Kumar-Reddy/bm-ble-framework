@@ -2645,5 +2645,64 @@ No cause is asserted here. Two candidate explanations, neither confirmed:
 
 The profile records this as an open discrepancy, not a resolved value in
 either direction. Closing it needs a dedicated, repeated UHD probe with the
-before-state and camera on-screen display checked at each step — not yet
-scheduled as its own investigation.
+before-state and camera on-screen display checked at each step — see §18.11
+below, where that probe is now scheduled.
+
+### 18.11 `resolutions."6K".max_fps_int` promoted; the ProRes/4K DCI gap deliberately held back (2026-07-30)
+
+Following up on §18.10's two candidate gaps, the operator made two explicit
+decisions rather than letting either default:
+
+**`max_fps_int = 50` written for `6K`.** The operator confirmed directly on
+the camera's own UI that 6K's fps menu does not offer 59.94 or 60fps at
+all — the one piece of evidence §18.10 was missing, since the sweep's
+16/16 systematic failure alone (every BRAW variant, both fps, nowhere else)
+already matched the shape of a real ceiling but not design principle 7's
+bar on its own. With the on-screen check done, this meets the identical
+evidence standard that closed `POCKET_6K_PRO v8.6`'s `6K` ceiling (§17) —
+same value, independently confirmed on this firmware's own sweep and this
+firmware's own camera body, not inherited (design principle 6).
+`CameraSession.set_video_format`/`set_recording_format` now reject a
+requested fps above 50 at `6K` immediately, and `sweep_camera_format.py`
+excludes those 16 combinations from its default sweep going forward.
+
+**`resolutions."4K DCI".known_unreachable.ProRes` deliberately NOT written
+yet.** §18.10's evidence for this gap — Runs 6-8's three manual retarget
+failures, the sweep's systematic 32/32 failure, and Run 9's clean contrast
+case — is real, but the operator chose to first run the same falsification
+tests that closed `POCKET_6K_PRO v8.6`'s identical gap (§16) rather than
+promote on the current evidence alone: a data-type byte retry, an
+`Operation.OFFSET` attempt, and a retry with the camera's exact reported
+fps/variant. None of those three have been tried on this firmware yet —
+that is the concrete, remaining gap between what §18.10 has and what
+design principle 7 requires. Candidate next commands, mirroring §16's own
+trail on the PRO:
+
+```
+# 1. This firmware's write already uses data-type byte 0x02 (INT16, the
+#    camera's own report byte — see commands.recording_format's
+#    provenance), unlike v7.9's confirmed write-side 0x82 (INT16_ARRAY).
+#    Retry with 0x82 instead — the one write-side byte not yet tried here:
+python tools/control/send_settings_command.py \
+    --model-key POCKET_6K_G2 --firmware v8.6 \
+    --packet recording_format --resolution "4K DCI" --fps 24 \
+    --data-type INT16_ARRAY
+
+# 2. Operation.OFFSET, with a genuine in-range delta (not an absolute
+#    target payload — see docs/protocol.md §4's OFFSET semantics) via
+#    --raw-payload, the same technique that ruled this out on the PRO:
+python tools/control/send_settings_command.py \
+    --model-key POCKET_6K_G2 --firmware v8.6 \
+    --packet recording_format --operation OFFSET \
+    --raw-payload <fps_delta> <sensor_fps_delta> <width_delta> <height_delta> <flags_delta>
+
+# 3. Retry with the exact fps/variant the camera itself reports while
+#    sitting at 4K DCI/ProRes (confirm the precondition via a fresh wire
+#    echo immediately beforehand, not just by requesting it):
+python tools/control/send_settings_command.py \
+    --model-key POCKET_6K_G2 --firmware v8.6 \
+    --packet recording_format --resolution "4K DCI" --fps <exact_reported_fps>
+```
+
+Only after these are tried (or a subset the operator judges sufficient) does
+this gap get written up and promoted, following the same runbook §16 used.

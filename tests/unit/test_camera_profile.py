@@ -796,12 +796,16 @@ def test_pocket_6k_g2_v86_settings_families_promoted_to_verified():
 
     The sweep also surfaced two systematic gaps that mirror precedents already
     recorded on other profiles (POCKET_6K_PRO v8.6's ProRes/4K DCI
-    known_unreachable and 6K max_fps_int=50, docs/settings.md §16/§17) — but
-    design principle 7's evidence bar (full hypothesis exhaustion for
-    known_unreachable; an operator on-screen check for max_fps_int) has not
-    been met on this firmware yet, so neither guarded field is written here.
-    These assertions pin down that "not yet promoted" state so a future
-    change doesn't silently write one without meeting the bar."""
+    known_unreachable and 6K max_fps_int=50, docs/settings.md §16/§17).
+    resolutions.6K.max_fps_int was promoted the same day (2026-07-30): the
+    operator confirmed on the camera's own UI that 6K doesn't offer
+    59.94/60fps, meeting design principle 7's evidence bar. The ProRes/4K DCI
+    known_unreachable entry is deliberately NOT yet written — the operator
+    chose to run the additional falsification tests (data-type byte,
+    Operation.OFFSET, exact fps/variant) that closed the PRO's identical gap
+    first, rather than promote on the sweep evidence alone. This assertion
+    pins down that "not yet promoted" state for the 4K DCI gap specifically,
+    so a future change doesn't silently write it without meeting the bar."""
     profile = CameraProfile.for_model("POCKET_6K_G2", "v8.6")
 
     for name in ("codec_quality", "video_format", "recording_format"):
@@ -810,13 +814,14 @@ def test_pocket_6k_g2_v86_settings_families_promoted_to_verified():
         assert spec.provenance.status == "VERIFIED"
 
     # ProRes/4K DCI: strongly evidenced by the sweep (32/32 unconfirmed) and
-    # three manual retarget attempts, but not yet a known_unreachable entry.
+    # three manual retarget attempts, but not yet a known_unreachable entry —
+    # the fuller falsification tests that closed the PRO's identical gap
+    # haven't been run on this firmware yet.
     assert profile.require_resolution("4K DCI").known_unreachable == {}
 
-    # BRAW@6K@59.94/60fps: strongly evidenced by the sweep (16/16
-    # unconfirmed), but not yet a max_fps_int entry — no operator on-screen
-    # confirmation has been done for this firmware (unlike the PRO's).
-    assert profile.require_resolution("6K").max_fps_int is None
+    # BRAW@6K@59.94/60fps: promoted 2026-07-30 after an operator on-screen
+    # confirmation met design principle 7's evidence bar for max_fps_int.
+    assert profile.require_resolution("6K").max_fps_int == 50
 
 
 def test_pocket_6k_g2_reserved_byte_differs_between_firmwares():
