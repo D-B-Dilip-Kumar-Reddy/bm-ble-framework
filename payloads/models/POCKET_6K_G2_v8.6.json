@@ -5,7 +5,7 @@
     "firmware": "v8.6",
     "ble_name": "A:AF3DC814",
     "status": "UNVERIFIED",
-    "_comment": "Phase 1 complete on real hardware 2026-07-28 (transport sanity — scan, connect, GATT, GAP/device-info reads, notification stream). Phase 2 complete 2026-07-29: commands.recording is VERIFIED via a 3/3 CameraSession round trip (see that block's provenance). ble_name re-confirmed by examples/scan_camera.py on v8.6 rather than inherited: the physical unit (BLE address CC:86:EC:72:E0:A6) is the same one upgraded from v7.9 on 2026-07-27, and the advertisement name identifies the hardware, not the firmware. _meta.status stays UNVERIFIED because it describes the WHOLE profile and Phase 3 has not run: no settings values (codecs/resolutions/fps_modes) have been sniffed on v8.6 yet, and nothing may be inherited from POCKET_6K_G2_v7.9.json (design principle 6). Each command block carries its own provenance.status — recording's is already VERIFIED."
+    "_comment": "Phase 1 complete on real hardware 2026-07-28 (transport sanity — scan, connect, GATT, GAP/device-info reads, notification stream). Phase 2 complete 2026-07-29: commands.recording is VERIFIED via a 3/3 CameraSession round trip (see that block's provenance). ble_name re-confirmed by examples/scan_camera.py on v8.6 rather than inherited: the physical unit (BLE address CC:86:EC:72:E0:A6) is the same one upgraded from v7.9 on 2026-07-27, and the advertisement name identifies the hardware, not the firmware. Phase 3 in progress 2026-07-30: the passive settings sweep (step 9) populated `codecs`, most of `resolutions`, and the report-side coordinates of commands.codec_quality and commands.recording_format — all CANDIDATE, no write yet sent on this firmware. Still outstanding for Phase 3: commands.video_format and every dimension_enum (step 10, active probing — video_format never reports passively), `fps_modes` (only 23.98/24/30 produced a report, and m_rate is a video_format field that cannot be observed passively at all), and HD's width/height. _meta.status stays UNVERIFIED because it describes the WHOLE profile; each command block carries its own provenance.status — recording's is already VERIFIED."
   },
   "ble": {
     "incoming_property": "indicate",
@@ -42,6 +42,121 @@
         "verified_on": "2026-07-29",
         "notes": "Re-sniffed on v8.6, not inherited from the v7.9 profile (design principle 6) — and the reserved byte genuinely differs, which is why that matters. RESERVED BYTE INDIFFERENT: the 2026-07-29 sweep sent all four (value, reserved) combinations and the camera acted on every one, so 0x00 and 0x01 both work; v7.9 records 0x01, this profile records 0x00. 0x00 is canonical here because it is the only reserved value with a clean wire echo for BOTH outcomes (start 'FF 0A 00 00 0A 01 01 02 02 00 40 00 01 03', stop 'FF 0A 00 00 0A 01 01 02 00 00 40 00 01 03'), and because it matches the reserved byte the camera itself uses in every camera-originated report on this family. The reserved=0x01 start candidate was operator-confirmed only — its capture window caught the post-connect initial-payload burst instead of the response (the known first-candidate race in docs/command_discovery.md's safety model), so it has no echo of its own; reserved=0x01 stop did echo cleanly. Echo payload trailing bytes '00 40 00 01 03' are identical to v7.9's and remain not understood (hypothesis: SDI Cat 10 Param 1 transport-mode struct, docs/protocol.md). PROMOTED TO VERIFIED 2026-07-29 on Phase 2 steps 8.4 and 8.5: send_record_command.py produced clean echoes for both directions, then examples/record_start_stop.py ran the real CameraSession echo-verified round trip 3/3 start, 3/3 stop, 0/3 stopped early, clip durations 7s/5s/4s. Every TX in that run was byte-exact to this block ('FF 05 00 00 0A 01 01 00 02' / '... 00 00', 3 each), so the reserved=0x00 choice is confirmed through the production write path, not just the discovery tool. TIMECODE also read 00:00:00:00 at each start, matching docs/timecode.md's finding that the camera resets it on record start."
       }
+    },
+    "codec_quality": {
+      "category": 10,
+      "parameter": 0,
+      "data_type": "INT8",
+      "reserved": 0,
+      "echo_operation": 2,
+      "provenance": {
+        "status": "CANDIDATE",
+        "method": "passive sniffer (sniffer_settings.py), one capture window per concrete codec/variant so each payload is unambiguously attributable",
+        "capture_refs": [
+          "tools/captures/POCKET_6K_G2_v8.6/POCKET_6K_G2_v8.6_20260730T145453.json (codec round trip, local/gitignored)",
+          "tools/captures/POCKET_6K_G2_v8.6/POCKET_6K_G2_v8.6_20260730T145734.json (ProRes resolutions, local/gitignored)",
+          "tools/captures/POCKET_6K_G2_v8.6/POCKET_6K_G2_v8.6_20260730T150035.json (ProRes quality variants, local/gitignored)"
+        ],
+        "verified_on": "2026-07-30",
+        "notes": "REPORT SIDE ONLY so far. Camera-originated 0x0A/0x00 reports confirmed on v8.6: operation 0x02 (CAMERA_REPORT), data-type byte 0x01 (INT8), payload exactly 2 bytes [codec_id, variant_id], header reserved byte 0x00. Every codec id and variant id in the top-level `codecs` table came from one of these reports, each in its own dedicated capture window. THE WRITE SIDE IS UNTESTED on this firmware: `reserved` here is the byte the camera uses in its own reports, not a confirmed write value, and no write has been sent. Phase 3 step 12 (send_settings_command.py --packet codec_quality) is what promotes this. If the write is refused, the v7.9 profile's write-side value for this family is also reserved=0, so that is not the first thing to vary."
+      }
+    },
+    "recording_format": {
+      "category": 1,
+      "parameter": 9,
+      "data_type": "INT16",
+      "reserved": 0,
+      "echo_operation": 2,
+      "provenance": {
+        "status": "CANDIDATE",
+        "method": "passive sniffer (sniffer_settings.py), one capture window per concrete resolution and per concrete fps so each payload is unambiguously attributable",
+        "capture_refs": [
+          "tools/captures/POCKET_6K_G2_v8.6/POCKET_6K_G2_v8.6_20260730T145453.json (codec round trip, local/gitignored)",
+          "tools/captures/POCKET_6K_G2_v8.6/POCKET_6K_G2_v8.6_20260730T145734.json (ProRes resolutions, local/gitignored)",
+          "tools/captures/POCKET_6K_G2_v8.6/POCKET_6K_G2_v8.6_20260730T150035.json (ProRes quality variants, local/gitignored)",
+          "tools/captures/POCKET_6K_G2_v8.6/POCKET_6K_G2_v8.6_20260730T150* (BRAW resolutions, quality variants and fps windows, local/gitignored)"
+        ],
+        "verified_on": "2026-07-30",
+        "notes": "REPORT SIDE ONLY so far. Camera-originated 0x01/0x09 reports confirmed on v8.6: operation 0x02 (CAMERA_REPORT), data-type byte 0x02 (INT16), payload five little-endian int16 [fps_int, sensor_fps_int, width, height, flags], header reserved byte 0x00. Every width/height in the top-level `resolutions` table came from one of these reports. THE WRITE SIDE IS UNTESTED on this firmware and this block deliberately records what v8.6's own wire showed rather than v7.9's write-side values (design principle 6): data_type is INT16 (0x02, the observed report byte) and reserved is 0x00. NOTE FOR PHASE 3 STEP 12: on v7.9 the working WRITE used data-type byte 0x82 (INT16_ARRAY) and reserved 0x01, even though that camera also *reported* with 0x02 — so if a write from this block is refused, retry with `send_settings_command.py --data-type INT16_ARRAY` before assuming anything about the values, and only then edit this block. FLAGS FIELD: element 5 is not purely fps-derived. It read 0x0000 at 6K (6144x3456) and UHD, and 0x0010 at every windowed/cropped resolution, all at the same fps_int=24 — independently reconfirming on v8.6 the 'windowed mode' bit already noted in the v7.9 profile's fps_modes._comment and in docs/photo_capture.md 10.1. 23.98fps added 0x0003 on top (0x0013 total) where 24fps and 30fps stayed 0x0010, so the low bits carry the NTSC/drop indicator."
+      }
+    }
+  },
+  "codecs": {
+    "_comment": "Sniffed on v8.6 2026-07-30, one capture window per concrete codec/variant; provenance rides with commands.codec_quality. Nothing inherited from POCKET_6K_G2_v7.9.json (design principle 6) — the values happen to match that profile, which is a confirmation, not a copy. BRAW variant id 6 was not observed on v8.6 either (a real gap between 12:1 at 5 and Q1 at 7) — do not invent it. The ProRes variant named 'Proxy' here was captured in a window the operator labelled 'pxy'; the id (3) is what was sniffed, the name follows this codebase's existing convention.",
+    "BRAW": {
+      "id": 3,
+      "variants": {
+        "Q0": 0,
+        "Q5": 1,
+        "3:1": 2,
+        "5:1": 3,
+        "8:1": 4,
+        "12:1": 5,
+        "Q1": 7,
+        "Q3": 8
+      }
+    },
+    "ProRes": {
+      "id": 2,
+      "variants": {
+        "HQ": 0,
+        "422": 1,
+        "LT": 2,
+        "Proxy": 3
+      }
+    }
+  },
+  "resolutions": {
+    "_comment": "Widths/heights sniffed on v8.6 2026-07-30 from 0x01/0x09 reports, one capture window per concrete resolution; provenance rides with commands.recording_format. NO dimension_enums YET: video_format (0x01/0x00) never reported passively on this firmware either, exactly as on the G2 v7.9 — every enum must be probed actively (Phase 3 step 10, tools/control/send_settings_command.py --packet video_format --dimension-enum, or sweep_dimension_enum.py). Until then set_camera_format cannot reach any of these. HD IS MISSING ON PURPOSE: its capture window (res_prores_hd) was the first window of its run and caught the post-connect initial-payload burst instead of the resolution report, so no width/height was observed — re-capture rather than assume 1920x1080. The `codecs` list per entry records which codec family the operator reached that resolution under on the camera's own menus. Note 2.8K 17:9 is 2880 wide here, matching the sniffed POCKET_6K_PRO v8.6 profile; the v7.9 profile's 2868 came from an external document, not a capture.",
+    "6K": {
+      "width": 6144,
+      "height": 3456,
+      "codecs": [
+        "BRAW"
+      ]
+    },
+    "6K 2.4:1": {
+      "width": 6144,
+      "height": 2560,
+      "codecs": [
+        "BRAW"
+      ]
+    },
+    "5.7K 17:9": {
+      "width": 5744,
+      "height": 3024,
+      "codecs": [
+        "BRAW"
+      ]
+    },
+    "4K DCI": {
+      "width": 4096,
+      "height": 2160,
+      "codecs": [
+        "BRAW",
+        "ProRes"
+      ]
+    },
+    "3.7K Anamorphic": {
+      "width": 3728,
+      "height": 3104,
+      "codecs": [
+        "BRAW"
+      ]
+    },
+    "2.8K 17:9": {
+      "width": 2880,
+      "height": 1512,
+      "codecs": [
+        "BRAW"
+      ]
+    },
+    "UHD": {
+      "width": 3840,
+      "height": 2160,
+      "codecs": [
+        "ProRes"
+      ]
     }
   }
 }

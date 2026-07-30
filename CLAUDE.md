@@ -22,7 +22,7 @@ Python package (`bmd_ble`) for automated Blackmagic Design camera control over B
 
 | Model Key | Model Name | Firmware | Status | Notes |
 |---|---|---|---|---|
-| `POCKET_6K_G2` | Pocket Cinema Camera 6K G2 | v8.6 | In progress | **Primary reference.** The operator's physical unit was upgraded from v7.9 to v8.6 on 2026-07-27, so this is the only G2 firmware that can be tested against real hardware. **Phase 1 complete** (2026-07-28): GAP and device-info metadata are both `readable: true` here, unlike v7.9. **Phase 2 complete** (2026-07-29): `commands.recording` is `VERIFIED` — 3/3 echo-verified `CameraSession` cycles. Same coordinates as v7.9 but `reserved` is `0`, not `1` (both accepted; see `docs/recording.md`), a live example of why design principle 6 forbids inheriting. Phase 3 (settings) is next. All Python defaults (`DEFAULT_FIRMWARE` in `tools/`, `FIRMWARE` in `examples/`) point here |
+| `POCKET_6K_G2` | Pocket Cinema Camera 6K G2 | v8.6 | In progress | **Primary reference.** The operator's physical unit was upgraded from v7.9 to v8.6 on 2026-07-27, so this is the only G2 firmware that can be tested against real hardware. **Phase 1 complete** (2026-07-28): GAP and device-info metadata are both `readable: true` here, unlike v7.9. **Phase 2 complete** (2026-07-29): `commands.recording` is `VERIFIED` — 3/3 echo-verified `CameraSession` cycles. Same coordinates as v7.9 but `reserved` is `0`, not `1` (both accepted; see `docs/recording.md`), a live example of why design principle 6 forbids inheriting. **Phase 3 in progress** (2026-07-30): step 9's passive sweep populated `codecs`, 7 of 8 `resolutions`, and the report-side coordinates of `codec_quality`/`recording_format` (all CANDIDATE). Outstanding: `video_format` + all `dimension_enums` (step 10, active), `fps_modes`, and HD — see `docs/settings.md` §18. All Python defaults (`DEFAULT_FIRMWARE` in `tools/`, `FIRMWARE` in `examples/`) point here |
 | `POCKET_6K_G2` | Pocket Cinema Camera 6K G2 | v7.9 | Frozen | Former primary reference; most reverse-engineered profile in the repo and still the reference for how a fully-populated profile looks. **No longer testable** — the physical unit was upgraded to v8.6, so nothing here can be re-confirmed or extended. Kept as-is for its evidentiary record and because the settings-table unit tests still load it |
 | `POCKET_6K_PRO` | Pocket Cinema Camera 6K Pro | v8.6 | In progress | Second target |
 | `URSA_BROADCAST_G2` | URSA Broadcast G2 | v7.5 | Planned | Different category/param combos expected |
@@ -438,7 +438,7 @@ behind. Derived from three bring-ups at different stages:
 |---|---|---|
 | `POCKET_6K_G2 v7.9` | All phases (frozen — hardware upgraded away, see the registry) | `docs/recording.md`, `docs/settings.md` |
 | `POCKET_6K_PRO v8.6` | Phase 2 done; Phase 3 in progress — resolutions, dimension_enums, and codec ids transcribed, nothing yet promoted past CANDIDATE | `docs/settings.md` §15–§17 |
-| `POCKET_6K_G2 v8.6` | **Phase 2 complete** (2026-07-29) — the current primary reference, and the live worked example of the firmware-upgrade variant below. Phase 3 is next | `docs/recording.md` ("Per-camera status") |
+| `POCKET_6K_G2 v8.6` | **Phase 3 in progress** (2026-07-30) — the current primary reference, and the live worked example of the firmware-upgrade variant below. Step 9 done; step 10 (active `dimension_enum` probing) next | `docs/recording.md` ("Per-camera status"), `docs/settings.md` §18 |
 
 `docs/command_discovery.md` covers Phase 2's tooling; `docs/settings.md` covers Phase 3's.
 

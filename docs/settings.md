@@ -2075,3 +2075,99 @@ camera. Check whether the tooling's own timing assumptions could explain it
 same operator-is-ground-truth discipline §16's investigation relied on
 throughout — before treating a result as a genuine `known_unreachable` or
 `max_fps_int` candidate.
+
+---
+
+## 18. `POCKET_6K_G2 v8.6` — Phase 3 step 9, the passive settings sweep (2026-07-30)
+
+The primary reference's own Phase 3, run as five `sniffer_settings.py` sessions
+with **one capture window per concrete setting** so every payload is
+unambiguously attributable to one change. What it produced, and what it
+deliberately did not.
+
+### 18.1 What the sweep confirmed
+
+Both report families behaved exactly as on the G2 v7.9 — same coordinates,
+same operation byte, same payload shapes — and every value below came from
+this firmware's own wire, not from the v7.9 profile:
+
+| Family | Coordinates | Observed on v8.6 |
+|---|---|---|
+| `codec_quality` | `0x0A`/`0x00` | operation `0x02`, data-type byte `0x01` (INT8), payload 2 bytes `[codec_id, variant_id]`, header reserved `0x00` |
+| `recording_format` | `0x01`/`0x09` | operation `0x02`, data-type byte `0x02` (INT16), payload five LE int16 `[fps_int, sensor_fps, width, height, flags]`, header reserved `0x00` |
+
+**Codec ids and every variant id, each from its own window:**
+
+- `ProRes` id `2` — `HQ` 0, `422` 1, `LT` 2, `Proxy` 3
+- `BRAW` id `3` — `Q0` 0, `Q5` 1, `3:1` 2, `5:1` 3, `8:1` 4, `12:1` 5, `Q1` 7, `Q3` 8
+
+BRAW variant id `6` was **not** observed here either — the same real gap
+between `12:1` (5) and `Q1` (7) the v7.9 profile records. Independently
+reconfirmed, not inherited; still do not invent it.
+
+**Resolutions**, from the `0x01/0x09` width/height elements: `6K` 6144×3456,
+`6K 2.4:1` 6144×2560, `5.7K 17:9` 5744×3024, `4K DCI` 4096×2160,
+`3.7K Anamorphic` 3728×3104, `2.8K 17:9` 2880×1512, `UHD` 3840×2160.
+
+One incidental correction: `2.8K 17:9` is **2880** wide, matching the sniffed
+`POCKET_6K_PRO v8.6` profile. The v7.9 profile's `2868` came from the external
+reverse-engineering document rather than a capture, so this is the second
+independent capture to disagree with that document.
+
+### 18.2 The flags element is not purely fps-derived — reconfirmed
+
+At a constant `fps_int=24`, element 5 read `0x0000` at `6K` and `UHD` but
+`0x0010` at every windowed/cropped resolution. Then at `2.8K 17:9`, 23.98fps
+read `0x0013` where 24fps and 30fps read `0x0010`.
+
+So `0x0010` is the **windowed-sensor bit**, not part of the fps encoding, and
+the low bits carry the NTSC/drop indicator. This independently reconfirms on
+v8.6 both the caveat already recorded in the v7.9 profile's
+`fps_modes._comment` and the windowed-mode read signal from
+`docs/photo_capture.md` §10.1. It is also why a `frame_flags` value
+transcribed per-fps-mode is only correct for windowed resolutions — worth
+remembering before populating `fps_modes` on any camera.
+
+### 18.3 What this sweep could not produce, and why
+
+Three gaps, all recorded in the profile rather than guessed at:
+
+1. **No `dimension_enums`, and no `commands.video_format`.** `video_format`
+   (`0x01`/`0x00`) never reported passively on v8.6 either — the same silence
+   as on the G2 v7.9 (§7) and the PRO (§15). Every enum needs Phase 3 step 10
+   active probing. Until then `set_camera_format` cannot reach any resolution
+   on this profile, and will raise a clear `ValueError` naming the missing
+   table entry.
+2. **No `fps_modes` at all.** Only 3 of 8 windows produced a
+   `recording_format` report (23.98 → flags `0x0013`, 24 → `0x0010`,
+   30 → `0x0010`); `25`, `29.97`, `50`, `59.94` and `60` produced none.
+   Separately, `m_rate` is a **`video_format`** field, so it cannot be
+   observed passively at all — every entry would need an invented value.
+   Writing three-eighths of a table with one fabricated field per entry is
+   worse than an empty table, so the section is omitted entirely.
+3. **No `HD` resolution.** Its window (`res_prores_hd`) was the first of its
+   run and caught the post-connect initial-payload burst instead of the
+   resolution report — the same first-window hazard as
+   `docs/command_discovery.md`'s safety model. `1920x1080` was **not**
+   assumed from the other two profiles.
+
+### 18.4 Methodological note: order windows so the burst is harmless
+
+The first window of every `sniffer_settings.py` run in this sweep was lost to
+the connect burst — twice with a real cost (`res_prores_hd` above, and
+`res_braw_6k`, whose dimensions were only recoverable because an earlier run's
+`codec_to_braw` window happened to catch the same report). `sniffer_photo.py`
+and `sniffer_sensor_area.py` already solve this by leading with a deliberate
+`idle_baseline` window; `sniffer_settings.py` has no such convention. Until it
+does, **lead each run with a throwaway window**, or repeat the first setting
+as the last window so it gets a clean second capture.
+
+### 18.5 State carry-over inside a window is normal — read the last value
+
+`quality_variant_3:1`'s window contains two `codec_quality` reports:
+`03 04` at 15:05:17.949, then `03 02` at 15:05:18.490. The first is the
+*previous* state (`8:1`, left over from the resolution windows) being
+re-reported during the settings burst; the second is the actual change. The
+settled value is the last one in the window, not the first — the same
+stale-state hazard that produced a false positive in `sweep_dimension_enum.py`
+(`docs/photo_capture.md` §10.5), here appearing in a passive capture instead.
