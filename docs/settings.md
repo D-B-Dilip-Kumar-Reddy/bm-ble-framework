@@ -248,11 +248,17 @@ report confirming the codec family.
 | HD | 1920 × 1080 | ProRes | ProRes: `0x03` ✅ |
 | UHD | 3840 × 2160 | ProRes | ProRes: `0x06` ✅ |
 | 4K DCI | 4096 × 2160 | BRAW, ProRes | BRAW: `0x08` ✅; **ProRes: still unknown** |
-| 2.8K 17:9 | 2868 × 1512 | BRAW | BRAW: `0x0D` ✅ |
+| 2.8K 17:9 | 2868 × 1512 ⚠️ | BRAW | BRAW: `0x0D` ✅ |
 | 3.7K Anamorphic | 3728 × 3104 | BRAW | BRAW: `0x0F` ✅ |
 | 5.7K 17:9 | 5744 × 3024 | BRAW | BRAW: `0x12` ✅ |
 | 6K 3:2 | 6144 × 3456 | BRAW | BRAW: `0x13` ✅ |
 | 6K 2.4:1 | 6144 × 2560 | BRAW | BRAW: `0x14` ✅ |
+
+⚠️ **2.8K 17:9's width is disputed.** Both sniffed v8.6 profiles report
+**2880** at this resolution, not 2868, and §7's transcript doesn't actually
+show the `0x0D` decode that would settle it — so the `✅` on that row may have
+been applied without re-checking this specific width. See §18.1. The value
+here is left as originally recorded because v7.9 can no longer be re-tested.
 
 **Confirmed non-functional** (probed 2026-07-20, produced no state change —
 see §7): `0x01`, `0x02`, `0x04`, `0x05`, `0x07`, `0x09`, `0x10`, `0x11`.
@@ -2109,10 +2115,22 @@ reconfirmed, not inherited; still do not invent it.
 `6K 2.4:1` 6144×2560, `5.7K 17:9` 5744×3024, `4K DCI` 4096×2160,
 `3.7K Anamorphic` 3728×3104, `2.8K 17:9` 2880×1512, `UHD` 3840×2160.
 
-One incidental correction: `2.8K 17:9` is **2880** wide, matching the sniffed
-`POCKET_6K_PRO v8.6` profile. The v7.9 profile's `2868` came from the external
-reverse-engineering document rather than a capture, so this is the second
-independent capture to disagree with that document.
+**An unresolved discrepancy worth flagging:** `2.8K 17:9` read **2880** wide
+here, matching the sniffed `POCKET_6K_PRO v8.6` value (§15's enum table,
+`0x0D` → 2880×1512). The `POCKET_6K_G2 v7.9` profile records **2868**.
+
+Which is right for v7.9 cannot be settled from here, and the existing docs
+disagree with themselves about it: that profile's `resolutions._comment`
+describes the table as transcribed from `CODEC_RES_FPS_6K_G2.docx`, while
+§2.2 marks every row — including this one — as confirmed by a decoded
+`0x01/0x09` report. §7's transcript does not actually show the `0x0D` decode,
+so the `✅` on that row may be a summary applied without re-checking this
+width. Two possibilities remain open: a genuine per-firmware difference, or a
+document transcription error that the v7.9 sweep never caught. **Do not
+"correct" the v7.9 profile on the strength of this** — that camera can no
+longer be re-tested (see the registry), so the 2868 reading is now
+unfalsifiable. Both sniffed v8.6 profiles agree on 2880 and that is what they
+record.
 
 ### 18.2 The flags element is not purely fps-derived — reconfirmed
 
