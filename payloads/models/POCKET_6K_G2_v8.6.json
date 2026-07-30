@@ -5,7 +5,7 @@
     "firmware": "v8.6",
     "ble_name": "A:AF3DC814",
     "status": "UNVERIFIED",
-    "_comment": "Phase 1 complete on real hardware 2026-07-28 (transport sanity — scan, connect, GATT, GAP/device-info reads, notification stream). Phase 2 complete 2026-07-29: commands.recording is VERIFIED via a 3/3 CameraSession round trip (see that block's provenance). ble_name re-confirmed by examples/scan_camera.py on v8.6 rather than inherited: the physical unit (BLE address CC:86:EC:72:E0:A6) is the same one upgraded from v7.9 on 2026-07-27, and the advertisement name identifies the hardware, not the firmware. Phase 3 in progress 2026-07-30: the passive settings sweep (step 9) populated `codecs`, most of `resolutions`, and the report-side coordinates of commands.codec_quality and commands.recording_format — all CANDIDATE, no write yet sent on this firmware. Still outstanding for Phase 3: commands.video_format and every dimension_enum (step 10, active probing — video_format never reports passively), `fps_modes` (only 23.98/24/30 produced a report, and m_rate is a video_format field that cannot be observed passively at all), and HD's width/height. _meta.status stays UNVERIFIED because it describes the WHOLE profile; each command block carries its own provenance.status — recording's is already VERIFIED."
+    "_comment": "Phase 1 complete on real hardware 2026-07-28 (transport sanity — scan, connect, GATT, GAP/device-info reads, notification stream). Phase 2 complete 2026-07-29: commands.recording is VERIFIED via a 3/3 CameraSession round trip (see that block's provenance). ble_name re-confirmed by examples/scan_camera.py on v8.6 rather than inherited: the physical unit (BLE address CC:86:EC:72:E0:A6) is the same one upgraded from v7.9 on 2026-07-27, and the advertisement name identifies the hardware, not the firmware. Phase 3 in progress 2026-07-30: the passive settings sweep (step 9) populated `codecs`, most of `resolutions`, and the report-side coordinates of commands.codec_quality and commands.recording_format — all CANDIDATE, no write yet sent on this firmware. commands.video_format and a partial fps_modes (23.98/24/30) were then added as explicit CANDIDATE hypotheses to unblock step 10, which cannot build a probe packet without them — see docs/settings.md 18.6 and those blocks' own provenance. Still outstanding for Phase 3: every dimension_enum (step 10, active), the other five fps_modes entries, HD's width/height, and a confirming write for all three settings families (step 12). _meta.status stays UNVERIFIED because it describes the WHOLE profile; each command block carries its own provenance.status — recording's is already VERIFIED."
   },
   "ble": {
     "incoming_property": "indicate",
@@ -78,6 +78,19 @@
         ],
         "verified_on": "2026-07-30",
         "notes": "REPORT SIDE ONLY so far. Camera-originated 0x01/0x09 reports confirmed on v8.6: operation 0x02 (CAMERA_REPORT), data-type byte 0x02 (INT16), payload five little-endian int16 [fps_int, sensor_fps_int, width, height, flags], header reserved byte 0x00. Every width/height in the top-level `resolutions` table came from one of these reports. THE WRITE SIDE IS UNTESTED on this firmware and this block deliberately records what v8.6's own wire showed rather than v7.9's write-side values (design principle 6): data_type is INT16 (0x02, the observed report byte) and reserved is 0x00. NOTE FOR PHASE 3 STEP 12: on v7.9 the working WRITE used data-type byte 0x82 (INT16_ARRAY) and reserved 0x01, even though that camera also *reported* with 0x02 — so if a write from this block is refused, retry with `send_settings_command.py --data-type INT16_ARRAY` before assuming anything about the values, and only then edit this block. FLAGS FIELD: element 5 is not purely fps-derived. It read 0x0000 at 6K (6144x3456) and UHD, and 0x0010 at every windowed/cropped resolution, all at the same fps_int=24 — independently reconfirming on v8.6 the 'windowed mode' bit already noted in the v7.9 profile's fps_modes._comment and in docs/photo_capture.md 10.1. 23.98fps added 0x0003 on top (0x0013 total) where 24fps and 30fps stayed 0x0010, so the low bits carry the NTSC/drop indicator."
+      }
+    },
+    "video_format": {
+      "category": 1,
+      "parameter": 0,
+      "data_type": "INT8",
+      "reserved": 1,
+      "provenance": {
+        "status": "CANDIDATE",
+        "method": "explicit hypothesis block, added to unblock Phase 3 step 10 — NOT sniffed on this firmware and not confirmed by any write yet",
+        "capture_refs": [],
+        "verified_on": "",
+        "notes": "WHY THIS EXISTS AS A HYPOTHESIS: video_format never appears in a passive capture on any camera tried so far (POCKET_6K_G2 v7.9 docs/settings.md 7, POCKET_6K_PRO v8.6 15, and reconfirmed on this firmware by the 2026-07-30 sweep, 18.3) — there is nothing to seed it from. But send_settings_command.py must be able to BUILD a video_format packet before it can probe a dimension_enum, so step 10 is unreachable without a block. Same bootstrap the PRO needed (commit 'Unblock POCKET_6K_PRO video_format dimension_enum probing'). The coordinates are the officially documented FORMAT packet ones (category 1 / parameter 0, docs/protocol.md), and are made plausible for THIS firmware by codec_quality and recording_format both matching v7.9's coordinates exactly on v8.6's own captures. RESERVED IS THE WEAKEST FIELD HERE: 0x01 is what v7.9's and the PRO's working writes used for this family, but v8.6's recording family turned out to accept both 0x00 and 0x01 (commands.recording.provenance), and every v8.6 report seen so far carries 0x00. If a probe gets no response, vary this byte FIRST via send_settings_command.py --reserved 0x00 rather than editing this block. Nothing here is confirmed until an active send produces a real transition on the 0x01/0x09 mode-notify channel — video_format's own channel is not expected to echo at all."
       }
     }
   },
@@ -157,6 +170,24 @@
       "codecs": [
         "ProRes"
       ]
+    }
+  },
+  "fps_modes": {
+    "_comment": "PARTIAL — 3 of 8 modes, all CANDIDATE. fps_int and frame_flags for these three were read directly off v8.6's own 0x01/0x09 reports (2026-07-30 sweep, docs/settings.md 18): 23.98 -> flags 0x0013, 24 -> 0x0010, 30 -> 0x0010, each in its own capture window at 2.8K 17:9. m_rate IS THE ONE INFERRED FIELD in every entry: it is a video_format element and video_format never reports passively, so it cannot be observed at all until step 10's active probe. The inference is grounded in this firmware's own wire rather than another profile: the windowed-sensor bit is 0x0010, so 23.98's extra 0x0003 is the NTSC/drop indicator, giving m_rate=1 there and 0 for the two exact rates. Confirmed or refuted by step 10/12. MISSING: 25, 29.97, 50, 59.94, 60 — their capture windows produced no 0x01/0x09 report at all, so they are absent rather than guessed. Re-capture before trusting any fps sweep as exhaustive; sweep_camera_format.py will silently only cover what is listed here.",
+    "23.98": {
+      "fps_int": 24,
+      "m_rate": 1,
+      "frame_flags": 19
+    },
+    "24": {
+      "fps_int": 24,
+      "m_rate": 0,
+      "frame_flags": 16
+    },
+    "30": {
+      "fps_int": 30,
+      "m_rate": 0,
+      "frame_flags": 16
     }
   }
 }

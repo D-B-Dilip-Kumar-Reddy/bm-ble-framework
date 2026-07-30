@@ -196,6 +196,27 @@ meaning as "add the payload to the current value," so sending an
 test of the hypothesis. See RAW PAYLOAD OVERRIDE below for the
 delta-payload test this motivates.
 
+RESERVED OVERRIDE (`--reserved`, added 2026-07-30, see docs/settings.md
+§18.6): header byte 3 was the one axis this tool could not vary without
+editing a profile, and it is the least-evidenced field in any block seeded
+from a passive capture — a camera's own REPORT packets need not carry the
+value a *write* requires. That is the same trap `recording_format`'s
+`0x02`-vs-`0x82` discrepancy (§3) already represents on the data-type axis,
+and it bit for real on `POCKET_6K_G2 v8.6`: its recording family turned out
+to accept both `0x00` and `0x01` (docs/recording.md), while every report on
+that firmware carries `0x00` and v7.9's working writes used `0x01`. So when a
+CANDIDATE block's write draws no response, this byte is the first thing to
+vary — before doubting the payload values, and without editing the profile:
+
+    # a silent dimension_enum probe: try the other reserved byte first
+    python tools/control/send_settings_command.py \\
+        --model-key POCKET_6K_G2 --firmware v8.6 \\
+        --packet video_format --fps 24 --dimension-enum 0x08 --reserved 0x00
+
+Accepts `0x..` hex or decimal, applies to all three packet families, records
+itself in the send's label (and so in the saved capture JSON), and defaults to
+unset so every invocation predating this flag is byte-for-byte unchanged.
+
 RAW PAYLOAD OVERRIDE (`--raw-payload`, added 2026-07-24, see
 docs/settings.md §16 and docs/protocol.md §4): every override above
 changes one field of an otherwise profile-driven payload (a data-type
@@ -365,6 +386,31 @@ def _operation_override_suffix(resolved: Operation, args: argparse.Namespace) ->
     )
 
 
+def resolve_reserved(spec: CommandSpec, args: argparse.Namespace) -> int:
+    """The header reserved byte to encode with: `--reserved` if given (an
+    explicit escape-hatch override — see the module docstring's RESERVED
+    OVERRIDE section), else the profile's own `spec.reserved` unchanged.
+
+    Worth overriding rather than editing a profile because this byte is the
+    least-evidenced field in a CANDIDATE block: it can only be read off
+    camera-originated reports, which need not use the value a *write* requires.
+    `POCKET_6K_G2 v8.6`'s recording family turned out to accept both `0x00` and
+    `0x01` (docs/recording.md), so a refused write is a reason to vary this
+    before doubting the payload values.
+    """
+    if args.reserved is not None:
+        return args.reserved
+    return spec.reserved
+
+
+def _reserved_override_suffix(resolved: int, spec: CommandSpec, args: argparse.Namespace) -> str:
+    """Label suffix noting a `--reserved` override — empty string when unused,
+    so the label is byte-for-byte unchanged from before this flag existed."""
+    if args.reserved is None:
+        return ""
+    return f" reserved=0x{resolved:02X}(override; profile default 0x{spec.reserved:02X})"
+
+
 def _build_raw_payload_command(
     profile: CameraProfile, args: argparse.Namespace
 ) -> tuple[str, bytes]:
@@ -404,8 +450,10 @@ def build_command(profile: CameraProfile, args: argparse.Namespace) -> tuple[str
         codec = profile.require_codec(args.codec, args.variant)
         resolved_data_type = resolve_data_type(spec, args)
         resolved_operation = resolve_operation(args)
+        resolved_reserved = resolve_reserved(spec, args)
         label = f"codec_quality {args.codec} {args.variant}"
         label += _data_type_override_suffix(resolved_data_type, spec, args)
+        label += _reserved_override_suffix(resolved_reserved, spec, args)
         label += _operation_override_suffix(resolved_operation, args)
         return label, encode_codec_quality(
             category=spec.category,
@@ -413,7 +461,7 @@ def build_command(profile: CameraProfile, args: argparse.Namespace) -> tuple[str
             data_type=resolved_data_type,
             codec_id=codec.id,
             variant_id=codec.variants[args.variant],
-            reserved=spec.reserved,
+            reserved=resolved_reserved,
             operation=resolved_operation,
         )
 
@@ -422,6 +470,7 @@ def build_command(profile: CameraProfile, args: argparse.Namespace) -> tuple[str
         spec = profile.require_command("video_format")
         resolved_data_type = resolve_data_type(spec, args)
         resolved_operation = resolve_operation(args)
+        resolved_reserved = resolve_reserved(spec, args)
         fps = profile.require_fps_mode(args.fps)
         if args.dimension_enum is not None:
             # Probe mode: send a candidate enum that is NOT in the profile
@@ -447,6 +496,7 @@ def build_command(profile: CameraProfile, args: argparse.Namespace) -> tuple[str
             label = f"video_format {args.resolution} {args.codec} {args.fps}"
         extra1, extra2 = resolve_video_format_extra(args)
         label += _data_type_override_suffix(resolved_data_type, spec, args)
+        label += _reserved_override_suffix(resolved_reserved, spec, args)
         label += _video_format_extra_suffix(extra1, extra2, args)
         label += _operation_override_suffix(resolved_operation, args)
         return label, encode_video_format(
@@ -456,7 +506,7 @@ def build_command(profile: CameraProfile, args: argparse.Namespace) -> tuple[str
             fps_int=fps.fps_int,
             m_rate=fps.m_rate,
             dimension_enum=dimension_enum,
-            reserved=spec.reserved,
+            reserved=resolved_reserved,
             extra1=extra1,
             extra2=extra2,
             operation=resolved_operation,
@@ -466,11 +516,13 @@ def build_command(profile: CameraProfile, args: argparse.Namespace) -> tuple[str
     spec = profile.require_command("recording_format")
     resolved_data_type = resolve_data_type(spec, args)
     resolved_operation = resolve_operation(args)
+    resolved_reserved = resolve_reserved(spec, args)
     resolution = profile.require_resolution(args.resolution)
     fps = profile.require_fps_mode(args.fps)
     sensor = profile.require_fps_mode(args.sensor_fps) if args.sensor_fps else fps
     label = f"recording_format {args.resolution} {args.fps}"
     label += _data_type_override_suffix(resolved_data_type, spec, args)
+    label += _reserved_override_suffix(resolved_reserved, spec, args)
     label += _operation_override_suffix(resolved_operation, args)
     return label, encode_recording_format(
         category=spec.category,
@@ -481,7 +533,7 @@ def build_command(profile: CameraProfile, args: argparse.Namespace) -> tuple[str
         width=resolution.width,
         height=resolution.height,
         frame_flags=fps.frame_flags,
-        reserved=spec.reserved,
+        reserved=resolved_reserved,
         operation=resolved_operation,
     )
 
@@ -618,6 +670,16 @@ def parse_args() -> argparse.Namespace:
             "discrepancy (see the module docstring's DATA_TYPE OVERRIDE section, "
             "docs/settings.md §3/§4/§16), e.g. --data-type INT16 to try 0x02 instead "
             "of the claimed write byte 0x82. Default: unset, profile's value unchanged."
+        ),
+    )
+    parser.add_argument(
+        "--reserved",
+        type=lambda s: int(s, 0),
+        help=(
+            "Override the header reserved byte (accepts 0x.. hex or decimal). Default: unset, "
+            "uses the profile block's own value. Vary this first when a CANDIDATE block's write "
+            "gets no response — it is the least-evidenced field in a passively-seeded block, "
+            "since a camera's own reports need not use the value a write requires."
         ),
     )
     parser.add_argument(

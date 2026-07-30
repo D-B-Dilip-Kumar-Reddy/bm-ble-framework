@@ -2189,3 +2189,65 @@ re-reported during the settings burst; the second is the actual change. The
 settled value is the last one in the window, not the first — the same
 stale-state hazard that produced a false positive in `sweep_dimension_enum.py`
 (`docs/photo_capture.md` §10.5), here appearing in a passive capture instead.
+
+### 18.6 Bootstrapping step 10: `video_format` and `fps_modes` had to be seeded
+
+Step 10's first command failed outright:
+
+```
+ValueError: Profile POCKET_6K_G2_v8.6 has no 'video_format' command block
+```
+
+That is the loader working correctly, but it exposes a **bootstrap
+circularity**: `send_settings_command.py` must *build* a `video_format` packet
+before it can probe a `dimension_enum`, yet `video_format` is precisely the
+family that never appears in a passive capture — on any camera tried, and
+reconfirmed here (§18.3). There is nothing to seed it from, so step 10 is
+unreachable until the block exists. `POCKET_6K_PRO v8.6` hit exactly this and
+was unblocked the same way (§15's bring-up).
+
+Two blocks were therefore added to the profile **as explicit CANDIDATE
+hypotheses**, both of which the probe they unblock will confirm or refute:
+
+1. **`commands.video_format`** — category `1` / parameter `0`, the officially
+   documented FORMAT packet coordinates (`docs/protocol.md`), made plausible
+   for this firmware by `codec_quality` and `recording_format` both matching
+   v7.9's coordinates exactly on v8.6's *own* captures. `reserved` is the
+   weakest field: `0x01` is what v7.9's and the PRO's working writes used, but
+   v8.6's recording family accepts both bytes and every v8.6 report carries
+   `0x00`.
+2. **`fps_modes`, partially** — `23.98`, `24`, `30` only. `fps_int` and
+   `frame_flags` came straight off v8.6's own `0x01/0x09` reports; `m_rate` is
+   the single inferred field per entry, since it is a `video_format` element
+   and so unobservable until this probe runs. The inference is grounded in this
+   firmware's own wire rather than another profile: the windowed bit is
+   `0x0010`, so 23.98's extra `0x0003` is the NTSC/drop indicator → `m_rate=1`
+   there, `0` for the two exact rates. The other five modes stay absent.
+
+**New flag: `--reserved`.** The reserved byte was the one axis
+`send_settings_command.py` could not vary without editing a profile, and it is
+the least-evidenced field in any passively-seeded block — a camera's own
+reports need not carry the value a *write* requires, which is exactly the trap
+`recording_format`'s `0x02`-vs-`0x82` discrepancy (§3) already represents on
+the data-type axis. It joins `--data-type`, `--operation`,
+`--video-format-extra` and `--raw-payload` as a discovery-grade override,
+records itself in the send's label, and defaults to the profile's own value so
+every earlier invocation stays byte-identical.
+
+So the corrected step 10 command is unchanged from the workflow's, and the
+first thing to vary on a silent probe is now a flag rather than a profile edit:
+
+```
+python tools/control/send_settings_command.py --model-key POCKET_6K_G2 --firmware v8.6 \
+    --packet video_format --fps 24 --dimension-enum 0x08
+    # → TX FF 09 00 01 01 00 01 00 18 00 08 00 00
+
+# no response? vary the least-evidenced byte first, without touching the profile
+python tools/control/send_settings_command.py --model-key POCKET_6K_G2 --firmware v8.6 \
+    --packet video_format --fps 24 --dimension-enum 0x08 --reserved 0x00
+```
+
+Expect `video_format`'s own channel (`0x01`/`0x00`) to stay silent — judge the
+probe by the `0x01/0x09` mode-notify report's width/height, exactly as §7 and
+§15 did. `sweep_dimension_enum.py` decodes that automatically and is the better
+tool once more than a couple of candidates are in play.
