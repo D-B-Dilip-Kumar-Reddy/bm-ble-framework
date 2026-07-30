@@ -748,12 +748,13 @@ def test_pocket_6k_g2_v86_profile_resolves_dimension_enums():
 
     HD's width/height came from this same sweep (its enum 0x03 report), not a
     separate passive re-capture — step 9's own HD window had caught the
-    connect burst instead. commands.video_format stays CANDIDATE, not
-    VERIFIED: promotion needs the full CameraSession round trip (step 13),
-    not yet run on this firmware."""
+    connect burst instead. commands.video_format is now VERIFIED: a
+    480-combination CameraSession.set_camera_format() sweep (step 13,
+    docs/settings.md §18.10) confirmed 432 combinations end to end, on top
+    of two manual send_settings_command.py round trips."""
     profile = CameraProfile.for_model("POCKET_6K_G2", "v8.6")
 
-    assert profile.require_command("video_format").provenance.status == "CANDIDATE"
+    assert profile.require_command("video_format").provenance.status == "VERIFIED"
 
     hd = profile.require_resolution("HD")
     assert (hd.width, hd.height) == (1920, 1080)
@@ -784,6 +785,38 @@ def test_pocket_6k_g2_v86_profile_resolves_dimension_enums():
     # "30" was independently reconfirmed byte-identical across two separate
     # sniffer sessions (step 9's combined sweep and the dedicated fps sweep).
     assert profile.require_fps_mode("30").fps_int == 30
+
+
+def test_pocket_6k_g2_v86_settings_families_promoted_to_verified():
+    """Phase 3 steps 12/13 (2026-07-30, docs/settings.md §18.10): nine manual
+    send_settings_command.py confirming writes plus a 480-combination
+    sweep_camera_format.py sweep (432 confirmed) promoted all three settings
+    families to VERIFIED — exceeding the single-round-trip bar
+    (examples/change_codec.py) that promoted v7.9's equivalents.
+
+    The sweep also surfaced two systematic gaps that mirror precedents already
+    recorded on other profiles (POCKET_6K_PRO v8.6's ProRes/4K DCI
+    known_unreachable and 6K max_fps_int=50, docs/settings.md §16/§17) — but
+    design principle 7's evidence bar (full hypothesis exhaustion for
+    known_unreachable; an operator on-screen check for max_fps_int) has not
+    been met on this firmware yet, so neither guarded field is written here.
+    These assertions pin down that "not yet promoted" state so a future
+    change doesn't silently write one without meeting the bar."""
+    profile = CameraProfile.for_model("POCKET_6K_G2", "v8.6")
+
+    for name in ("codec_quality", "video_format", "recording_format"):
+        spec = profile.require_command(name)
+        assert spec.provenance is not None
+        assert spec.provenance.status == "VERIFIED"
+
+    # ProRes/4K DCI: strongly evidenced by the sweep (32/32 unconfirmed) and
+    # three manual retarget attempts, but not yet a known_unreachable entry.
+    assert profile.require_resolution("4K DCI").known_unreachable == {}
+
+    # BRAW@6K@59.94/60fps: strongly evidenced by the sweep (16/16
+    # unconfirmed), but not yet a max_fps_int entry — no operator on-screen
+    # confirmation has been done for this firmware (unlike the PRO's).
+    assert profile.require_resolution("6K").max_fps_int is None
 
 
 def test_pocket_6k_g2_reserved_byte_differs_between_firmwares():
