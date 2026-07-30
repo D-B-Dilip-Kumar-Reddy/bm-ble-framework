@@ -282,6 +282,32 @@ documents its spec meaning as "add the payload to the current value," so sending
 *absolute* target as an `OFFSET` isn't a faithful test of that semantics. See
 `--raw-payload` below for the delta-payload test this motivates.
 
+**`--reserved BYTE` — vary the least-evidenced field in a CANDIDATE block.**
+Added 2026-07-30 (`docs/settings.md` §18.6). Packet header byte 3 was the one axis
+this tool could not change without editing a profile. It deserves a flag because it
+is the *least*-evidenced field in any block seeded from a passive capture: a camera's
+own REPORT packets need not carry the value a **write** requires — the same trap
+`recording_format`'s `0x02`-vs-`0x82` discrepancy already represents on the data-type
+axis (`docs/settings.md` §3).
+
+That is not hypothetical. On `POCKET_6K_G2 v8.6` the recording family accepts **both**
+`0x00` and `0x01` (`docs/recording.md`), every report on that firmware carries `0x00`,
+and v7.9's working writes used `0x01` — three different answers for one byte. So when
+a CANDIDATE block's write draws no response, this is the first thing to vary, before
+doubting the payload values:
+
+```
+python tools/control/send_settings_command.py \
+    --model-key POCKET_6K_G2 --firmware v8.6 \
+    --packet video_format --fps 24 --dimension-enum 0x08 --reserved 0x00
+```
+
+Accepts `0x..` hex or decimal, applies to all three packet families, composes with
+every other override, and records itself in the send's label
+(`reserved=0x00(override; profile default 0x01)`) so a later reviewer can tell which
+captures used a non-profile byte. Default: unset, uses the profile block's own value,
+so every invocation predating this flag is byte-for-byte unchanged.
+
 **`--raw-payload VALUE [VALUE ...]` — send a literal payload, bypassing every
 lookup table.** Added 2026-07-24 (`docs/settings.md` §16, `docs/protocol.md` §4).
 Every override above still builds most of the payload from `--resolution`/`--codec`/
