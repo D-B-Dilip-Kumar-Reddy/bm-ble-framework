@@ -1,6 +1,6 @@
 # Payload Profiles — structure, schema, and provenance
 
-**Status:** implemented — schema-validated profiles + `CommandSpec` are live. `storage` has its first entry (a CANDIDATE signal, `StorageSignalSpec`); the settings lookup tables (`codecs`/`resolutions`/`fps_modes`) are populated on `POCKET_6K_G2 v7.9` and `POCKET_6K_PRO v8.6`, and partially on `POCKET_6K_G2 v8.6` — `codecs`, most of `resolutions`, and `fps_modes` (7 of 8; `60` is an open candidate-ceiling finding, not yet confirmed on the body UI), with every `dimension_enum` still outstanding (see `docs/settings.md` §18/§18.7); `capabilities` remains reserved and unpopulated.
+**Status:** implemented — schema-validated profiles + `CommandSpec` are live. `storage` has its first entry (a CANDIDATE signal, `StorageSignalSpec`); the settings lookup tables (`codecs`/`resolutions`/`fps_modes`) are populated on `POCKET_6K_G2 v7.9` and `POCKET_6K_PRO v8.6`, and partially on `POCKET_6K_G2 v8.6` — `codecs`, most of `resolutions`, and `fps_modes` (complete at 8/8, after a candidate ceiling at `60` was raised and then retracted on retest), with every `dimension_enum` still outstanding (see `docs/settings.md` §18/§18.7/§18.8); `capabilities` remains reserved and unpopulated.
 
 ## Overview
 
@@ -432,6 +432,14 @@ Worth remembering for any future sweep tool: an `unconfirmed` result is
 evidence about *this run*, not automatically evidence about the camera —
 check whether the tooling's own timing assumptions could explain it before
 trusting it as a `known_unreachable`/`max_fps_int` candidate.
+
+The same lesson repeated on `POCKET_6K_G2 v8.6`, this time for a passive
+sniffer window rather than an active sweep's echo timeout: `docs/settings.md`
+§18.7 recorded `fps_60` as a candidate ceiling after it produced no report
+across two sweeps, and §18.8 retracted that finding after three follow-up
+retries reported it cleanly twice. No `max_fps_int` was ever written for it —
+this profile's own convention held — but the near-miss is the point: two
+silent windows felt like enough evidence, and weren't.
 
 ---
 

@@ -2302,3 +2302,57 @@ menu navigation could be the gap rather than the camera's capability. Before
 writing a `max_fps_int` entry: check whether `60` even appears in the body's
 fps menu at this resolution, and retry at another resolution to see whether
 the silence travels with it.
+
+### 18.8 Retraction: `fps_60` is reachable — §18.7's ceiling finding was wrong
+
+Three follow-up standalone `sniffer_settings.py` runs, each a single
+`fps_60` action in its own connect/disconnect session, refute §18.7's
+candidate-ceiling finding directly:
+
+| Attempt | Context | Window span | Result |
+|---|---|---|---|
+| 1 (§18.3, step 9's combined sweep) | preceded by `fps_59.94` | 3.9s | silent |
+| 2 (§18.7, dedicated fps sweep) | preceded by `fps_59.94` | — | silent |
+| 3 (this run, standalone A) | isolated invocation | 3.2s | **`0x01/0x09` report** |
+| 4 (this run, standalone B) | immediately after A | 1.5s | silent |
+| 5 (this run, standalone C) | immediately after B | 4.7s | **`0x01/0x09` report** |
+
+Attempts 3 and 5 decoded to the byte-identical payload
+`3C 00 3C 00 40 0B E8 05 10 00` — `fps_int=60`, `sensor_fps=60`,
+`width=2880`, `height=1512`, `flags=0x0010`. `0x0010` is the plain
+windowed-sensor bit with no NTSC/drop addition, exactly the pattern every
+other exact rate in §18.7 follows. This is not an ambiguous or partial
+report — it is the expected value, confirmed twice.
+
+**§18.7's conclusion is retracted.** A candidate ceiling means the camera
+cannot reach a state at all; this camera demonstrably reached and reported
+`60fps` at `2.8K 17:9` `BRAW` on two separate occasions. `fps_modes.60` is
+now in the profile (`fps_int=60`, `m_rate=0`, `frame_flags=16`), completing
+the table at 8/8.
+
+**What the silences are is left open, deliberately.** Two candidate
+explanations were checked, and neither is fully satisfying on its own:
+
+- *Short capture window.* Attempt 4's window (1.5s) is markedly shorter than
+  every window where a report landed (3.2–4.7s) — consistent with the
+  operator pressing Enter to close the window before a slow-to-arrive report
+  could land. But attempt 1's window was 3.9s, comparable to the successful
+  attempts, and still silent — so window length alone doesn't explain every
+  instance.
+- *Redundant-write report suppression.* `codec_quality` is already
+  established (§11) to go silent on a write that doesn't change camera
+  state; if `recording_format`'s report follows the same rule, attempt 4
+  (immediately following attempt 3's already-`60fps` state) would be a
+  genuine no-op. This doesn't explain attempt 1 either, though — it followed
+  a *different* fps (`59.94`), a real transition by any reading of the
+  payload.
+
+Neither hypothesis is asserted as the answer. What matters for the profile
+is the positive result: the camera reaches this state and reports it
+correctly when it does. Recording an absence as a "candidate ceiling" without
+first exhausting retries — exactly the lesson `docs/payload_profiles.md`'s
+`max_fps_int` section already states in the abstract ("an `unconfirmed`
+outcome is evidence about that run's timing, not automatically evidence
+about the camera") — is the mistake §18.7 made in the concrete. Three retries
+were what it took to catch the exception; a single silent window, even a
+long one, is not enough to write a ceiling.
