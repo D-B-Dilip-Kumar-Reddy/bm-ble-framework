@@ -542,6 +542,12 @@ values are themselves confirmed by the 2026-07-20 `dimension_enum` sweep,
 | 3.7K Anamorphic | 3728×3104 | `"3.7K Anamorphic"` |
 | 2.8K 17:9 | 2868×1512 | `"2.8K 17:9"` |
 
+⚠️ The `2.8K 17:9` row's `2868` is now disputed — both sniffed v8.6 profiles
+report `2880` at that label (`docs/settings.md` §18.1). That weakens this row
+specifically, since the operator's figure and the v7.9 profile may trace to
+the same source rather than being independent; the other five rows are
+unaffected.
+
 A clean 6-for-6 match is a strong, independent cross-check on that table
 even though it comes from a completely different evidence channel (camera
 output behavior, not a BLE write/report) — worth recording precisely
