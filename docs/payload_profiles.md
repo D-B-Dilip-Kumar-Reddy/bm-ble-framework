@@ -1,6 +1,6 @@
 # Payload Profiles — structure, schema, and provenance
 
-**Status:** implemented — schema-validated profiles + `CommandSpec` are live. `storage` has its first entry (a CANDIDATE signal, `StorageSignalSpec`); the settings lookup tables (`codecs`/`resolutions`/`fps_modes`) are populated on `POCKET_6K_G2 v7.9` and `POCKET_6K_PRO v8.6`, and partially on `POCKET_6K_G2 v8.6` — `codecs`, most of `resolutions`, and `fps_modes` (complete at 8/8, after a candidate ceiling at `60` was raised and then retracted on retest), with every `dimension_enum` still outstanding (see `docs/settings.md` §18/§18.7/§18.8); `capabilities` remains reserved and unpopulated.
+**Status:** implemented — schema-validated profiles + `CommandSpec` are live. `storage` has its first entry (a CANDIDATE signal, `StorageSignalSpec`); the settings lookup tables (`codecs`/`resolutions`/`fps_modes`) are populated on `POCKET_6K_G2 v7.9` and `POCKET_6K_PRO v8.6`, and largely on `POCKET_6K_G2 v8.6` too — `codecs`, `resolutions` (all 8, with `dimension_enums` for all 8), and `fps_modes` (complete at 8/8, after a candidate ceiling at `60` was raised and then retracted on retest) — with the ProRes/4K DCI `dimension_enum` still an open gap, same as both other profiles (see `docs/settings.md` §18/§18.7/§18.8/§18.9); `capabilities` remains reserved and unpopulated.
 
 ## Overview
 

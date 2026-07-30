@@ -737,6 +737,50 @@ def test_pocket_6k_g2_v86_profile_resolves_fps_modes():
     assert profile.require_fps_mode("59.94").fps_int == 60
     assert profile.require_fps_mode("60").fps_int == 60
 
+
+def test_pocket_6k_g2_v86_profile_resolves_dimension_enums():
+    """POCKET_6K_G2_v8.6.json's dimension_enums, from a full 0x00-0x1F active
+    sweep via tools/control/sweep_dimension_enum.py (2026-07-30, docs/settings.md
+    §18.9). All 8 confirmed enums independently match both POCKET_6K_G2_v7.9's
+    and POCKET_6K_PRO_v8.6's numbers exactly — sniffed fresh on this firmware
+    per design principle 6, not copied; the cross-profile agreement is the
+    finding these assertions pin down, not the source of the values.
+
+    HD's width/height came from this same sweep (its enum 0x03 report), not a
+    separate passive re-capture — step 9's own HD window had caught the
+    connect burst instead. commands.video_format stays CANDIDATE, not
+    VERIFIED: promotion needs the full CameraSession round trip (step 13),
+    not yet run on this firmware."""
+    profile = CameraProfile.for_model("POCKET_6K_G2", "v8.6")
+
+    assert profile.require_command("video_format").provenance.status == "CANDIDATE"
+
+    hd = profile.require_resolution("HD")
+    assert (hd.width, hd.height) == (1920, 1080)
+    assert hd.dimension_enums == {"ProRes": 3}
+
+    expected_enums = {
+        "HD": {"ProRes": 3},
+        "UHD": {"ProRes": 6},
+        "4K DCI": {"BRAW": 8},  # ProRes enum still missing, same gap as v7.9/PRO
+        "2.8K 17:9": {"BRAW": 13},
+        "3.7K Anamorphic": {"BRAW": 15},
+        "5.7K 17:9": {"BRAW": 18},
+        "6K": {"BRAW": 19},
+        "6K 2.4:1": {"BRAW": 20},
+    }
+    for name, enums in expected_enums.items():
+        assert profile.require_resolution(name).dimension_enums == enums
+
+    # 2.8K 17:9's width is settled for this firmware — sniffed, actively
+    # probed, and confirmed on the camera's own on-screen display.
+    assert profile.require_resolution("2.8K 17:9").width == 2880
+
+    # 4K DCI is not (yet) known_unreachable here — the enum-sweep gap alone
+    # isn't sufficient; v7.9's and the PRO's write-value investigations
+    # haven't been repeated on this firmware.
+    assert profile.require_resolution("4K DCI").known_unreachable == {}
+
     # "30" was independently reconfirmed byte-identical across two separate
     # sniffer sessions (step 9's combined sweep and the dedicated fps sweep).
     assert profile.require_fps_mode("30").fps_int == 30

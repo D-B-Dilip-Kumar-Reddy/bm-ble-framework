@@ -5,7 +5,7 @@
     "firmware": "v8.6",
     "ble_name": "A:AF3DC814",
     "status": "UNVERIFIED",
-    "_comment": "Phase 1 complete on real hardware 2026-07-28 (transport sanity — scan, connect, GATT, GAP/device-info reads, notification stream). Phase 2 complete 2026-07-29: commands.recording is VERIFIED via a 3/3 CameraSession round trip (see that block's provenance). ble_name re-confirmed by examples/scan_camera.py on v8.6 rather than inherited: the physical unit (BLE address CC:86:EC:72:E0:A6) is the same one upgraded from v7.9 on 2026-07-27, and the advertisement name identifies the hardware, not the firmware. Phase 3 in progress 2026-07-30: the passive settings sweep (step 9) populated `codecs`, most of `resolutions`, and the report-side coordinates of commands.codec_quality and commands.recording_format — all CANDIDATE, no write yet sent on this firmware. commands.video_format and a partial fps_modes (23.98/24/30) were then added as explicit CANDIDATE hypotheses to unblock step 10, which cannot build a probe packet without them — see docs/settings.md 18.6 and those blocks' own provenance. A follow-up dedicated fps sweep (2026-07-30) filled in 25/29.97/50/59.94 and reconfirmed 30 byte-identically across two independent sessions; 60fps initially looked like a candidate ceiling (silent twice) but three follow-up standalone attempts the same day reported it cleanly twice (byte-identical, matching the exact-rate flags pattern) — the ceiling hypothesis is retracted, fps_modes is now 8/8, and the earlier silences are recorded as an open report-observability question, not a camera limitation (docs/settings.md 18.7/18.8). Still outstanding for Phase 3: every dimension_enum (step 10, active) and HD's width/height, plus a confirming write for all three settings families (step 12). _meta.status stays UNVERIFIED because it describes the WHOLE profile; each command block carries its own provenance.status — recording's is already VERIFIED."
+    "_comment": "Phase 1 complete on real hardware 2026-07-28 (transport sanity — scan, connect, GATT, GAP/device-info reads, notification stream). Phase 2 complete 2026-07-29: commands.recording is VERIFIED via a 3/3 CameraSession round trip (see that block's provenance). ble_name re-confirmed by examples/scan_camera.py on v8.6 rather than inherited: the physical unit (BLE address CC:86:EC:72:E0:A6) is the same one upgraded from v7.9 on 2026-07-27, and the advertisement name identifies the hardware, not the firmware. Phase 3 in progress 2026-07-30: the passive settings sweep (step 9) populated `codecs`, most of `resolutions`, and the report-side coordinates of commands.codec_quality and commands.recording_format — all CANDIDATE, no write yet sent on this firmware. commands.video_format and a partial fps_modes (23.98/24/30) were then added as explicit CANDIDATE hypotheses to unblock step 10, which cannot build a probe packet without them — see docs/settings.md 18.6 and those blocks' own provenance. A follow-up dedicated fps sweep (2026-07-30) filled in 25/29.97/50/59.94 and reconfirmed 30 byte-identically across two independent sessions; 60fps initially looked like a candidate ceiling (silent twice) but three follow-up standalone attempts the same day reported it cleanly twice (byte-identical, matching the exact-rate flags pattern) — the ceiling hypothesis is retracted, fps_modes is now 8/8, and the earlier silences are recorded as an open report-observability question, not a camera limitation (docs/settings.md 18.7/18.8). Step 10's full 0x00-0x1F dimension_enum sweep (2026-07-30) then confirmed all 8 enums this camera family is known to have — matching both POCKET_6K_G2_v7.9's and POCKET_6K_PRO_v8.6's numbers exactly — and supplied HD's width/height, which step 9's passive capture had missed. commands.video_format is promoted from a bare hypothesis to a coordinates-confirmed CANDIDATE as a result. Still outstanding for Phase 3: the ProRes/4K DCI enum gap (same open question as both other profiles, not yet investigated to their depth on this firmware), a confirming write for all three settings families (step 12), and the full CameraSession round trip (step 13) needed to promote codec_quality/video_format/recording_format to VERIFIED. _meta.status stays UNVERIFIED because it describes the WHOLE profile; each command block carries its own provenance.status — recording's is already VERIFIED."
   },
   "ble": {
     "incoming_property": "indicate",
@@ -91,10 +91,12 @@
       "reserved": 1,
       "provenance": {
         "status": "CANDIDATE",
-        "method": "explicit hypothesis block, added to unblock Phase 3 step 10 — NOT sniffed on this firmware and not confirmed by any write yet",
-        "capture_refs": [],
-        "verified_on": "",
-        "notes": "WHY THIS EXISTS AS A HYPOTHESIS: video_format never appears in a passive capture on any camera tried so far (POCKET_6K_G2 v7.9 docs/settings.md 7, POCKET_6K_PRO v8.6 15, and reconfirmed on this firmware by the 2026-07-30 sweep, 18.3) — there is nothing to seed it from. But send_settings_command.py must be able to BUILD a video_format packet before it can probe a dimension_enum, so step 10 is unreachable without a block. Same bootstrap the PRO needed (commit 'Unblock POCKET_6K_PRO video_format dimension_enum probing'). The coordinates are the officially documented FORMAT packet ones (category 1 / parameter 0, docs/protocol.md), and are made plausible for THIS firmware by codec_quality and recording_format both matching v7.9's coordinates exactly on v8.6's own captures. RESERVED IS THE WEAKEST FIELD HERE: 0x01 is what v7.9's and the PRO's working writes used for this family, but v8.6's recording family turned out to accept both 0x00 and 0x01 (commands.recording.provenance), and every v8.6 report seen so far carries 0x00. If a probe gets no response, vary this byte FIRST via send_settings_command.py --reserved 0x00 rather than editing this block. Nothing here is confirmed until an active send produces a real transition on the 0x01/0x09 mode-notify channel — video_format's own channel is not expected to echo at all."
+        "method": "active send (tools/control/sweep_dimension_enum.py, full 0x00-0x1F sweep, --fps 24, 2026-07-30). Coordinates and reserved byte now confirmed working, not just a hypothesis: 8 of 32 candidates produced genuine, repeatable resolution transitions on the recording_format (0x01/0x09) mode-notify channel, none flagged STALE MATCH by the tool's own repeat-check guard. video_format's own channel (0x01/0x00) still never echoes, matching every other camera tried.",
+        "capture_refs": [
+          "tools/captures/POCKET_6K_G2_v8.6/ sweep_dimension_enum.py run, 2026-07-30 (exact filename not provided to this session — only the printed '=== Sweep summary ===' table was; the tool calls save_capture unconditionally, so a capture JSON exists on disk even though its path is not recorded here)"
+        ],
+        "verified_on": "2026-07-30",
+        "notes": "RESOLVES THE 'WEAKEST FIELD' CONCERN THIS BLOCK ORIGINALLY FLAGGED: sweep_dimension_enum.py always encodes with reserved=spec.reserved (no override path in that tool — confirmed by reading its source, not inferred from the summary alone), so all 32 sends in this run used reserved=0x01, the value already in this block. 8 clean matches at that reserved byte is real confirmation it works, not just a surviving hypothesis. THE 8 CONFIRMED ENUMS MATCH BOTH POCKET_6K_G2_v7.9's AND POCKET_6K_PRO_v8.6's NUMBERS EXACTLY: 0x03 HD, 0x06 UHD, 0x08 4K DCI/BRAW, 0x0D 2.8K 17:9/BRAW, 0x0F 3.7K Anamorphic/BRAW, 0x12 5.7K 17:9/BRAW, 0x13 6K/BRAW, 0x14 6K 2.4:1/BRAW — independently sniffed on this firmware's own wire (design principle 6), not copied; the cross-profile agreement is a finding, not the source. Same known gap as both other profiles: no ProRes/4K DCI enum found anywhere in the exhausted 0x00-0x1F range — NOT yet promoted to resolutions.'4K DCI'.known_unreachable.ProRes on this profile, since (unlike the PRO) the write-value hypothesis space (data_type byte, Operation, the two-step video_format-then-recording_format proxy that works on v7.9) hasn't been tried here yet; that investigation is Phase 3's next open item, not this sweep's job. Each matched enum also reset codec_quality to a per-codec-family default (ProRes->HQ, BRAW->5:1), reconfirming on this firmware the already-established mechanism (docs/settings.md) where a codec-family switch via video_format resets/restores quality rather than codec_quality itself switching families. STATUS IS STILL CANDIDATE, NOT VERIFIED: promotion needs the full CameraSession round trip (examples/change_codec.py, Phase 3 step 13), not yet run on v8.6."
       }
     }
   },
@@ -124,27 +126,46 @@
     }
   },
   "resolutions": {
-    "_comment": "Widths/heights sniffed on v8.6 2026-07-30 from 0x01/0x09 reports, one capture window per concrete resolution; provenance rides with commands.recording_format. NO dimension_enums YET: video_format (0x01/0x00) never reported passively on this firmware either, exactly as on the G2 v7.9 — every enum must be probed actively (Phase 3 step 10, tools/control/send_settings_command.py --packet video_format --dimension-enum, or sweep_dimension_enum.py). Until then set_camera_format cannot reach any of these. HD IS MISSING ON PURPOSE: its capture window (res_prores_hd) was the first window of its run and caught the post-connect initial-payload burst instead of the resolution report, so no width/height was observed — re-capture rather than assume 1920x1080. The `codecs` list per entry records which codec family the operator reached that resolution under on the camera's own menus. Note 2.8K 17:9 is 2880 wide here, matching the sniffed POCKET_6K_PRO v8.6 profile. The v7.9 profile records 2868 for the same label; which is right for that firmware is unresolved and unfalsifiable now (it can no longer be re-tested) — see docs/settings.md 18.1. Do not reconcile the two profiles by editing either value.",
+    "_comment": "Widths/heights sniffed on v8.6 2026-07-30 from 0x01/0x09 reports (step 9, passive); dimension_enums added 2026-07-30 from a full 0x00-0x1F active sweep (step 10, tools/control/sweep_dimension_enum.py --fps 24) — see commands.video_format's provenance for the sweep's full evidentiary detail. All 8 confirmed enums match both POCKET_6K_G2_v7.9's and POCKET_6K_PRO_v8.6's numbers exactly, independently sniffed here rather than copied (design principle 6). HD's width/height came from this same sweep: its own passive capture window (step 9) had caught the post-connect burst instead of a report, so this profile went without HD until the active probe supplied it directly via the 0x01/0x09 transition at enum 0x03. No ProRes/4K DCI enum found anywhere in the exhausted range — the same known gap already documented on both other profiles — but NOT yet promoted to known_unreachable here; that needs the fuller write-value investigation (data_type, Operation, the two-step proxy) neither of those profiles' gap-closing work has been repeated on this firmware yet. The `codecs` list per entry records which codec family the operator reached that resolution under on the camera's own menus. 2.8K 17:9's width (2880) is now confirmed three ways on this firmware: the step 9 passive capture, this step 10 active probe, and a direct visual check of the camera's own on-screen display (operator-confirmed, 2026-07-30) — no ambiguity remains for v8.6. The v7.9 profile still records 2868 for the same label; whether that was ever accurate for v7.9 specifically remains unresolved and unfalsifiable now that camera can no longer be re-tested (see docs/settings.md 18.1). Do not reconcile the two profiles by editing either value — the discrepancy is about v7.9's own history, not about v8.6's number, which is settled.",
+    "HD": {
+      "width": 1920,
+      "height": 1080,
+      "codecs": [
+        "ProRes"
+      ],
+      "dimension_enums": {
+        "ProRes": 3
+      }
+    },
     "6K": {
       "width": 6144,
       "height": 3456,
       "codecs": [
         "BRAW"
-      ]
+      ],
+      "dimension_enums": {
+        "BRAW": 19
+      }
     },
     "6K 2.4:1": {
       "width": 6144,
       "height": 2560,
       "codecs": [
         "BRAW"
-      ]
+      ],
+      "dimension_enums": {
+        "BRAW": 20
+      }
     },
     "5.7K 17:9": {
       "width": 5744,
       "height": 3024,
       "codecs": [
         "BRAW"
-      ]
+      ],
+      "dimension_enums": {
+        "BRAW": 18
+      }
     },
     "4K DCI": {
       "width": 4096,
@@ -152,28 +173,40 @@
       "codecs": [
         "BRAW",
         "ProRes"
-      ]
+      ],
+      "dimension_enums": {
+        "BRAW": 8
+      }
     },
     "3.7K Anamorphic": {
       "width": 3728,
       "height": 3104,
       "codecs": [
         "BRAW"
-      ]
+      ],
+      "dimension_enums": {
+        "BRAW": 15
+      }
     },
     "2.8K 17:9": {
       "width": 2880,
       "height": 1512,
       "codecs": [
         "BRAW"
-      ]
+      ],
+      "dimension_enums": {
+        "BRAW": 13
+      }
     },
     "UHD": {
       "width": 3840,
       "height": 2160,
       "codecs": [
         "ProRes"
-      ]
+      ],
+      "dimension_enums": {
+        "ProRes": 6
+      }
     }
   },
   "fps_modes": {

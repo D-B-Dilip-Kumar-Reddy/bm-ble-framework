@@ -2132,6 +2132,17 @@ longer be re-tested (see the registry), so the 2868 reading is now
 unfalsifiable. Both sniffed v8.6 profiles agree on 2880 and that is what they
 record.
 
+**Update (2026-07-30): settled for v8.6, still open for v7.9.** The operator
+directly confirmed `2880` on the camera's own on-screen display at `2.8K
+17:9`, on the same physical unit now running v8.6. That is a third,
+independent confirmation channel for this firmware's value — passive capture
+(above), active `dimension_enum` probe (§18.9), and now direct visual
+read — so there is no remaining ambiguity about what v8.6 reports and
+displays. It does not, and cannot, retroactively prove what v7.9 showed:
+the discrepancy this section opened with is about that frozen profile's own
+history, not about v8.6's number. `POCKET_6K_G2_v7.9.json` still records
+`2868` and stays that way.
+
 ### 18.2 The flags element is not purely fps-derived — reconfirmed
 
 At a constant `fps_int=24`, element 5 read `0x0000` at `6K` and `UHD` but
@@ -2356,3 +2367,75 @@ outcome is evidence about that run's timing, not automatically evidence
 about the camera") — is the mistake §18.7 made in the concrete. Three retries
 were what it took to catch the exception; a single silent window, even a
 long one, is not enough to write a ceiling.
+
+### 18.9 Step 10: the full `dimension_enum` sweep, and `video_format`'s promotion
+
+A full `0x00`–`0x1F` sweep via `tools/control/sweep_dimension_enum.py --fps 24`
+against the `commands.video_format` hypothesis block §18.6 seeded — the first
+real test of that block, not just a bootstrap placeholder.
+
+**8 of 32 candidates matched, none flagged `STALE MATCH`** by the tool's own
+repeat-check guard (the same guard added after the PRO's stale-state false
+positive, `docs/photo_capture.md` §10.5):
+
+| `dimension_enum` | Resolution | Codec/variant | `flags` |
+|---|---|---|---|
+| `0x03` | HD | ProRes/HQ | `0x0010` |
+| `0x06` | UHD | ProRes/HQ | `0x0010` |
+| `0x08` | 4K DCI | BRAW/5:1 | `0x0010` |
+| `0x0D` | 2.8K 17:9 | BRAW/5:1 | `0x0010` |
+| `0x0F` | 3.7K Anamorphic | BRAW/5:1 | `0x0010` |
+| `0x12` | 5.7K 17:9 | BRAW/5:1 | `0x0010` |
+| `0x13` | 6K | BRAW/5:1 | **`0x0000`** |
+| `0x14` | 6K 2.4:1 | BRAW/5:1 | `0x0010` |
+
+**Every number matches both other profiles exactly.** `POCKET_6K_G2 v7.9`
+(§2.2) and `POCKET_6K_PRO v8.6` (§15) already agreed with each other on all
+eight; this sweep independently sniffed the identical set on a third
+(model, firmware) combination — the same physical unit, different firmware
+from the first agreement, different hardware from the second. Per design
+principle 6 this is not a copy — nothing here was written into the profile
+before this sweep ran — but the cross-profile consistency is itself now a
+three-way-confirmed finding, not a two-way one.
+
+`0x13` (6K, full sensor) reading `flags=0x0000` against every windowed
+resolution's `0x0010` is the fourth independent confirmation of the
+windowed-sensor bit on this camera alone (passive: §18.2's fps sweep at a
+fixed resolution; now active: this enum sweep across resolutions at a fixed
+fps) — the two axes cross-check each other.
+
+**`reserved` is no longer the weakest field in `commands.video_format`.**
+`sweep_dimension_enum.py` has no `--reserved` override — reading the tool's
+source confirms it always encodes with `reserved=spec.reserved` — so all 32
+sends in this run used the profile's `reserved=0x01`. Eight clean, non-stale
+matches at that value is a real confirmation, not merely a surviving
+hypothesis. `commands.video_format.provenance.status` stays `CANDIDATE`
+(promotion to `VERIFIED` needs the full `CameraSession` round trip, step 13,
+not yet run on v8.6) but its `method`/`notes` now describe confirmed
+coordinates rather than an untested bootstrap block — mirroring exactly how
+the PRO's `video_format` block was written up after its own first successful
+sweep (§15).
+
+**A free side effect, also cross-confirming an existing finding:** every
+matched enum reset `codec_quality` to a per-codec-family default — `HQ` for
+ProRes, `5:1` for BRAW — reconfirming on this firmware's own wire the
+already-established mechanism (§10, and the `codec_quality` command block's
+own notes) where a codec-family switch via `video_format` resets/restores
+quality rather than `codec_quality` itself switching families.
+
+**HD's width/height, missing since §18.3, came from this sweep instead of a
+re-capture.** `0x03`'s `0x01/0x09` transition reported `1920×1080` directly —
+one probe closed two gaps at once (the enum and the previously-missing
+dimension), which is why the profile's `resolutions.HD` entry cites this
+sweep as its source rather than a dedicated passive re-run.
+
+**What this sweep does not settle:** no ProRes/4K DCI enum turned up
+anywhere in the exhausted range — the same gap already documented on both
+other profiles. It is **not** promoted to
+`resolutions."4K DCI".known_unreachable.ProRes` here. That designation on the
+PRO's profile followed an exhausted write-value hypothesis space — data type,
+`Operation`, the two-step `video_format`-then-`recording_format` proxy that
+works on v7.9 — none of which has been tried on this firmware yet. An
+enum-sweep gap alone is where v7.9's own investigation started, not where it
+ended (§7–§9); treat this the same way until that further work is actually
+done here.
