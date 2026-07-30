@@ -692,6 +692,39 @@ def test_pocket_6k_g2_v86_profile_resolves_recording_command():
     assert spec.provenance.status == "VERIFIED"
 
 
+def test_pocket_6k_g2_v86_profile_resolves_fps_modes():
+    """POCKET_6K_G2_v8.6.json's fps_modes, sniffed 2026-07-30 across step 9's
+    combined sweep plus a dedicated follow-up fps sweep (docs/settings.md
+    §18/§18.7). 7 of 8 standard rates; ``60`` is deliberately absent — two
+    independent sweeps both produced no 0x01/0x09 report for it, recorded as
+    an open candidate-ceiling finding rather than a fps_modes entry (see
+    fps_modes._fps_60_comment). frame_flags follows the windowed-sensor
+    pattern confirmed in this profile's recording_format.provenance: every
+    NTSC/drop rate is 0x0013 (19), every exact rate is 0x0010 (16)."""
+    profile = CameraProfile.for_model("POCKET_6K_G2", "v8.6")
+
+    assert set(profile.fps_modes) == {"23.98", "24", "25", "29.97", "30", "50", "59.94"}
+    assert "60" not in profile.fps_modes
+
+    exact_rates = ("24", "25", "30", "50")
+    ntsc_rates = ("23.98", "29.97", "59.94")
+    for name in exact_rates:
+        assert profile.require_fps_mode(name).m_rate == 0
+        assert profile.require_fps_mode(name).frame_flags == 16
+    for name in ntsc_rates:
+        assert profile.require_fps_mode(name).m_rate == 1
+        assert profile.require_fps_mode(name).frame_flags == 19
+
+    # NTSC/drop rates report a rounded-up fps_int, not the fractional label.
+    assert profile.require_fps_mode("23.98").fps_int == 24
+    assert profile.require_fps_mode("29.97").fps_int == 30
+    assert profile.require_fps_mode("59.94").fps_int == 60
+
+    # "30" was independently reconfirmed byte-identical across two separate
+    # sniffer sessions (step 9's combined sweep and the dedicated fps sweep).
+    assert profile.require_fps_mode("30").fps_int == 30
+
+
 def test_pocket_6k_g2_reserved_byte_differs_between_firmwares():
     """Design principle 6 in one assertion: the same command family on the same
     physical camera carries a different reserved byte across a firmware

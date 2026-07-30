@@ -2251,3 +2251,54 @@ Expect `video_format`'s own channel (`0x01`/`0x00`) to stay silent — judge the
 probe by the `0x01/0x09` mode-notify report's width/height, exactly as §7 and
 §15 did. `sweep_dimension_enum.py` decodes that automatically and is the better
 tool once more than a couple of candidates are in play.
+
+### 18.7 A dedicated fps sweep, and `fps_60`'s repeated silence
+
+A follow-up `sniffer_settings.py` run, one window per fps label, re-covered
+the ground step 9's combined resolution/quality/fps sweep had left thin
+(§18.3: only 3 of 8 fps modes had produced a report there). Camera state
+throughout was `BRAW` `Q5` at `2.8K 17:9` — whatever step 9's last window
+had left it at.
+
+**Five of six new windows confirmed cleanly**, each decoded directly from its
+own `0x01/0x09` report:
+
+| Label | `fps_int` | `frame_flags` | Note |
+|---|---|---|---|
+| `25` | 25 | `0x0010` | new |
+| `29.97` | 30 | `0x0013` | new — NTSC/drop encodes as `fps_int=30` |
+| `30` | 30 | `0x0010` | **reconfirms** §18.3's original `30` entry, byte-identical, from a separate session |
+| `50` | 50 | `0x0010` | new |
+| `59.94` | 60 | `0x0013` | new — NTSC/drop encodes as `fps_int=60` |
+
+The flags pattern from §18.2 holds exactly across all seven confirmed modes
+now: every NTSC/drop rate reads `0x0013`, every exact rate reads `0x0010`,
+regardless of the numeric fps. `m_rate` is set accordingly in the profile —
+still an *inferred* field per §18.6, since it's a `video_format` element and
+unobservable until step 10 runs, but the inference now rests on seven
+mutually-consistent data points instead of two.
+
+**The sixth, `fps_60`, produced no `0x01/0x09` report — for the second time.**
+Step 9's combined sweep already missed it once; this dedicated re-run, giving
+it its own clean window with nothing else competing for it, missed it again.
+That rules out the two obvious "actually a capture accident" explanations:
+
+- **Not a burst/connect-timing accident** — `codec_quality` (`0x0A`/`0x00`)
+  reported fine in the same window (`03 01`, ambient carry-over from the prior
+  session), so the capture path itself was working; only the fps report was
+  absent.
+- **Not a single-run fluke** — two independent sessions, on different runs of
+  the tool, both produced silence for this exact label.
+
+**This is left as an open finding, not promoted to `max_fps_int`.** The shape
+matches `POCKET_6K_PRO v8.6`'s real `6K`/50fps ceiling (§17) — a resolution
+that simply doesn't offer a given fps — but that precedent was only accepted
+after the operator directly confirmed the ceiling on the camera's own body UI,
+never from wire silence alone. That confirmation hasn't happened here. Two
+things could still explain the silence other than a genuine ceiling: 60fps
+might not be offered specifically at this resolution/codec combination
+(`2.8K 17:9` `BRAW`) while being available elsewhere, or the operator's own
+menu navigation could be the gap rather than the camera's capability. Before
+writing a `max_fps_int` entry: check whether `60` even appears in the body's
+fps menu at this resolution, and retry at another resolution to see whether
+the silence travels with it.
