@@ -103,11 +103,15 @@ response via `run_send_and_capture`.
 
 Unlike `send_record_command.py` — and like `discover_command.py` — it
 **gates the write behind a typed `yes`** after printing the exact TX bytes:
-these families are CANDIDATE (transcribed from an external
-reverse-engineering document, never confirmed by this repo's tooling on any
-camera), so sending one carries discovery-grade risk, not replay-grade
-risk. It also requires explicit `--model-key`/`--firmware` with no
-defaults, for the same reason. The operator watching the camera body is
+these families started out CANDIDATE (transcribed from an external
+reverse-engineering document) on every profile, and this tool is exactly
+what promotes them per camera/firmware — `POCKET_6K_G2 v7.9` and
+`POCKET_6K_G2 v8.6` (`docs/settings.md` §18.10) have since confirmed all
+three this way, but `POCKET_6K_PRO v8.6` has not, and any newly-scaffolded
+profile starts CANDIDATE again per design principle 6 — so sending one
+still carries discovery-grade risk by default, not replay-grade risk. It
+also requires explicit `--model-key`/`--firmware` with no defaults, for the
+same reason. The operator watching the camera body is
 ground truth for what changed; the saved capture is the evidence that
 promotes (or falsifies) the profile block's provenance — see
 `docs/settings.md`'s verification runbook, including the two-run experiment
