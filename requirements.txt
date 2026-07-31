@@ -1,2 +1,3 @@
 bleak>=0.21.1           # Cross-platform BLE client
 jsonschema>=4.21        # Validates payloads/models/*.json against payloads/schema.json at load time
+aiohttp>=3.9            # Async HTTP + WebSocket client for the 8.6 REST API (see docs/rest/transport.md)

@@ -59,6 +59,7 @@ DOC_MAP: list[tuple[str, list[str]]] = [
         "tools/control/*",
         ["docs/active_camera_control.md", "docs/command_discovery.md"],
     ),
+    ("tools/rest/*", ["docs/rest/transport.md"]),
     ("payloads/schema.json", ["docs/payload_profiles.md"]),
     ("payloads/models/*", ["docs/payload_profiles.md"]),
 ]
