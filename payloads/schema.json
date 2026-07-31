@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/D-B-Dilip-Kumar-Reddy/bm-ble-framework/payloads/schema.json",
+  "$id": "https://github.com/D-B-Dilip-Kumar-Reddy/bmd-camera-control/payloads/schema.json",
   "title": "BMD BLE camera payload profile",
   "description": "Validates payloads/models/<MODEL_KEY>_<FIRMWARE>.json files at load time (camera_profile.validate_profile). Every protocol value in a profile must originate from a sniffer capture on that exact camera/firmware — see CLAUDE.md design principle 6 and docs/payload_profiles.md.",
   "type": "object",

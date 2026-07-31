@@ -1,4 +1,4 @@
-# bmd-ble-framework
+# bmd-camera-control
 
 Python package (`bmd_ble`) for automated Blackmagic Design camera control over
 Bluetooth Low Energy: record start/stop, settings changes, photo capture,
@@ -43,8 +43,8 @@ the documentation map below.
 ## Installation
 
 ```bash
-git clone https://github.com/D-B-Dilip-Kumar-Reddy/bm-ble-framework.git
-cd bm-ble-framework
+git clone https://github.com/D-B-Dilip-Kumar-Reddy/bmd-camera-control.git
+cd bmd-camera-control
 pip install -r requirements.txt        # runtime
 pip install -r requirements-dev.txt    # development (tests, lint)
 ```

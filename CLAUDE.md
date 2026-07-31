@@ -1,4 +1,4 @@
-# CLAUDE.md — bm-ble-framework
+# CLAUDE.md — bmd-camera-control
 
 ## Project Overview
 
