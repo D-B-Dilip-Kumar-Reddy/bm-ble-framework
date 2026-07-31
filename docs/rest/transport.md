@@ -40,14 +40,26 @@ profile to another without re-verifying*. A sweep's results are evidence about o
 ## The transport is USB, not LAN
 
 The camera presents a **USB Ethernet gadget** and serves the control API over it — over
-HTTPS, confirmed; possibly over plaintext HTTP as well, unconfirmed. Everything recorded
-in this doc so far was observed over a USB cable between the camera and a Windows laptop
-— not over Wi-Fi, and not over a shared network.
+HTTPS, confirmed; possibly over plaintext HTTP as well, unconfirmed.
+
+Exact conditions everything in this doc was observed under, recorded because the repo
+treats test conditions as provenance: `POCKET_6K_G2 v8.6`, connected to a Windows laptop
+by a **USB-C to USB-C cable**. Not over Wi-Fi, not over a shared network, and not through
+a hub or an A-to-C cable.
 
 That is the same channel `docs/ble/photo_capture.md` §7.3 proposed as a way out of the
 photo-verification deadlock ("`POCKET_6K_PRO v8.6` exposes an HTTP interface over USB
 where clips/photos can be browsed and played back from a PC"). This work is that TODO,
 on the interface it actually named.
+
+**Open question the cable raises:** the 6K G2 has a single USB-C expansion port, and that
+same port is what external media records to. If holding it for the network connection
+means no external drive can be mounted, then `/media/workingset` will only ever list the
+internal card slot(s) while automation is connected — which constrains every phase that
+touches storage, and would make "record to an external SSD over REST" impossible by
+construction rather than by a missing endpoint. This is not asserted here: the sweep
+answers it directly, because `/media/workingset` reports whatever devices actually exist.
+Note it when reading the first report rather than assuming either way.
 
 ### Addressing the camera
 
@@ -127,6 +139,7 @@ These questions gate the phases that follow. None of them can be answered from t
 | Is `sensorResolution` writable via `PUT /system/format`? | Whether REST solves the Sensor Area problem `docs/ble/photo_capture.md` §10 closed as unsolvable over BLE |
 | Does `/transports/0/timecode` return decimal or hex-valued BCD? | Whether `timecode.py`'s BCD decode can be reused |
 | Does the USB interface stay up across a recording, and while BLE is connected? | Whether REST recording is safe, and whether the hybrid photo path is possible |
+| Does `/media/workingset` list an external drive while the USB-C cable holds the port? | Whether storage-aware automation can ever see external media, or is confined to the internal card slot(s) whenever REST is connected |
 | Is the plaintext HTTP listener live, or is it HTTPS-only? | Whether `RestClient` must always do TLS, and whether the self-signed certificate has to be pinned or waived in production code |
 
 ---
