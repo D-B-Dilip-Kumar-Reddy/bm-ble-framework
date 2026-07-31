@@ -52,14 +52,15 @@ photo-verification deadlock ("`POCKET_6K_PRO v8.6` exposes an HTTP interface ove
 where clips/photos can be browsed and played back from a PC"). This work is that TODO,
 on the interface it actually named.
 
-**Open question the cable raises:** the 6K G2 has a single USB-C expansion port, and that
-same port is what external media records to. If holding it for the network connection
-means no external drive can be mounted, then `/media/workingset` will only ever list the
-internal card slot(s) while automation is connected — which constrains every phase that
-touches storage, and would make "record to an external SSD over REST" impossible by
-construction rather than by a missing endpoint. This is not asserted here: the sweep
-answers it directly, because `/media/workingset` reports whatever devices actually exist.
-Note it when reading the first report rather than assuming either way.
+The USB-C port is also the camera's external-media port, but that costs this project
+nothing: **the storage scope is the SD card slot**, with CFast possibly added later and
+external USB media out of scope entirely (see CLAUDE.md's Storage Media Monitoring
+section). So holding the port for the network connection is free.
+
+It does mean the media code must not assume one device. `/media/workingset` reports a
+working set and `/media/active` names the active member, so resolving the active device
+from those two — rather than indexing slot 0 — makes adding CFast later a data change
+instead of a code change.
 
 ### Addressing the camera
 
@@ -139,7 +140,7 @@ These questions gate the phases that follow. None of them can be answered from t
 | Is `sensorResolution` writable via `PUT /system/format`? | Whether REST solves the Sensor Area problem `docs/ble/photo_capture.md` §10 closed as unsolvable over BLE |
 | Does `/transports/0/timecode` return decimal or hex-valued BCD? | Whether `timecode.py`'s BCD decode can be reused |
 | Does the USB interface stay up across a recording, and while BLE is connected? | Whether REST recording is safe, and whether the hybrid photo path is possible |
-| Does `/media/workingset` list an external drive while the USB-C cable holds the port? | Whether storage-aware automation can ever see external media, or is confined to the internal card slot(s) whenever REST is connected |
+| How does a clip's `filePath` map to an HTTP path? | Phase 6's photo confirmation. The operator's samples show `/clips/list` reporting `/mnt/sd0/A001/A001_07311253_C001.mov` while the same card serves as `/mounts/A001-sd1/…` — **`sd0` vs `sd1`**, so the mapping is not string manipulation and must not be guessed |
 | Is the plaintext HTTP listener live, or is it HTTPS-only? | Whether `RestClient` must always do TLS, and whether the self-signed certificate has to be pinned or waived in production code |
 
 ---

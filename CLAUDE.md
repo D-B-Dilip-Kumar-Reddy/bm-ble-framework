@@ -349,6 +349,12 @@ All protocol values come from sniffer captures. `status` is set to `"VERIFIED"` 
 This section is design intent — no storage monitoring is implemented yet
 (`StorageState`/`CameraState` do not exist; see design principle 4).
 
+**Scope: the SD card slot.** The CFast slot may be added later; **external USB
+media is out of scope entirely**. Code must not assume a single media device
+anyway — the camera reports a working set with an active member, so resolve the
+active device rather than indexing slot 0, and adding CFast becomes a data change
+rather than a code change.
+
 Storage state is read on connect and updated from `CAMERA_STATUS` notifications. It is tracked in `StorageState` (part of `CameraState`) and covers:
 
 - Slot presence (card inserted or not)
