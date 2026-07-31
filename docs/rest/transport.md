@@ -39,42 +39,76 @@ profile to another without re-verifying*. A sweep's results are evidence about o
 
 ## The transport is USB, not LAN
 
-The camera presents a **USB Ethernet gadget** and serves HTTP over it. Everything
-recorded in this doc so far was observed over a USB cable between the camera and a
-Windows laptop — not over Wi-Fi, and not over a shared network.
+The camera presents a **USB Ethernet gadget** and serves the control API over it — over
+HTTPS, confirmed; possibly over plaintext HTTP as well, unconfirmed. Everything recorded
+in this doc so far was observed over a USB cable between the camera and a Windows laptop
+— not over Wi-Fi, and not over a shared network.
 
 That is the same channel `docs/ble/photo_capture.md` §7.3 proposed as a way out of the
 photo-verification deadlock ("`POCKET_6K_PRO v8.6` exposes an HTTP interface over USB
 where clips/photos can be browsed and played back from a PC"). This work is that TODO,
 on the interface it actually named.
 
-Four consequences that shape the design:
+### Addressing the camera
 
-1. **No mDNS.** `\\pocket-cinema-camera-6k-g2.local` does not resolve — consistent with
-   the operator's report that Windows Explorer cannot reach it by name. The camera's
-   address is the USB adapter's **default gateway**: `ipconfig` and look for the "Remote
-   NDIS" adapter, or read it off the camera's own Setup screen. Running
-   `probe_endpoints.py` without `--host` prints the candidate gateways it can see, but
-   deliberately does not guess — picking the wrong one means sweeping some other device
-   and filing the results as if they were the camera's.
-2. **The address can change** across reconnects, so `--host` is always explicit and never
-   cached in a profile. Profiles record per-endpoint behaviour; they do not record where
-   the camera lives.
-3. **The link is single-host and disappears** on unplug, camera sleep, or power cycle.
-   BLE handles its equivalent with `_reconnect_loop()` and liveness detection
-   (`docs/ble/winrt_ble_connection_hardening.md`); REST has no answer for it yet. Whether
-   the interface survives a full recording is **unverified** and needs checking before
-   anything depends on it.
-4. **USB results are not LAN results.** Moving to Wi-Fi means re-running the sweep, for
-   the same reason a new firmware means re-sniffing. `probe_endpoints.py` records
-   `--transport usb|lan` in every report so a reader can never mistake one for the other.
+Confirmed working, 2026-07-31: **`https://pocket-cinema-camera-6k-g2.local/`**.
 
-**First-run failure worth ruling out:** Windows Firewall classifying the RNDIS adapter as
-a *Public* network will make every endpoint report unreachable. Check that before
-concluding the camera is at fault.
+The camera's own Setup utility is the authority, and it shows both forms directly:
 
-SMB is enabled on the camera but non-functional in this setup, and FTP is enabled but
-outside the scope of this work. Neither is used.
+| Setup screen | Field | Value on this camera |
+|---|---|---|
+| Network Access | Web media manager (HTTP) URL | `http://Pocket-Cinema-Camera-…` |
+| Network Settings | Protocol | Static IP |
+| Network Settings | IP Address | `10.0.0.3` |
+| Network Settings | Subnet Mask | `255.255.255.0` |
+| Network Settings | Gateway | `10.0.0.1` |
+
+Three things to take from that:
+
+1. **mDNS resolves.** The `.local` name works over HTTPS, so it is the more stable
+   handle — the IP can change, the name does not.
+2. **The camera is not the gateway.** It is at `10.0.0.3` while the gateway is
+   `10.0.0.1`. The usual RNDIS heuristic "the camera is your adapter's default gateway"
+   is simply wrong here, so `probe_endpoints.py` offers no gateway guessing at all; it
+   points you at the two Setup screens instead. Guessing wrong means sweeping some other
+   device and filing the results as the camera's.
+3. **This is HTTPS with a self-signed certificate**, so `--insecure` is required to reach
+   the camera at all. The flag is opt-in and never implied — correct for a device whose
+   certificate no CA will ever vouch for, wrong for anything else. The tool defaults to
+   `--scheme https` and warns if you use HTTPS without `--insecure`, since every request
+   would otherwise fail verification and look like an unreachable camera.
+
+**`Web media manager (HTTP)` is set to `Enabled`, not `Enabled with security only`** —
+the middle option is the HTTPS-only one. So the plaintext listener may also be live;
+whether it is, is an open question the sweep answers by running twice, once per
+`--scheme`.
+
+### Corrections to an earlier assumption
+
+An earlier draft of this doc asserted that USB meant no mDNS, and used that to explain
+why Windows Explorer cannot open `\\pocket-cinema-camera-6k-g2.local` over SMB. **Both
+halves were wrong.** mDNS resolves fine — the same name works over HTTPS. Whatever
+breaks SMB is a separate matter (SMB is `Enabled` on the camera) and has no bearing on
+this API. FTP is likewise enabled and out of scope. Neither is used.
+
+### Other consequences that shape the design
+
+- **The link is single-host and disappears** on unplug, camera sleep, or power cycle.
+  BLE handles its equivalent with `_reconnect_loop()` and liveness detection
+  (`docs/ble/winrt_ble_connection_hardening.md`); REST has no answer for it yet. Whether
+  the interface survives a full recording is **unverified** and needs checking before
+  anything depends on it.
+- **USB results are not LAN results.** `Allow utility administration` is set to
+  `via USB and Ethernet`, so both paths are open and the distinction is real rather than
+  theoretical. Moving to Wi-Fi means re-running the sweep, for the same reason a new
+  firmware means re-sniffing. `probe_endpoints.py` records `--transport usb|lan` in every
+  report so a reader can never mistake one for the other.
+- **The address is never cached in a profile.** Profiles record per-endpoint behaviour;
+  they do not record where the camera lives.
+
+**First-run failure worth ruling out:** Windows Firewall classifying the adapter as a
+*Public* network will make every endpoint report unreachable — as will forgetting
+`--insecure`. Check both before concluding the camera is at fault.
 
 ---
 
@@ -93,6 +127,7 @@ These questions gate the phases that follow. None of them can be answered from t
 | Is `sensorResolution` writable via `PUT /system/format`? | Whether REST solves the Sensor Area problem `docs/ble/photo_capture.md` §10 closed as unsolvable over BLE |
 | Does `/transports/0/timecode` return decimal or hex-valued BCD? | Whether `timecode.py`'s BCD decode can be reused |
 | Does the USB interface stay up across a recording, and while BLE is connected? | Whether REST recording is safe, and whether the hybrid photo path is possible |
+| Is the plaintext HTTP listener live, or is it HTTPS-only? | Whether `RestClient` must always do TLS, and whether the self-signed certificate has to be pinned or waived in production code |
 
 ---
 
@@ -205,13 +240,15 @@ exists to keep out of this repo.
 ### Usage
 
 ```
-python tools/rest/probe_endpoints.py --host <camera-ip> \
-    --model-key POCKET_6K_G2 --firmware v8.6
-python tools/rest/probe_endpoints.py --host <camera-ip> \
-    --model-key POCKET_6K_G2 --firmware v8.6 --probe-writes
+python tools/rest/probe_endpoints.py --host pocket-cinema-camera-6k-g2.local \
+    --model-key POCKET_6K_G2 --firmware v8.6 --insecure
+python tools/rest/probe_endpoints.py --host pocket-cinema-camera-6k-g2.local \
+    --model-key POCKET_6K_G2 --firmware v8.6 --insecure --probe-writes
 ```
 
-Run without `--host` to print candidate gateway addresses.
+`--insecure` is required — the camera's certificate is self-signed. Run without `--host`
+to print where on the camera to read the address from. Re-run with `--scheme http` to
+find out whether the plaintext listener is live too.
 
 `--model-key` and `--firmware` are **required, with no defaults** — matching the
 convention for `tools/control/` scripts, where the target is never implicit because the
@@ -232,7 +269,8 @@ what remains unexplained. Do not fill this in from the specs.)*
 
 ### `POCKET_6K_G2 v8.6` over USB
 
-Not yet swept. Confirmed by hand before any tooling existed:
+Not yet swept. Confirmed by hand before any tooling existed, over
+`https://pocket-cinema-camera-6k-g2.local/` (static IP `10.0.0.3`):
 
 | Endpoint | Status | Notes |
 |---|---|---|

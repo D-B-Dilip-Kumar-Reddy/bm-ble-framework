@@ -26,11 +26,12 @@ from probe_endpoints import (  # noqa: E402
     expand_catalog,
     extract_links,
     is_supported,
-    parse_windows_gateways,
+    normalise_base_url,
     pick_first,
     render_summary,
     subscribable_properties,
     transport_mode_body,
+    websocket_url,
     ws_response_ok,
 )
 
@@ -40,7 +41,7 @@ def make_report(**overrides) -> Report:
         "model_key": "POCKET_6K_G2",
         "firmware": "v8.6",
         "transport": "usb",
-        "host": "192.168.1.1",
+        "host": "https://10.0.0.3",
         "probed_at": "2026-07-31T12-00-00Z",
         "probe_writes": False,
     }
@@ -288,34 +289,45 @@ class TestExtractLinks:
         assert extract_links(body) == []
 
 
-class TestParseWindowsGateways:
-    def test_extracts_ipv4_gateways(self):
-        output = "\n".join(
-            [
-                "Ethernet adapter Ethernet 2:",
-                "   Default Gateway . . . . . . . . . : 192.168.1.1",
-                "Wireless LAN adapter Wi-Fi:",
-                "   Default Gateway . . . . . . . . . : 10.0.0.1",
-            ]
+class TestNormaliseBaseUrl:
+    def test_defaults_to_https(self):
+        """The scheme the operator confirmed working."""
+        assert normalise_base_url("10.0.0.3") == "https://10.0.0.3"
+
+    def test_accepts_an_mdns_name(self):
+        assert (
+            normalise_base_url("pocket-cinema-camera-6k-g2.local")
+            == "https://pocket-cinema-camera-6k-g2.local"
         )
-        assert parse_windows_gateways(output) == ["192.168.1.1", "10.0.0.1"]
 
-    def test_skips_blank_and_ipv6_gateways(self):
-        output = "\n".join(
-            [
-                "   Default Gateway . . . . . . . . . :",
-                "   Default Gateway . . . . . . . . . : fe80::1%12",
-                "   Default Gateway . . . . . . . . . : 192.168.1.1",
-            ]
+    @pytest.mark.parametrize("url", ["http://10.0.0.3", "https://10.0.0.3"])
+    def test_a_full_url_overrides_the_scheme(self, url):
+        assert normalise_base_url(url, "https") == url
+
+    def test_strips_trailing_slash_and_whitespace(self):
+        assert normalise_base_url("  10.0.0.3/  ") == "https://10.0.0.3"
+
+    def test_explicit_scheme_argument_is_honoured(self):
+        assert normalise_base_url("10.0.0.3", "http") == "http://10.0.0.3"
+
+
+class TestWebsocketUrl:
+    def test_https_becomes_wss_not_ws(self):
+        """Downgrading here would silently fail against a camera that only
+        serves the secure listener."""
+        assert websocket_url("https://10.0.0.3") == "wss://10.0.0.3/control/api/v1/event/websocket"
+
+    def test_http_becomes_ws(self):
+        assert websocket_url("http://10.0.0.3") == "ws://10.0.0.3/control/api/v1/event/websocket"
+
+    def test_preserves_an_mdns_host(self):
+        assert websocket_url("https://pocket-cinema-camera-6k-g2.local").startswith(
+            "wss://pocket-cinema-camera-6k-g2.local/"
         )
-        assert parse_windows_gateways(output) == ["192.168.1.1"]
 
-    def test_deduplicates(self):
-        output = "   Default Gateway : 192.168.1.1\n   Default Gateway : 192.168.1.1"
-        assert parse_windows_gateways(output) == ["192.168.1.1"]
-
-    def test_no_gateways_yields_empty(self):
-        assert parse_windows_gateways("Windows IP Configuration") == []
+    def test_rejects_a_schemeless_base_url(self):
+        with pytest.raises(ValueError, match="http:// or https://"):
+            websocket_url("10.0.0.3")
 
 
 class TestRenderSummary:

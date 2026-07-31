@@ -44,20 +44,34 @@ camera-side no-op, so a 200 proves the *endpoint* exists, not that a
 actually needs it.
 
 Usage:
-    python tools/rest/probe_endpoints.py --host 192.168.1.1 \
-        --model-key POCKET_6K_G2 --firmware v8.6
-    python tools/rest/probe_endpoints.py --host 192.168.1.1 \
-        --model-key POCKET_6K_G2 --firmware v8.6 --probe-writes
+    python tools/rest/probe_endpoints.py --host pocket-cinema-camera-6k-g2.local \
+        --model-key POCKET_6K_G2 --firmware v8.6 --insecure
+    python tools/rest/probe_endpoints.py --host https://10.0.0.3 \
+        --model-key POCKET_6K_G2 --firmware v8.6 --insecure --probe-writes
 
-Finding the camera's address over USB: the camera presents a USB Ethernet
-gadget, so there is no mDNS to resolve (which is why
-`\\\\pocket-cinema-camera-6k-g2.local` fails in Explorer). On Windows it
-appears as a separate "Remote NDIS" adapter and the camera's IP is that
-adapter's default gateway — `ipconfig`, or the camera's own Setup screen.
-Run without `--host` to have this tool print the candidate gateways it can
-see. If every endpoint reports unreachable, rule out Windows Firewall
-classifying the RNDIS adapter as a Public network before concluding the
-camera is at fault.
+ADDRESSING THE CAMERA
+─────────────────────
+Don't guess. The camera's own Setup utility shows the exact URL under
+Network Access, and its IP under Network Settings. On the operator's
+`POCKET_6K_G2 v8.6` that is `pocket-cinema-camera-6k-g2.local` and a static
+`10.0.0.3` — **mDNS resolves fine**, so the `.local` name is the more stable
+of the two. Note the gateway there is `10.0.0.1`, i.e. *not* the camera: any
+"the camera is your adapter's default gateway" heuristic is wrong on this
+setup, which is why this tool has none.
+
+That Explorer cannot open `\\\\pocket-cinema-camera-6k-g2.local` over SMB is
+therefore *not* a name-resolution problem — the same name works over HTTPS.
+Whatever breaks SMB is a separate matter and does not affect this API.
+
+`--scheme` defaults to `https`, which is what the operator confirmed
+working; a full URL in `--host` overrides it. The camera's TLS certificate
+is self-signed, so `--insecure` is needed to talk to it at all. That flag is
+opt-in and never implied: it is the correct call for a device on a
+point-to-point link whose certificate no CA will ever vouch for, and the
+wrong call for anything else.
+
+If every endpoint reports unreachable, rule out Windows Firewall classifying
+the adapter as a Public network before concluding the camera is at fault.
 """
 
 from __future__ import annotations
@@ -66,9 +80,7 @@ import argparse
 import asyncio
 import json
 import logging
-import platform
 import re
-import subprocess
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -102,6 +114,11 @@ logger = logging.getLogger(__name__)
 API_BASE = "/control/api/v1"
 WS_PATH = "/control/api/v1/event/websocket"
 MOUNTS_PATH = "/mounts/"
+
+# The camera serves HTTPS with a self-signed certificate. `https` is what the
+# operator confirmed working on POCKET_6K_G2 v8.6 with "Web media manager
+# (HTTP): Enabled" (as opposed to "Enabled with security only").
+DEFAULT_SCHEME = "https"
 
 CAPTURES_DIR = Path(__file__).resolve().parents[1] / "captures" / "rest"
 
@@ -158,6 +175,32 @@ def classify(status: int | None, error: str | None = None) -> str:
     if 200 <= status < 300:
         return "ok"
     return "other"
+
+
+def normalise_base_url(host: str, scheme: str = DEFAULT_SCHEME) -> str:
+    """`host` as a scheme-qualified base URL with no trailing slash.
+
+    A `--host` that already carries a scheme wins over `--scheme`, so
+    `--host http://10.0.0.3` reaches the plaintext listener even though this
+    tool defaults to HTTPS.
+    """
+    host = host.strip().rstrip("/")
+    if host.startswith(("http://", "https://")):
+        return host
+    return f"{scheme}://{host}"
+
+
+def websocket_url(base_url: str) -> str:
+    """The event-feed URL for a base URL, preserving TLS.
+
+    An `https` base must become `wss`, not `ws` — downgrading here would
+    silently fail against a camera that only serves the secure listener.
+    """
+    if base_url.startswith("https://"):
+        return f"wss://{base_url[len('https://') :]}{WS_PATH}"
+    if base_url.startswith("http://"):
+        return f"ws://{base_url[len('http://') :]}{WS_PATH}"
+    raise ValueError(f"base_url must start with http:// or https:// — got {base_url!r}")
 
 
 def is_supported(classification: str) -> bool:
@@ -594,7 +637,7 @@ async def probe_websocket(
     window per setting in the BLE sniffers.
     """
     outcome: dict[str, Any] = {"connected": False, "error": None, "subscriptions": {}}
-    ws_url = f"{base_url.replace('http://', 'ws://', 1)}{WS_PATH}"
+    ws_url = websocket_url(base_url)
     try:
         async with session.ws_connect(ws_url, timeout=timeout_s) as ws:
             outcome["connected"] = True
@@ -788,37 +831,20 @@ def save_report(report: Report, *, captures_dir: Path = CAPTURES_DIR) -> Path:
 # ── Host discovery help ─────────────────────────────────────────────────────
 
 
-def parse_windows_gateways(ipconfig_output: str) -> list[str]:
-    """Default-gateway addresses from `ipconfig` output.
+HOST_HELP = """\
+--host is required. Read it off the camera rather than guessing:
 
-    Best-effort assistance only — the camera's USB gadget appears as one more
-    adapter and its gateway is the camera. This does not try to identify
-    *which* adapter is the camera; it prints candidates for the operator to
-    choose from, because guessing wrong here means sweeping some other device
-    on the network and recording the results as if they were the camera's.
-    """
-    gateways = []
-    for line in ipconfig_output.splitlines():
-        if "Default Gateway" not in line:
-            continue
-        _, _, value = line.partition(":")
-        candidate = value.strip()
-        if candidate and re.fullmatch(r"[0-9]{1,3}(\.[0-9]{1,3}){3}", candidate):
-            gateways.append(candidate)
-    return list(dict.fromkeys(gateways))
+  Setup -> Network Access   shows the exact URL, e.g.
+                            https://pocket-cinema-camera-6k-g2.local
+  Setup -> Network Settings shows the IP, e.g. 10.0.0.3
 
+mDNS resolves, so the .local name is the more stable of the two — the IP can
+change, and on the operator's setup the adapter's default gateway (10.0.0.1)
+is NOT the camera, so no gateway heuristic is offered here on purpose.
 
-def suggest_hosts() -> list[str]:
-    """Candidate camera addresses, or an empty list when none can be found."""
-    if platform.system() != "Windows":
-        return []
-    try:
-        completed = subprocess.run(
-            ["ipconfig"], capture_output=True, text=True, timeout=10, check=False
-        )
-    except (OSError, subprocess.SubprocessError):
-        return []
-    return parse_windows_gateways(completed.stdout)
+The certificate is self-signed: add --insecure. Pass a full URL to --host to
+override --scheme.
+"""
 
 
 async def confirm_write_probe(host: str) -> bool:
@@ -841,28 +867,30 @@ async def confirm_write_probe(host: str) -> bool:
 async def run(args: argparse.Namespace) -> int:
     require_aiohttp()
     if not args.host:
-        candidates = suggest_hosts()
-        print("--host is required. The camera's address over USB is the USB Ethernet")
-        print("adapter's default gateway (ipconfig, or the camera's Setup screen).")
-        if candidates:
-            print("\nCandidate gateways on this machine:")
-            for candidate in candidates:
-                print(f"    {candidate}")
-            print("\nPick the one belonging to the camera's adapter — not your LAN router.")
+        print(HOST_HELP)
         return 2
 
-    base_url = f"http://{args.host}"
+    base_url = normalise_base_url(args.host, args.scheme)
+    if base_url.startswith("https://") and not args.insecure:
+        logger.warning(
+            "%s uses a self-signed certificate; without --insecure every request will "
+            "fail TLS verification. Re-run with --insecure if that is what you see.",
+            base_url,
+        )
     report = Report(
         model_key=args.model_key,
         firmware=args.firmware,
         transport=args.transport,
-        host=args.host,
+        host=base_url,
         probed_at=datetime.now(UTC).strftime("%Y-%m-%dT%H-%M-%SZ"),
         probe_writes=args.probe_writes,
     )
 
     timeout = aiohttp.ClientTimeout(total=args.timeout)
-    async with aiohttp.ClientSession(timeout=timeout) as session:
+    # ssl=False only when the operator explicitly asked for it: the camera's
+    # certificate is self-signed, so no CA will ever vouch for it.
+    connector = aiohttp.TCPConnector(ssl=False) if args.insecure else None
+    async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
         workingset = await request(session, "GET", f"{base_url}{API_BASE}/media/workingset")
         device_names = device_names_from_workingset(workingset.body)
         if device_names:
@@ -920,7 +948,31 @@ def parse_args() -> argparse.Namespace:
             "Read-only by default; --probe-writes adds idempotent same-value PUTs."
         )
     )
-    parser.add_argument("--host", help="Camera IP address (the USB adapter's default gateway).")
+    parser.add_argument(
+        "--host",
+        help=(
+            "Camera hostname or IP, e.g. pocket-cinema-camera-6k-g2.local or 10.0.0.3. "
+            "A full URL (https://host) overrides --scheme. Read it off the camera's "
+            "Setup -> Network Access / Network Settings screens; omit to print help."
+        ),
+    )
+    parser.add_argument(
+        "--scheme",
+        default=DEFAULT_SCHEME,
+        choices=["https", "http"],
+        help=(
+            f"URL scheme when --host has none. Default: {DEFAULT_SCHEME} (what the "
+            "operator confirmed working). Ignored if --host carries a scheme."
+        ),
+    )
+    parser.add_argument(
+        "--insecure",
+        action="store_true",
+        help=(
+            "Skip TLS certificate verification. Required to reach the camera at all "
+            "over HTTPS, because its certificate is self-signed. Never implied."
+        ),
+    )
     parser.add_argument(
         "--model-key",
         required=True,
