@@ -22,6 +22,7 @@ from probe_endpoints import (  # noqa: E402
     build_rest_profile_block,
     classify,
     device_names_from_workingset,
+    diagnose,
     echo_body,
     expand_catalog,
     extract_links,
@@ -287,6 +288,50 @@ class TestExtractLinks:
     @pytest.mark.parametrize("body", [None, {}, 7])
     def test_non_text_bodies_yield_nothing(self, body):
         assert extract_links(body) == []
+
+
+class TestDiagnose:
+    """A failed preflight must explain itself. These assertions exist because
+    an early version told the operator to add --insecure for a refused
+    connection: aiohttp puts "ssl:default" in ordinary ClientConnectorError
+    messages, and a substring match on "ssl" caught it."""
+
+    CERT = "ClientConnectorCertificateError: certificate verify failed: self-signed certificate"
+    REFUSED = (
+        "ClientConnectorError: Cannot connect to host 10.0.0.3:443 ssl:default "
+        "[The remote computer refused the network connection]"
+    )
+    TIMEOUT = "TimeoutError: "
+    DNS = "ClientConnectorError: [Errno -2] Name or service not known"
+
+    def test_no_error_means_no_advice(self):
+        assert diagnose(None) == []
+
+    def test_certificate_failure_recommends_insecure(self):
+        assert any("--insecure" in step for step in diagnose(self.CERT))
+
+    def test_refused_connection_does_not_blame_tls(self):
+        steps = diagnose(self.REFUSED)
+        assert not any("--insecure" in step for step in steps)
+        assert any("refused or had no route" in step for step in steps)
+
+    def test_timeout_suggests_a_wrong_or_dropped_address(self):
+        steps = diagnose(self.TIMEOUT)
+        assert any("hung rather than being refused" in step for step in steps)
+        assert not any("--insecure" in step for step in steps)
+
+    def test_dns_failure_is_named(self):
+        assert any("did not resolve" in step for step in diagnose(self.DNS))
+
+    @pytest.mark.parametrize("error", [CERT, REFUSED, TIMEOUT, DNS])
+    def test_every_failure_suggests_confirming_the_browser_still_works(self, error):
+        """The link drops on sleep and unplug, so 'it worked earlier' is not
+        evidence that it works now."""
+        assert any("RIGHT NOW" in step for step in diagnose(error))
+
+    @pytest.mark.parametrize("error", [CERT, REFUSED, TIMEOUT, DNS])
+    def test_every_failure_offers_an_independent_cross_check(self, error):
+        assert any("curl" in step for step in diagnose(error))
 
 
 class TestNormaliseBaseUrl:

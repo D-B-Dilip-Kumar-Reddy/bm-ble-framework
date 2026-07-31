@@ -152,6 +152,19 @@ class ProbeResult:
     def classification(self) -> str:
         return classify(self.status, self.error)
 
+    def describe(self) -> str:
+        """One-line outcome for a log line.
+
+        Always surfaces `error` when there is one. An earlier version logged
+        only the classification, so a whole sweep could report "unreachable"
+        70 times without ever saying *why* — the operator could not tell a
+        refused connection from a TLS failure from a DNS miss. Never hide the
+        exception.
+        """
+        if self.error is not None:
+            return f"no reply ({self.error})"
+        return f"{self.status} ({self.classification})"
+
 
 def classify(status: int | None, error: str | None = None) -> str:
     """Bucket a response for the summary and for the emitted profile block.
@@ -488,12 +501,7 @@ async def sweep_reads(
         result = await request(session, "GET", f"{base_url}{API_BASE}{endpoint.path}")
         result.path = endpoint.path
         results.append(result)
-        logger.info(
-            "GET %-52s -> %s (%s)",
-            endpoint.path,
-            result.status if result.status is not None else "no reply",
-            result.classification,
-        )
+        logger.info("GET %-52s -> %s", endpoint.path, result.describe())
     return results
 
 
@@ -528,11 +536,7 @@ async def sweep_writes(
         result.path = endpoint.path
         results.append(result)
         logger.info(
-            "PUT  %-52s -> %s (%s) body=%s",
-            endpoint.path,
-            result.status if result.status is not None else "no reply",
-            result.classification,
-            json.dumps(body)[:80],
+            "PUT  %-52s -> %s body=%s", endpoint.path, result.describe(), json.dumps(body)[:80]
         )
     return results
 
@@ -583,12 +587,7 @@ async def walk_mounts(
             result = await request(session, "GET", f"{base_url}{path}")
             result.path = path
             results.append(result)
-            logger.info(
-                "GET %-52s -> %s (%s)",
-                path,
-                result.status if result.status is not None else "no reply",
-                result.classification,
-            )
+            logger.info("GET %-52s -> %s", path, result.describe())
             if not is_supported(result.classification):
                 continue
             for link in extract_links(result.body):
@@ -660,6 +659,70 @@ async def probe_websocket(
         outcome["error"] = f"{type(exc).__name__}: {exc}"
         logger.warning("WebSocket probe failed: %s", outcome["error"])
     return outcome
+
+
+# ── Preflight ───────────────────────────────────────────────────────────────
+
+
+def diagnose(error: str | None) -> list[str]:
+    """Actionable next steps for a failed preflight, chosen from the actual
+    exception rather than offered as a generic checklist.
+
+    Sweeping 70+ endpoints against a host that never answers wastes minutes
+    and buries the one fact that matters, so the sweep refuses to start until
+    a single request succeeds.
+    """
+    if error is None:
+        return []
+    lowered = error.lower()
+    steps: list[str] = []
+
+    # Match on certificate wording only. A plain refused connection carries
+    # "ssl:default" in aiohttp's message, so keying on a bare "ssl" told the
+    # operator to add --insecure when the real problem was no route at all.
+    if "certificate" in lowered or "certverif" in lowered:
+        steps.append("TLS failed. The camera's certificate is self-signed — add --insecure.")
+    if "cannot connect" in lowered or "refused" in lowered or "unreachable" in lowered:
+        steps.append(
+            "The TCP connection was refused or had no route. The address is probably "
+            "not the camera on THIS interface."
+        )
+    if "timeout" in lowered or "timed out" in lowered:
+        steps.append(
+            "The connection hung rather than being refused, which usually means the "
+            "name resolved to an address nothing answers on (an IPv6 link-local "
+            "address from mDNS is a common cause) or a firewall is dropping packets."
+        )
+    if "name or service" in lowered or "getaddrinfo" in lowered or "resolve" in lowered:
+        steps.append("The hostname did not resolve at all.")
+
+    steps.append(
+        "Confirm the browser still reaches the camera RIGHT NOW, in this same "
+        "session — the USB link drops on sleep, unplug, and power cycle."
+    )
+    steps.append(
+        "Find the address the browser is actually using, and probe that:\n"
+        "      Resolve-DnsName pocket-cinema-camera-6k-g2.local\n"
+        "      ping -4 pocket-cinema-camera-6k-g2.local\n"
+        "      Test-NetConnection <ip> -Port 443\n"
+        "    Setup -> Network Settings may describe the ETHERNET interface, not the "
+        "USB one, in which case its IP is the wrong address to probe over USB."
+    )
+    steps.append(
+        "Compare against curl, which shares nothing with this tool's stack:\n"
+        "      curl.exe -k -v https://pocket-cinema-camera-6k-g2.local/control/api/v1/system/format"
+    )
+    return steps
+
+
+async def preflight(session: aiohttp.ClientSession, base_url: str) -> ProbeResult:
+    """One request to a known-good endpoint, to prove the camera answers.
+
+    `/system/format` is the operator-confirmed working endpoint on
+    POCKET_6K_G2 v8.6, so a failure here is about the transport rather than
+    about that endpoint.
+    """
+    return await request(session, "GET", f"{base_url}{API_BASE}/system/format")
 
 
 # ── Reporting ───────────────────────────────────────────────────────────────
@@ -890,7 +953,24 @@ async def run(args: argparse.Namespace) -> int:
     # ssl=False only when the operator explicitly asked for it: the camera's
     # certificate is self-signed, so no CA will ever vouch for it.
     connector = aiohttp.TCPConnector(ssl=False) if args.insecure else None
-    async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
+    # trust_env so a machine with proxy environment variables behaves like its
+    # browser does; aiohttp ignores them otherwise.
+    async with aiohttp.ClientSession(
+        timeout=timeout, connector=connector, trust_env=True
+    ) as session:
+        check = await preflight(session, base_url)
+        if check.classification == "unreachable":
+            logger.error("Preflight failed: GET %s -> %s", check.path, check.describe())
+            print(f"\nCannot reach {base_url} — not sweeping {len(build_catalog())} endpoints")
+            print("against a host that never answers. What to try, most likely first:\n")
+            for index, step in enumerate(diagnose(check.error), start=1):
+                print(f"  {index}. {step}")
+            print("\nRe-run once one of those gets a reply. Pass --force to sweep anyway.")
+            if not args.force:
+                return 2
+        else:
+            logger.info("Preflight OK: %s -> %s", check.path, check.describe())
+
         workingset = await request(session, "GET", f"{base_url}{API_BASE}/media/workingset")
         device_names = device_names_from_workingset(workingset.body)
         if device_names:
@@ -1001,6 +1081,11 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Sweep even if the preflight request fails. Rarely what you want.",
+    )
+    parser.add_argument(
         "--mounts-depth",
         type=int,
         default=2,
@@ -1009,8 +1094,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--timeout",
         type=float,
-        default=10.0,
-        help="Per-request timeout in seconds. Default: 10.0",
+        default=5.0,
+        help=(
+            "Per-request timeout in seconds. Default: 5.0 — kept low because an "
+            "unreachable host otherwise costs this many seconds times 70+ endpoints."
+        ),
     )
     return parser.parse_args()
 
