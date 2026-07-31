@@ -1256,3 +1256,19 @@ way category 9's write-margin signal was originally found) rather than
 another variation on what's already been tried here. Attention moves to
 the photo-capture verification-strategy question (§7.3) and its USB TODO
 — the higher-value open thread this whole detour grew out of.
+
+**Third independent reconfirmation, 2026-07-31 (`POCKET_6K_G2 v8.6`,
+`docs/settings.md` §18.13).** §10.1's capture above was taken on
+`POCKET_6K_G2 v7.9`, right before that unit's firmware upgrade — this
+section's "either camera" always meant v7.9 G2 and `POCKET_6K_PRO v8.6`,
+never v8.6 G2 specifically. A dedicated follow-up capture on `POCKET_6K_G2
+v8.6` (motivated by an unrelated open discrepancy in that profile's
+`recording_format.flags` field at UHD, not a revisit of this
+investigation) independently reproduced the same read-only windowed-bit
+correlation on this third (camera, firmware) pairing — full-sensor Sensor
+Area reads `flags` bit 4 clear, any smaller crop reads it set, reproduced
+2/2. This doesn't reopen anything above (no write attempt was made, no new
+evidence about writability), but is worth noting as design principle 6 in
+practice: the same conclusion re-earned on a new firmware rather than
+assumed to carry over. `POCKET_6K_G2 v8.6`'s own `commands.recording_format`
+provenance records the capture and its resolved discrepancy directly.
