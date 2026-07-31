@@ -79,6 +79,13 @@ whole body, so a reconnect loop spawned here would block on that lock while
 `connect()` is already rebuilding the same session — the two recovery paths would
 fight, which is the deadlock shape behind issue 9.
 
+**First real-hardware trigger, 2026-07-31** (`docs/settings.md` §18.12): a
+`send_settings_command.py` run against `POCKET_6K_G2 v8.6` hit exactly the
+scenario this loop was built for — `connect attempt 1/3 lost the link during
+the initial subscribe … retrying in 2.0 s` — followed by a clean reconnect and
+a normal run to completion. First observed confirmation that the retry path
+works end to end outside the unit tests' mocked scenarios.
+
 ### `disconnect()`
 
 Behaviour unchanged. The `monitor_incoming.py` example now wraps every session in

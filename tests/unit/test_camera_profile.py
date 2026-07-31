@@ -777,10 +777,11 @@ def test_pocket_6k_g2_v86_profile_resolves_dimension_enums():
     # probed, and confirmed on the camera's own on-screen display.
     assert profile.require_resolution("2.8K 17:9").width == 2880
 
-    # 4K DCI is not (yet) known_unreachable here — the enum-sweep gap alone
-    # isn't sufficient; v7.9's and the PRO's write-value investigations
-    # haven't been repeated on this firmware.
-    assert profile.require_resolution("4K DCI").known_unreachable == {}
+    # 4K DCI/ProRes is known_unreachable here (2026-07-31, docs/settings.md
+    # §18.12) — the enum-sweep gap alone wasn't sufficient on its own, but
+    # v7.9's and the PRO's fuller write-value investigations have since been
+    # repeated on this firmware and produced the same negative result.
+    assert set(profile.require_resolution("4K DCI").known_unreachable) == {"ProRes"}
 
     # "30" was independently reconfirmed byte-identical across two separate
     # sniffer sessions (step 9's combined sweep and the dedicated fps sweep).
@@ -800,12 +801,12 @@ def test_pocket_6k_g2_v86_settings_families_promoted_to_verified():
     resolutions.6K.max_fps_int was promoted the same day (2026-07-30): the
     operator confirmed on the camera's own UI that 6K doesn't offer
     59.94/60fps, meeting design principle 7's evidence bar. The ProRes/4K DCI
-    known_unreachable entry is deliberately NOT yet written — the operator
-    chose to run the additional falsification tests (data-type byte,
-    Operation.OFFSET, exact fps/variant) that closed the PRO's identical gap
-    first, rather than promote on the sweep evidence alone. This assertion
-    pins down that "not yet promoted" state for the 4K DCI gap specifically,
-    so a future change doesn't silently write it without meeting the bar."""
+    known_unreachable entry was promoted 2026-07-31 (docs/settings.md §18.12):
+    the operator ran the same three falsification hypotheses that closed the
+    PRO's identical gap (data-type byte, Operation.OFFSET, exact fps/variant),
+    three times each from three different starting states and Sensor Area
+    settings — all 9 attempts stayed silent, meeting design principle 7's
+    evidence bar the same way the PRO's entry did."""
     profile = CameraProfile.for_model("POCKET_6K_G2", "v8.6")
 
     for name in ("codec_quality", "video_format", "recording_format"):
@@ -813,11 +814,9 @@ def test_pocket_6k_g2_v86_settings_families_promoted_to_verified():
         assert spec.provenance is not None
         assert spec.provenance.status == "VERIFIED"
 
-    # ProRes/4K DCI: strongly evidenced by the sweep (32/32 unconfirmed) and
-    # three manual retarget attempts, but not yet a known_unreachable entry —
-    # the fuller falsification tests that closed the PRO's identical gap
-    # haven't been run on this firmware yet.
-    assert profile.require_resolution("4K DCI").known_unreachable == {}
+    # ProRes/4K DCI: promoted 2026-07-31 after the operator exhausted the
+    # same falsification hypotheses that closed the PRO's identical gap.
+    assert set(profile.require_resolution("4K DCI").known_unreachable) == {"ProRes"}
 
     # BRAW@6K@59.94/60fps: promoted 2026-07-30 after an operator on-screen
     # confirmation met design principle 7's evidence bar for max_fps_int.

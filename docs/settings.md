@@ -2706,3 +2706,93 @@ python tools/control/send_settings_command.py \
 
 Only after these are tried (or a subset the operator judges sufficient) does
 this gap get written up and promoted, following the same runbook §16 used.
+
+### 18.12 The falsification tests, run three times over: ProRes/4K DCI promoted to `known_unreachable` (2026-07-31)
+
+The operator ran exactly the three candidate commands §18.11 proposed —
+unmodified — three separate times, once per session, each from a genuinely
+different starting state and with the camera's Sensor Area setting
+deliberately varied between runs (a control this investigation had never
+exercised before, motivated by §18.10's still-open UHD `flags` question):
+
+| Session | Sensor Area | Before-state | Target fps for test 3 |
+|---|---|---|---|
+| 1 | 6K | ProRes PXY UHD 50fps | 59.94 |
+| 2 | 2.8K | ProRes PXY HD 24fps | 59.94 |
+| 3 | 5.3K | ProRes PXY UHD 59.94fps | 59.94 |
+
+Each session ran the identical three-command battery, byte-for-byte
+identical TX across all three sessions:
+
+1. **Data-type byte retry** (`--data-type INT16_ARRAY`): `FF 0E 00 00 01 09
+   82 00 18 00 18 00 00 10 70 08 10 00` — 4K DCI/24fps with v7.9's
+   confirmed write-side byte (`0x82`) instead of this profile's own `0x02`.
+2. **`Operation.OFFSET` with a genuine in-range delta** (`--raw-payload 0 0
+   256 0 0 --operation OFFSET`): `FF 0E 00 00 01 09 02 01 00 00 00 00 00 01
+   00 00 00 00` — a `+256` width delta (UHD's `3840` → 4K DCI's `4096`),
+   not an absolute target payload.
+3. **Exact-fps retry** (`--fps 59.94`): `FF 0E 00 00 01 09 02 00 3C 00 3C
+   00 00 10 70 08 13 00`. In session 3 specifically, the before-state's own
+   fps (`59.94`) exactly matched the target — the closest this firmware's
+   version of the "exact camera-reported fps" hypothesis can get without
+   also matching the exact ProRes variant (every before-state here was
+   `PXY`, matching the target's implied variant already).
+
+**All 9 attempts produced zero `0x01/0x09` reports.** Every response window
+shows the same signature already established for this gap: the `0x0C`
+lens-metadata burst, ambient `0x09/0x00` storage telemetry, and nothing on
+the `recording_format` channel at all — not even a late one landing in an
+adjacent window, the pattern that would indicate a timing artifact rather
+than a genuine refusal (contrast §18.10 Run 4's lens-burst delay, which did
+show up one window late). Session 3's test 3, sent from a starting fps that
+already matched the target, rules out "wrong fps" as cleanly as this
+firmware allows without a fully independent match on every other axis too.
+
+**Sensor Area had no effect.** Varying it across all three values this
+camera's photo-stills menu offers (6K, 2.8K, and what the operator recorded
+as "5.3K" — the established options in this codebase are 2.8K/5.7K/6K, so
+this may be a transcription of 5.7K; recorded here verbatim as given,
+un-normalized, since resolving it isn't material to this finding) changed
+nothing about the outcome. This doesn't resolve §18.10's UHD `flags`
+discrepancy — no session's response includes a fresh UHD report, since
+every command here targets 4K DCI, and the discrepancy needs its own
+dedicated probe (§18.10's closing paragraph) — but it is a real negative
+data point: Sensor Area is not a confound for *this* gap specifically.
+
+**Promoted to `known_unreachable`.** With the write-value hypothesis space
+now covering resolution, fps (including an exact match), codec variant
+(implicitly, since every before-state was already `PXY`), data type byte,
+and `Operation` (`ASSIGN` via every earlier §18.10 attempt, `OFFSET` here) —
+run not once but three times each, from three different starting states —
+this meets the same evidence bar that closed `POCKET_6K_PRO v8.6`'s
+identical gap (§16).
+`resolutions."4K DCI".known_unreachable.ProRes` is now written in the
+profile; `CameraSession.set_camera_format` raises `BMDUnsupportedError`
+immediately for `(ProRes, "4K DCI")` on this profile, same as it already
+does on the PRO's.
+
+One honest gap versus the PRO's precedent: the PRO's entry was additionally
+supported by a passive capture of the camera reaching ProRes/4K DCI through
+its own body menu, proving the camera-side combination is genuinely real
+and not just assumed. No equivalent body-menu confirmation has been
+separately gathered for this firmware — the promotion here rests on the
+exhausted write-side investigation alone, not on independent proof the
+camera itself holds this state. `resolutions."4K DCI".codecs` correctly
+still lists `ProRes` regardless (this field describes the camera's own
+capability, not this codebase's write-path limitation — design principle 7).
+
+**Side finding, unrelated to this investigation:** session 3's response
+window includes a category/parameter never seen before in this codebase —
+`0x09`/`0x08` (`FF 06 00 00 09 08 01 02 00 01`, INT8 pair `[0x00, 0x01]`,
+`CAMERA_REPORT`). Category `0x09` already hosts several undocumented
+ambient parameters (`0x00` storage telemetry, `0x01` write-margin warning,
+`0x02` an unexplained ticker); `0x08` is a new one in that family, seen
+exactly once so far. Not investigated further here — noted for a future
+session's category-9 telemetry work.
+
+**Side confirmation, also unrelated:** session 3's log shows the
+`connect()` retry loop built earlier this session (`docs/winrt_ble_connection_hardening.md`)
+working exactly as designed against a real mid-subscribe link drop
+("`connect attempt 1/3 lost the link during the initial subscribe … retrying
+in 2.0 s`"), followed by a clean reconnect and successful run — the first
+real-hardware trigger of that retry path since it was added.
