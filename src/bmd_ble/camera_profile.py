@@ -52,6 +52,7 @@ SCHEMA_PATH = PAYLOADS_DIR / "schema.json"
 # Add a new tuple here after creating the corresponding JSON file.
 KNOWN_PROFILES: list[tuple[str, str]] = [
     ("POCKET_6K_G2", "v7.9"),
+    ("POCKET_6K_G2", "v8.6"),
     ("POCKET_6K_PRO", "v8.6"),
 ]
 

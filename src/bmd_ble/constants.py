@@ -106,3 +106,12 @@ BLE_SCAN_TIMEOUT_S = 15
 BLE_CONNECT_TIMEOUT_S = 10.0
 RECONNECT_MAX_ATTEMPTS = 3
 RECONNECT_DELAY_S = 5.0
+
+# connect() retries the whole connect + subscribe_all sequence when the camera
+# drops the link during the initial CCCD writes. Observed on POCKET_6K_G2 v8.6
+# (2026-07-29): 3 of 6 connects dropped ~300 ms after the link came up, and the
+# outcome tracked how long the connect itself took (every connect under 2 s
+# survived; every one over 2.2 s dropped) rather than anything about the command
+# being sent — i.e. transient and worth retrying, not a deterministic refusal.
+CONNECT_SUBSCRIBE_MAX_ATTEMPTS = 3
+CONNECT_RETRY_DELAY_S = 2.0

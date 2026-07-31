@@ -45,6 +45,7 @@ def _args(**overrides) -> argparse.Namespace:
         data_type=None,
         video_format_extra=None,
         operation=None,
+        reserved=None,
         raw_payload=None,
     )
     defaults.update(overrides)
@@ -365,6 +366,118 @@ class TestResolveOperation:
 
     def test_returns_overridden_operation_when_given(self):
         assert ssc.resolve_operation(_args(operation="OFFSET")) == Operation.OFFSET
+
+
+class TestBuildCommandReservedOverride:
+    """`--reserved` (added 2026-07-30). The reserved byte is the least-evidenced
+    field in a passively-seeded CANDIDATE block — a camera's own reports need
+    not carry the value a *write* requires — so it must be varyable without
+    editing a profile. Header byte 3 is the reserved byte."""
+
+    def test_recording_format_uses_profile_reserved_by_default(self):
+        profile = _g2_profile()
+        args = _args(packet="recording_format", resolution="4K DCI", fps="25")
+
+        label, command = ssc.build_command(profile, args)
+
+        assert command[3] == profile.require_command("recording_format").reserved
+        assert "reserved=" not in label
+
+    def test_recording_format_reserved_override_changes_wire_byte(self):
+        profile = _g2_profile()
+        spec = profile.require_command("recording_format")
+        assert spec.reserved == 1, "fixture assumption: v7.9 writes this family with 0x01"
+        args = _args(packet="recording_format", resolution="4K DCI", fps="25", reserved=0)
+
+        label, command = ssc.build_command(profile, args)
+
+        assert command[3] == 0x00
+        assert "reserved=0x00" in label
+        assert "override" in label
+        assert "profile default 0x01" in label
+
+    def test_video_format_reserved_override_changes_wire_byte(self):
+        profile = _g2_profile()
+        args = _args(packet="video_format", resolution="UHD", codec="ProRes", fps="25", reserved=0)
+
+        _label, command = ssc.build_command(profile, args)
+
+        assert command[3] == 0x00
+
+    def test_codec_quality_reserved_override_changes_wire_byte(self):
+        profile = _g2_profile()
+        args = _args(packet="codec_quality", codec="BRAW", variant="5:1", reserved=1)
+
+        label, command = ssc.build_command(profile, args)
+
+        assert command[3] == 0x01
+        assert "reserved=0x01" in label
+
+    def test_reserved_override_composes_with_the_other_overrides(self):
+        """All four override suffixes must be able to appear together — a
+        discovery send often needs to vary more than one axis at once."""
+        profile = _g2_profile()
+        args = _args(
+            packet="video_format",
+            resolution="UHD",
+            codec="ProRes",
+            fps="25",
+            reserved=0,
+            data_type="INT16",
+            operation="OFFSET",
+        )
+
+        label, command = ssc.build_command(profile, args)
+
+        assert command[3] == 0x00
+        assert "reserved=0x00" in label
+        assert "data_type=INT16" in label
+        assert "operation=OFFSET" in label
+
+    @pytest.mark.parametrize(("raw", "expected"), [("0x01", 1), ("1", 1), ("0x00", 0), ("0", 0)])
+    def test_parse_args_accepts_hex_and_decimal_reserved(self, monkeypatch, raw, expected):
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "send_settings_command.py",
+                "--model-key",
+                "POCKET_6K_G2",
+                "--firmware",
+                "v8.6",
+                "--packet",
+                "video_format",
+                "--fps",
+                "24",
+                "--dimension-enum",
+                "0x08",
+                "--reserved",
+                raw,
+            ],
+        )
+
+        assert ssc.parse_args().reserved == expected
+
+    def test_parse_args_defaults_reserved_to_none(self, monkeypatch):
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "send_settings_command.py",
+                "--model-key",
+                "POCKET_6K_G2",
+                "--firmware",
+                "v8.6",
+                "--packet",
+                "codec_quality",
+                "--codec",
+                "BRAW",
+                "--variant",
+                "5:1",
+            ],
+        )
+
+        assert ssc.parse_args().reserved is None
 
 
 class TestBuildCommandOperationOverride:

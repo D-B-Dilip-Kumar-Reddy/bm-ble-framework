@@ -542,6 +542,12 @@ values are themselves confirmed by the 2026-07-20 `dimension_enum` sweep,
 | 3.7K Anamorphic | 3728×3104 | `"3.7K Anamorphic"` |
 | 2.8K 17:9 | 2868×1512 | `"2.8K 17:9"` |
 
+⚠️ The `2.8K 17:9` row's `2868` is now disputed — both sniffed v8.6 profiles
+report `2880` at that label (`docs/settings.md` §18.1). That weakens this row
+specifically, since the operator's figure and the v7.9 profile may trace to
+the same source rather than being independent; the other five rows are
+unaffected.
+
 A clean 6-for-6 match is a strong, independent cross-check on that table
 even though it comes from a completely different evidence channel (camera
 output behavior, not a BLE write/report) — worth recording precisely
@@ -855,30 +861,43 @@ notes:
 |---|---|---|---|
 | `POCKET_6K_G2 v7.9` | 2.8K, 5.7K, 6K | 5.7K, 6K | disabled |
 | `POCKET_6K_PRO v8.6` | 2.8K, 5.3K, 6K | 5.3K, 6K | disabled |
+| `POCKET_6K_G2 v8.6` | 2.8K, 5.3K, 6K | 5.7K, 6K | disabled |
 
-Two things worth flagging:
+Three things worth flagging:
 
 - **The PRO's option set is genuinely different, not just relabeled** —
   `5.3K`, not `5.7K` — confirming design principle 6's stance is right
   even for operator-provided (non-wire) knowledge: nothing here should be
   assumed to transfer from the G2 to the PRO without its own check, and
   this table is the proof it doesn't always.
-- **Disabled at ProRes/4K DCI on both cameras** lines up with, but is not
-  proven to be the same fact as, this codebase's own independently-found
-  `resolutions."4K DCI".known_unreachable.ProRes` gap on both profiles
-  (`docs/settings.md` §16, §7-§9) — two different subsystems (video
+- **`POCKET_6K_G2 v8.6`'s row (operator-provided, 2026-07-31) is neither
+  the v7.9 G2's nor the PRO's row, and mixes elements of both within a
+  single camera.** HD's middle option is `5.3K` (matching the PRO's label,
+  not v7.9 G2's own `5.7K`), but UHD's option set is `{5.7K, 6K}` — only
+  two options, dropping `2.8K` entirely, and reusing the `5.7K` label HD
+  doesn't use on this firmware. This is the first evidence in this table
+  that the option set can differ **by resolution within one camera**, not
+  just by camera — every earlier row assumed (from the data available at
+  the time) that a camera offers one fixed option set reused at both HD
+  and UHD. Confirms design principle 6 again, one level deeper: even a
+  same-camera, same-firmware assumption ("HD's options apply to UHD too")
+  doesn't hold without checking each resolution separately.
+- **Disabled at ProRes/4K DCI on all three profiles** lines up with, but is
+  not proven to be the same fact as, this codebase's own independently-found
+  `resolutions."4K DCI".known_unreachable.ProRes` gap on all three profiles
+  (`docs/settings.md` §16, §7-§9, §18.12) — two different subsystems (video
   *recording* resolution selection vs. still-photo sensor-area selection)
-  that happen to both go dark at exactly the same label. Worth noting as
-  a real coincidence-or-connection, not worth claiming as one and the
-  same finding without more evidence — the video-resolution gap is a
-  write-path failure this codebase's own commands hit, while the
-  sensor-area disablement is a camera-body UI state the operator observed
-  directly; either could explain the other, or they could be unrelated
-  symptoms of the same underlying camera limitation (ProRes/4K DCI may
-  simply not be a real, fully-supported combination on either camera at
-  all, only reachable through a body-menu quirk already documented
-  elsewhere — `docs/settings.md` §16's addendum). Left as an open
-  observation.
+  that happen to both go dark at exactly the same label, on every camera
+  and firmware checked so far. Worth noting as a real coincidence-or-
+  connection, not worth claiming as one and the same finding without more
+  evidence — the video-resolution gap is a write-path failure this
+  codebase's own commands hit, while the sensor-area disablement is a
+  camera-body UI state the operator observed directly; either could
+  explain the other, or they could be unrelated symptoms of the same
+  underlying camera limitation (ProRes/4K DCI may simply not be a real,
+  fully-supported combination on any of these cameras at all, only
+  reachable through a body-menu quirk already documented elsewhere —
+  `docs/settings.md` §16's addendum). Left as an open observation.
 
 ### 10.3 Second capture — 2026-07-27, PRO — same negative result, one new cross-model reconfirmation
 
@@ -1250,3 +1269,19 @@ way category 9's write-margin signal was originally found) rather than
 another variation on what's already been tried here. Attention moves to
 the photo-capture verification-strategy question (§7.3) and its USB TODO
 — the higher-value open thread this whole detour grew out of.
+
+**Third independent reconfirmation, 2026-07-31 (`POCKET_6K_G2 v8.6`,
+`docs/settings.md` §18.13).** §10.1's capture above was taken on
+`POCKET_6K_G2 v7.9`, right before that unit's firmware upgrade — this
+section's "either camera" always meant v7.9 G2 and `POCKET_6K_PRO v8.6`,
+never v8.6 G2 specifically. A dedicated follow-up capture on `POCKET_6K_G2
+v8.6` (motivated by an unrelated open discrepancy in that profile's
+`recording_format.flags` field at UHD, not a revisit of this
+investigation) independently reproduced the same read-only windowed-bit
+correlation on this third (camera, firmware) pairing — full-sensor Sensor
+Area reads `flags` bit 4 clear, any smaller crop reads it set, reproduced
+2/2. This doesn't reopen anything above (no write attempt was made, no new
+evidence about writability), but is worth noting as design principle 6 in
+practice: the same conclusion re-earned on a new firmware rather than
+assumed to carry over. `POCKET_6K_G2 v8.6`'s own `commands.recording_format`
+provenance records the capture and its resolved discrepancy directly.

@@ -25,13 +25,15 @@ from bmd_ble.constants import (
     CHARACTERISTIC_MODEL_INFO,
     CHARACTERISTIC_OUTGOING,
     CHARACTERISTIC_TIMECODE,
+    CONNECT_RETRY_DELAY_S,
+    CONNECT_SUBSCRIBE_MAX_ATTEMPTS,
     GAP_CHARACTERISTIC_APPEARANCE,
     GAP_CHARACTERISTIC_DEVICE_NAME,
 )
 from bmd_ble.scanner import DiscoveredCamera
 
 MODEL_KEY = "POCKET_6K_G2"
-FIRMWARE = "v7.9"
+FIRMWARE = "v8.6"
 ADDRESS = "AA:BB:CC:DD:EE:01"
 BLE_NAME = "A:AF3DC814"
 MANUFACTURER_NAME = "Blackmagic Design"
@@ -384,6 +386,133 @@ class TestBMDCameraControllerConnect:
             await controller.connect()
 
         assert controller._client is None
+
+    @pytest.mark.asyncio
+    async def test_connect_retries_when_link_drops_during_initial_subscribe(
+        self, monkeypatch
+    ) -> None:
+        """POCKET_6K_G2 v8.6, 2026-07-29: the camera dropped the link ~300 ms after
+        connect on 3 of 6 attempts, during connect()'s own subscribe_all(). The drop
+        is transient — the same command succeeded on other runs — so connect() must
+        rebuild the session rather than propagate a fatal error on the first try."""
+        controller = BMDCameraController(make_discovered(), make_profile())
+        clients: list[FakeBleakClient] = []
+        slept: list[float] = []
+
+        class DropsFirstConnectClient(FakeBleakClient):
+            async def start_notify(self, uuid: str, callback: object) -> None:
+                if len(clients) == 1:
+                    self.is_connected = False
+                    raise OSError("[WinError -2147023673] The operation was canceled by the user.")
+                await super().start_notify(uuid, callback)
+
+        def client_factory(address, disconnected_callback=None):
+            client = DropsFirstConnectClient(address, disconnected_callback)
+            clients.append(client)
+            return client
+
+        async def fake_sleep(delay):
+            slept.append(delay)
+
+        monkeypatch.setattr("bmd_ble.camera_controller.BleakClient", client_factory)
+        monkeypatch.setattr("bmd_ble.camera_controller.asyncio.sleep", fake_sleep)
+
+        await controller.connect()
+
+        assert len(clients) == 2, "should have rebuilt the session once"
+        assert controller._client is clients[1]
+        assert controller._client.is_connected is True
+        assert CHARACTERISTIC_INCOMING in controller._client.notified
+        assert slept == [CONNECT_RETRY_DELAY_S]
+
+    @pytest.mark.asyncio
+    async def test_connect_gives_up_after_max_attempts(self, monkeypatch) -> None:
+        """A camera that drops the link on every attempt must still fail loudly."""
+        controller = BMDCameraController(make_discovered(), make_profile())
+        clients: list[FakeBleakClient] = []
+
+        class AlwaysDropsClient(FakeBleakClient):
+            async def start_notify(self, uuid: str, callback: object) -> None:
+                self.is_connected = False
+                raise OSError("[WinError -2147023673] The operation was canceled by the user.")
+
+        def client_factory(address, disconnected_callback=None):
+            client = AlwaysDropsClient(address, disconnected_callback)
+            clients.append(client)
+            return client
+
+        async def fake_sleep(_delay):
+            pass
+
+        monkeypatch.setattr("bmd_ble.camera_controller.BleakClient", client_factory)
+        monkeypatch.setattr("bmd_ble.camera_controller.asyncio.sleep", fake_sleep)
+
+        with pytest.raises(RuntimeError, match="connection lost mid-subscribe"):
+            await controller.connect()
+
+        assert len(clients) == CONNECT_SUBSCRIBE_MAX_ATTEMPTS
+
+    @pytest.mark.asyncio
+    async def test_connect_does_not_retry_a_failure_that_is_not_a_link_drop(
+        self, monkeypatch
+    ) -> None:
+        """Subscribe exhaustion on a *live* link is a real fault, not a transient
+        drop — retrying the whole connect would just hide it behind more attempts."""
+        controller = BMDCameraController(make_discovered(), make_profile())
+        clients: list[FakeBleakClient] = []
+
+        class UnreachableCharClient(FakeBleakClient):
+            async def start_notify(self, uuid: str, callback: object) -> None:
+                # Link stays up; the characteristic itself refuses the CCCD write.
+                raise BleakError("Could not start notify on 000E: Unreachable")
+
+        def client_factory(address, disconnected_callback=None):
+            client = UnreachableCharClient(address, disconnected_callback)
+            clients.append(client)
+            return client
+
+        async def fake_sleep(_delay):
+            pass
+
+        monkeypatch.setattr("bmd_ble.camera_controller.BleakClient", client_factory)
+        monkeypatch.setattr("bmd_ble.camera_controller.asyncio.sleep", fake_sleep)
+
+        with pytest.raises(RuntimeError, match="Could not subscribe to INCOMING_CONTROL"):
+            await controller.connect()
+
+        assert len(clients) == 1, "must not rebuild the session for a non-drop failure"
+
+    @pytest.mark.asyncio
+    async def test_disconnect_during_initial_subscribe_does_not_spawn_reconnect_loop(
+        self, monkeypatch
+    ) -> None:
+        """connect() owns recovery while it holds _connect_lock. A reconnect loop
+        spawned here would block on that lock and race connect()'s own retry."""
+        controller = BMDCameraController(make_discovered(), make_profile())
+        spawned = False
+
+        async def fake_reconnect_loop():
+            nonlocal spawned
+            spawned = True
+
+        class DropsAndFiresCallbackClient(FakeBleakClient):
+            async def start_notify(self, uuid: str, callback: object) -> None:
+                self.is_connected = False
+                if self.disconnected_callback is not None:
+                    self.disconnected_callback(self)
+                raise OSError("[WinError -2147023673] The operation was canceled by the user.")
+
+        async def fake_sleep(_delay):
+            pass
+
+        monkeypatch.setattr("bmd_ble.camera_controller.BleakClient", DropsAndFiresCallbackClient)
+        monkeypatch.setattr("bmd_ble.camera_controller.asyncio.sleep", fake_sleep)
+        monkeypatch.setattr(controller, "_reconnect_loop", fake_reconnect_loop)
+
+        with pytest.raises(RuntimeError, match="connection lost mid-subscribe"):
+            await controller.connect()
+
+        assert spawned is False
 
     @pytest.mark.asyncio
     async def test_connect_is_idempotent_if_already_connected(self, monkeypatch) -> None:
@@ -1489,6 +1618,72 @@ async def test_subscribe_incoming_fast_fails_on_not_connected_error(monkeypatch)
 
     assert call_count == 1
     assert "connection lost mid-subscribe" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_subscribe_incoming_aborts_retry_when_link_already_dropped(monkeypatch):
+    """A link that drops mid-CCCD surfaces on WinRT as OSError ("The operation
+    was canceled by the user"), which looks identical to a transient failure.
+    The disconnect callback has already fired by then, so ``is_connected`` is
+    what distinguishes them — subscribe must abort at once rather than sleep
+    ``retry_delay_s`` holding ``_connect_lock`` while ``_reconnect_loop`` waits
+    for it. Reproduces the 2026-07-29 POCKET_6K_G2 v8.6 Phase 2 failure."""
+    controller = BMDCameraController(make_discovered(), make_profile())
+    slept: list[float] = []
+
+    class DropsMidSubscribeClient:
+        def __init__(self, address):
+            self.address = address
+            self.is_connected = True
+
+        async def start_notify(self, uuid, callback):
+            # The camera drops the link during the CCCD write; WinRT reports it
+            # as OSError and Bleak's disconnect callback flips is_connected.
+            self.is_connected = False
+            raise OSError("[WinError -2147023673] The operation was canceled by the user.")
+
+    async def fake_sleep(delay):
+        slept.append(delay)
+
+    controller._client = DropsMidSubscribeClient(ADDRESS)
+    monkeypatch.setattr("bmd_ble.camera_controller.asyncio.sleep", fake_sleep)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await controller.subscribe_incoming(retries=3, retry_delay_s=10.0)
+
+    assert "connection lost mid-subscribe" in str(exc_info.value)
+    assert slept == [], "must not sleep on a retry that cannot succeed"
+
+
+@pytest.mark.asyncio
+async def test_subscribe_incoming_aborts_retry_when_generation_superseded(monkeypatch):
+    """If a newer connect() bumped the generation while this subscribe was in
+    flight, the subscribe belongs to a dead generation — retrying would attach
+    a handler nothing reads. Abort instead of sleeping."""
+    controller = BMDCameraController(make_discovered(), make_profile())
+    slept: list[float] = []
+
+    class SupersedingClient:
+        is_connected = True
+
+        def __init__(self, address):
+            self.address = address
+
+        async def start_notify(self, uuid, callback):
+            controller._conn_gen += 1
+            raise BleakError("Could not start notify on 000E: Unreachable")
+
+    async def fake_sleep(delay):
+        slept.append(delay)
+
+    controller._client = SupersedingClient(ADDRESS)
+    monkeypatch.setattr("bmd_ble.camera_controller.asyncio.sleep", fake_sleep)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await controller.subscribe_incoming(retries=3)
+
+    assert "superseded" in str(exc_info.value)
+    assert slept == []
 
 
 @pytest.mark.asyncio

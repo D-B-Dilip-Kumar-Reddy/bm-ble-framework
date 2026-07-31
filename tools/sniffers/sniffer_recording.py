@@ -44,7 +44,7 @@ from bmd_ble.camera_profile import CameraProfile  # noqa: E402
 from bmd_ble.scanner import scan_for_camera  # noqa: E402
 
 DEFAULT_MODEL_KEY = "POCKET_6K_G2"
-DEFAULT_FIRMWARE = "v7.9"
+DEFAULT_FIRMWARE = "v8.6"
 ACTION_LABELS = ["record_start", "record_stop"]
 
 

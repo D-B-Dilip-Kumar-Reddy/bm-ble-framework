@@ -103,18 +103,49 @@ See `docs/active_camera_control.md`'s section on it and `docs/settings.md`
   `record_start` and `record_stop`) or the filter has no contrast and
   keeps everything.
 
-  **Known limitation:** this heuristic would also filter out a signal like
+  **Presence alone is not enough — the state-report exception (added
+  2026-07-29).** A command family that reports *state* appears in every
+  window by construction, so presence-only filtering dropped the very triple
+  the sweep exists to find. The `POCKET_6K_G2 v8.6` recording capture has
+  `(0x0A, 0x01, INT8)` in both the `record_start` window (payload
+  `02 00 40 00 01 03`) and the `record_stop` window (`00 00 40 00 01 03`);
+  the filter removed it, and all three candidates it did offer were dead
+  ends, confirmed `nothing observed` across two full sweeps on hardware.
+  The recording family is this tool's headline use case and the one Phase 2
+  of the bring-up workflow runs, so this was the common case, not an edge
+  case.
+
+  `_is_state_report` now rescues these: a triple present in every window is
+  still seeded when its payload is **stable within** each window but
+  **differs between** windows. That is what a family reporting state looks
+  like — the camera settles on one value per operator action and holds it —
+  whereas genuine telemetry keeps changing inside a single window. On the
+  real capture above the recording family is rescued and comes out as
+  candidate **[1]** — ahead of the three dead ends — while `0x09/0x00`, a
+  storage counter taking three different values inside each window, stays
+  filtered. (`0x09/0x02` and `0x0C/0x03` were never filtered in the first
+  place: they appear in only one of the two windows, so presence alone
+  already kept them.) `tests/unit/tools/common/test_discovery.py` replays
+  that exact capture as a regression test.
+
+  A triple that is stable within *and* identical across every window is
+  still dropped: nothing about it tracks the operator's action.
+
+  **Known limitation:** the rescue is payload-shaped, so it does not help a
+  signal that varies within a window for reasons unrelated to the action.
+  This heuristic would still filter out a signal like
   `protocol/categories/storage.py`'s CANDIDATE write-margin warning
   (category `0x09`, parameter `0x01`) — it ticks frequently enough, and its
   category/parameter pair is present across essentially every window, to
   look like ordinary ambient telemetry even though its *value* carries real
   meaning. That signal was found by comparing raw log bytes directly
   (`docs/recording.md`'s "Camera-initiated stop detection"), not through
-  this tool. `exclude_ambient` filters on `(category, parameter)` presence,
-  not on whether the *values* within a triple vary meaningfully — a future
-  improvement here could look for exactly this pattern (a triple present
-  everywhere, but whose payload takes on a rare/different value in one
-  specific window).
+  this tool. The state-report rescue does not reach it: it demands *one*
+  payload per window, and the write-margin warning interleaves its
+  `nominal` and `low_margin` values inside a single window. Catching that
+  one would need a different rule — a triple present everywhere whose
+  payload takes a rare value in one specific window, rather than a stable
+  one in each — which is not implemented.
 - `extract_echo(notifications, category, parameter)` — first
   cleanly-decoded matching echo as `(operation_int, payload_hex)`.
 - `build_command_block(name, confirmed, capture_ref, discovered_on)` —
@@ -189,6 +220,24 @@ just a confirmation-reliability problem" reminder — so the operator can
 react while still connected instead of discovering the conflict from a
 traceback.
 
+**And the end-of-run refusal is no longer a traceback either (added
+2026-07-29).** The `ValueError` above was still propagating uncaught out of
+`run()`, so a considered refusal was presented as a Python stack trace —
+which reads like the tool broke, when in fact the sweep completed, the
+capture was already on disk, and every confirmation was in the console
+scrollback. `run()` now catches it and calls `print_unemittable_summary`,
+which prints the reason, **every confirmation with its echo state**, the
+saved capture path, and both readings of the conflict (a genuine
+multi-candidate finding to transcribe by hand, or an undiscriminating read
+to re-run). It returns exit status 1 rather than raising.
+
+The echo column is the point: it is what the operator resolves the conflict
+on. In the `POCKET_6K_G2 v8.6` recording sweep the summary shows
+`reserved=0x01 start` as `NO ECHO CAPTURED` while all three `reserved=0x00`
+confirmations carry real echoes — making it obvious at a glance which
+reserved value belongs in the profile, which previously took reading the
+scrollback by hand.
+
 **The same conflict, but this time a real finding, not an artifact
 (2026-07-27, same day).** A follow-up VOID sweep on the same G2
 coordinates hit the identical warning and end-of-run `ValueError` — two
@@ -211,6 +260,21 @@ The identical sweep, repeated on `POCKET_6K_PRO v8.6` the same day
 transcription sequence and reached the identical reserved-indifference
 finding independently — this pattern is now established, not a one-off.
 
+**Third occurrence, and the first outside photo capture (2026-07-29).**
+`POCKET_6K_G2 v8.6`'s recording sweep hit it again: all four
+`(value, reserved)` candidates were acted on, so both `start` and `stop`
+each had two disagreeing confirmations and `build_command_block` raised.
+So reserved-byte indifference is not specific to a VOID trigger — it also
+holds for a payload-carrying INT8 family. What made this one easier to
+trust than a glance was the *wire*: three of the four candidates produced a
+genuine `operation=0x02` echo whose leading payload byte tracked the
+requested value, which is evidence independent of the operator's eyes. That
+also drove the tie-break — `reserved=0x00` was recorded as canonical
+because it was the only value with a clean echo for **both** outcomes,
+with `0x01` noted as equally accepted in `provenance.notes`
+(`docs/recording.md`). When resolving one of these by hand, prefer the
+reserved value that echoed for every outcome over the one that didn't.
+
 **Known latent risk — connect-settle race — materialized in practice
 2026-07-27.** This tool writes the first candidate immediately after
 connecting, with no wait for the camera's post-connect initial-payload
@@ -231,6 +295,20 @@ correctly used `[r] repeat` rather than confirm on contaminated data — the
 existing mitigation (operator judgment on the first candidate) worked as
 designed, so the `--connect-settle-seconds` fix still isn't required, but
 this is the first real evidence the risk isn't just theoretical.
+
+**Hit again on `POCKET_6K_G2 v8.6`'s recording sweep (2026-07-29), this
+time with a lasting cost.** Candidate 1's window caught the burst again, so
+that candidate ended up operator-confirmed with `No decodable echo
+captured` while the other three all echoed cleanly. It didn't break the
+sweep — the operator's eyes are ground truth, as designed — but it did
+decide a downstream question: with the reserved byte turning out to be
+indifferent (above), the tie-break went to `reserved=0x00` precisely
+because candidate 1 (`reserved=0x01`, `start`) had no echo of its own. The
+mitigation is still adequate for confirming *outcomes*, but the first
+candidate's missing echo is not free when the echoes themselves become the
+evidence. Ordering a sweep so the first candidate is one you don't mind
+losing the echo for — or using `[r] repeat` on it as a matter of routine —
+costs nothing and avoids this.
 
 **Sibling tool note.** `send_settings_command.py` gained a `--repeat N`
 flag (2026-07-21) for a different discovery question than this tool

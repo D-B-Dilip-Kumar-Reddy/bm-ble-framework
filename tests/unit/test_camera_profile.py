@@ -82,6 +82,9 @@ class TestKnownProfiles:
     def test_known_profiles_contains_pocket_6k_g2_v79(self):
         assert ("POCKET_6K_G2", "v7.9") in KNOWN_PROFILES
 
+    def test_known_profiles_contains_pocket_6k_g2_v86(self):
+        assert ("POCKET_6K_G2", "v8.6") in KNOWN_PROFILES
+
     def test_known_profiles_contains_pocket_6k_pro_v86(self):
         assert ("POCKET_6K_PRO", "v8.6") in KNOWN_PROFILES
 
@@ -668,12 +671,187 @@ def test_pocket_6k_pro_profile_resolves_recording_command():
     assert spec.provenance.method == "guided-discovery (tools/control/discover_command.py)"
 
 
+def test_pocket_6k_g2_v86_profile_resolves_recording_command():
+    """POCKET_6K_G2_v8.6.json's recording block, discovered on real hardware
+    2026-07-29. Same coordinates and values as v7.9, but ``reserved`` is 0
+    where v7.9 uses 1 — the camera accepted both, and 0 is the one with a
+    clean wire echo for both outcomes (see docs/recording.md). The assertion
+    below is the regression net for that difference: it must not silently
+    drift back to the v7.9 value."""
+    profile = CameraProfile.for_model("POCKET_6K_G2", "v8.6")
+
+    spec = profile.require_command("recording", ("start", "stop"))
+    assert (spec.category, spec.parameter) == (10, 1)
+    assert spec.data_type is DataType.INT8
+    assert spec.values == {"start": 2, "stop": 0}
+    assert spec.reserved == 0
+    assert spec.echo_operation == 2
+    assert spec.provenance is not None
+    # Promoted 2026-07-29 on Phase 2 step 8.5: examples/record_start_stop.py
+    # confirmed 3/3 start and 3/3 stop by echo through the real CameraSession.
+    assert spec.provenance.status == "VERIFIED"
+
+
+def test_pocket_6k_g2_v86_profile_resolves_fps_modes():
+    """POCKET_6K_G2_v8.6.json's fps_modes, sniffed 2026-07-30 across step 9's
+    combined sweep, a dedicated follow-up fps sweep, and three standalone
+    fps_60 retries (docs/settings.md §18/§18.7/§18.8). All 8 standard rates.
+
+    ``60`` initially looked like a candidate hardware ceiling — two separate
+    sweeps produced no 0x01/0x09 report for it — but that finding was
+    RETRACTED: three follow-up standalone attempts reported it cleanly twice,
+    byte-identical to each other and matching the exact-rate flags pattern
+    (§18.8). The camera demonstrably reaches and reports this state, so it
+    belongs in this table like every other confirmed rate; the remaining
+    silent attempts are an open report-observability question, not a
+    capability finding, and must not be read as evidence of a ceiling.
+
+    frame_flags follows the windowed-sensor pattern confirmed in this
+    profile's recording_format.provenance: every NTSC/drop rate is 0x0013
+    (19), every exact rate is 0x0010 (16)."""
+    profile = CameraProfile.for_model("POCKET_6K_G2", "v8.6")
+
+    assert set(profile.fps_modes) == {
+        "23.98",
+        "24",
+        "25",
+        "29.97",
+        "30",
+        "50",
+        "59.94",
+        "60",
+    }
+
+    exact_rates = ("24", "25", "30", "50", "60")
+    ntsc_rates = ("23.98", "29.97", "59.94")
+    for name in exact_rates:
+        assert profile.require_fps_mode(name).m_rate == 0
+        assert profile.require_fps_mode(name).frame_flags == 16
+    for name in ntsc_rates:
+        assert profile.require_fps_mode(name).m_rate == 1
+        assert profile.require_fps_mode(name).frame_flags == 19
+
+    # NTSC/drop rates report a rounded-up fps_int, not the fractional label.
+    assert profile.require_fps_mode("23.98").fps_int == 24
+    assert profile.require_fps_mode("29.97").fps_int == 30
+    assert profile.require_fps_mode("59.94").fps_int == 60
+    assert profile.require_fps_mode("60").fps_int == 60
+
+
+def test_pocket_6k_g2_v86_profile_resolves_dimension_enums():
+    """POCKET_6K_G2_v8.6.json's dimension_enums, from a full 0x00-0x1F active
+    sweep via tools/control/sweep_dimension_enum.py (2026-07-30, docs/settings.md
+    §18.9). All 8 confirmed enums independently match both POCKET_6K_G2_v7.9's
+    and POCKET_6K_PRO_v8.6's numbers exactly — sniffed fresh on this firmware
+    per design principle 6, not copied; the cross-profile agreement is the
+    finding these assertions pin down, not the source of the values.
+
+    HD's width/height came from this same sweep (its enum 0x03 report), not a
+    separate passive re-capture — step 9's own HD window had caught the
+    connect burst instead. commands.video_format is now VERIFIED: a
+    480-combination CameraSession.set_camera_format() sweep (step 13,
+    docs/settings.md §18.10) confirmed 432 combinations end to end, on top
+    of two manual send_settings_command.py round trips."""
+    profile = CameraProfile.for_model("POCKET_6K_G2", "v8.6")
+
+    assert profile.require_command("video_format").provenance.status == "VERIFIED"
+
+    hd = profile.require_resolution("HD")
+    assert (hd.width, hd.height) == (1920, 1080)
+    assert hd.dimension_enums == {"ProRes": 3}
+
+    expected_enums = {
+        "HD": {"ProRes": 3},
+        "UHD": {"ProRes": 6},
+        "4K DCI": {"BRAW": 8},  # ProRes enum still missing, same gap as v7.9/PRO
+        "2.8K 17:9": {"BRAW": 13},
+        "3.7K Anamorphic": {"BRAW": 15},
+        "5.7K 17:9": {"BRAW": 18},
+        "6K": {"BRAW": 19},
+        "6K 2.4:1": {"BRAW": 20},
+    }
+    for name, enums in expected_enums.items():
+        assert profile.require_resolution(name).dimension_enums == enums
+
+    # 2.8K 17:9's width is settled for this firmware — sniffed, actively
+    # probed, and confirmed on the camera's own on-screen display.
+    assert profile.require_resolution("2.8K 17:9").width == 2880
+
+    # 4K DCI/ProRes is known_unreachable here (2026-07-31, docs/settings.md
+    # §18.12) — the enum-sweep gap alone wasn't sufficient on its own, but
+    # v7.9's and the PRO's fuller write-value investigations have since been
+    # repeated on this firmware and produced the same negative result.
+    assert set(profile.require_resolution("4K DCI").known_unreachable) == {"ProRes"}
+
+    # "30" was independently reconfirmed byte-identical across two separate
+    # sniffer sessions (step 9's combined sweep and the dedicated fps sweep).
+    assert profile.require_fps_mode("30").fps_int == 30
+
+
+def test_pocket_6k_g2_v86_settings_families_promoted_to_verified():
+    """Phase 3 steps 12/13 (2026-07-30, docs/settings.md §18.10): nine manual
+    send_settings_command.py confirming writes plus a 480-combination
+    sweep_camera_format.py sweep (432 confirmed) promoted all three settings
+    families to VERIFIED — exceeding the single-round-trip bar
+    (examples/change_codec.py) that promoted v7.9's equivalents.
+
+    The sweep also surfaced two systematic gaps that mirror precedents already
+    recorded on other profiles (POCKET_6K_PRO v8.6's ProRes/4K DCI
+    known_unreachable and 6K max_fps_int=50, docs/settings.md §16/§17).
+    resolutions.6K.max_fps_int was promoted the same day (2026-07-30): the
+    operator confirmed on the camera's own UI that 6K doesn't offer
+    59.94/60fps, meeting design principle 7's evidence bar. The ProRes/4K DCI
+    known_unreachable entry was promoted 2026-07-31 (docs/settings.md §18.12):
+    the operator ran the same three falsification hypotheses that closed the
+    PRO's identical gap (data-type byte, Operation.OFFSET, exact fps/variant),
+    three times each from three different starting states and Sensor Area
+    settings — all 9 attempts stayed silent, meeting design principle 7's
+    evidence bar the same way the PRO's entry did."""
+    profile = CameraProfile.for_model("POCKET_6K_G2", "v8.6")
+
+    for name in ("codec_quality", "video_format", "recording_format"):
+        spec = profile.require_command(name)
+        assert spec.provenance is not None
+        assert spec.provenance.status == "VERIFIED"
+
+    # ProRes/4K DCI: promoted 2026-07-31 after the operator exhausted the
+    # same falsification hypotheses that closed the PRO's identical gap.
+    assert set(profile.require_resolution("4K DCI").known_unreachable) == {"ProRes"}
+
+    # BRAW@6K@59.94/60fps: promoted 2026-07-30 after an operator on-screen
+    # confirmation met design principle 7's evidence bar for max_fps_int.
+    assert profile.require_resolution("6K").max_fps_int == 50
+
+
+def test_pocket_6k_g2_reserved_byte_differs_between_firmwares():
+    """Design principle 6 in one assertion: the same command family on the same
+    physical camera carries a different reserved byte across a firmware
+    upgrade, so nothing may be inherited between profiles without re-sniffing."""
+    v79 = CameraProfile.for_model("POCKET_6K_G2", "v7.9").require_command("recording")
+    v86 = CameraProfile.for_model("POCKET_6K_G2", "v8.6").require_command("recording")
+
+    assert (v79.category, v79.parameter) == (v86.category, v86.parameter)
+    assert v79.values == v86.values
+    assert v79.reserved == 1
+    assert v86.reserved == 0
+
+
 @pytest.mark.parametrize(("model_key", "firmware"), KNOWN_PROFILES)
 def test_every_known_profile_resolves_write_margin_warning_storage_signal(model_key, firmware):
-    """Both real profiles carry an identical CANDIDATE write_margin_warning
-    block — passive real-hardware evidence, not sent by this repo's code,
-    see docs/recording.md's Camera-initiated stop detection section."""
+    """Every profile that has reached the sniffing phases carries an identical
+    CANDIDATE write_margin_warning block — passive real-hardware evidence, not
+    sent by this repo's code, see docs/recording.md's Camera-initiated stop
+    detection section.
+
+    A profile still at the Phase 1 scaffold stage (``_meta``/``ble`` only, no
+    ``storage`` section at all) is skipped: it has nothing sniffed yet, and
+    design principle 6 forbids copying another profile's values into it. Once
+    the section exists, a missing or altered signal still fails here.
+    """
     profile = CameraProfile.for_model(model_key, firmware)
+
+    if not profile.storage:
+        pytest.skip(f"{model_key}_{firmware} is a Phase 1 scaffold — nothing sniffed yet")
 
     spec = profile.require_storage_signal("write_margin_warning", ("nominal", "low_margin"))
     assert spec.category == 9

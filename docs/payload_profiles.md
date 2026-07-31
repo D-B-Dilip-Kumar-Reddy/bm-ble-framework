@@ -1,6 +1,6 @@
 # Payload Profiles — structure, schema, and provenance
 
-**Status:** implemented — schema-validated profiles + `CommandSpec` are live. `storage` has its first entry (a CANDIDATE signal, `StorageSignalSpec`); the settings lookup tables (`codecs`/`resolutions`/`fps_modes`) have their first population on `POCKET_6K_G2 v7.9` (CANDIDATE — see `docs/settings.md`); `capabilities` remains reserved and unpopulated.
+**Status:** implemented — schema-validated profiles + `CommandSpec` are live. `storage` has its first entry (a CANDIDATE signal, `StorageSignalSpec`); the settings lookup tables (`codecs`/`resolutions`/`fps_modes`) are populated on `POCKET_6K_G2 v7.9` and `POCKET_6K_PRO v8.6`, and now fully on `POCKET_6K_G2 v8.6` too — `codecs`, `resolutions` (all 8, with `dimension_enums` for all 8), and `fps_modes` (complete at 8/8, after a candidate ceiling at `60` was raised and then retracted on retest). All three settings command families (`codec_quality`/`video_format`/`recording_format`) are `VERIFIED` on both `POCKET_6K_G2 v7.9` and, as of 2026-07-30, `POCKET_6K_G2 v8.6` too (nine manual confirming writes plus a 432/480 `sweep_camera_format.py` sweep) — `POCKET_6K_PRO v8.6`'s equivalents remain `CANDIDATE`, blocked on its own ProRes/4K DCI gap. The ProRes/4K DCI `dimension_enum` gap is still open on all three profiles, but `POCKET_6K_G2 v8.6` now guards the write-side consequence of it: `resolutions."4K DCI".known_unreachable.ProRes` (2026-07-31, matching `POCKET_6K_PRO v8.6`'s own entry) and `resolutions."6K".max_fps_int = 50` (2026-07-30) are both written for this profile now, closing the two candidates the sweep surfaced. The earlier open discrepancy in the `recording_format` flags field at UHD is resolved (2026-07-31): a dedicated passive Sensor Area capture showed the bit tracks the camera's independent Sensor Area setting under ProRes, not video resolution (see `docs/settings.md` §18/§18.7–§18.13); `capabilities` remains reserved and unpopulated on all three.
 
 ## Overview
 
@@ -432,6 +432,14 @@ Worth remembering for any future sweep tool: an `unconfirmed` result is
 evidence about *this run*, not automatically evidence about the camera —
 check whether the tooling's own timing assumptions could explain it before
 trusting it as a `known_unreachable`/`max_fps_int` candidate.
+
+The same lesson repeated on `POCKET_6K_G2 v8.6`, this time for a passive
+sniffer window rather than an active sweep's echo timeout: `docs/settings.md`
+§18.7 recorded `fps_60` as a candidate ceiling after it produced no report
+across two sweeps, and §18.8 retracted that finding after three follow-up
+retries reported it cleanly twice. No `max_fps_int` was ever written for it —
+this profile's own convention held — but the near-miss is the point: two
+silent windows felt like enough evidence, and weren't.
 
 ---
 

@@ -124,10 +124,15 @@ happened."
 
 **`record_start()` sets `last_start_timecode` to a canonical
 `Timecode(0, 0, 0, 0)`, not whatever `_latest_timecode` currently holds.**
-This is deliberate: real captures on both `POCKET_6K_G2 v7.9` and
-`POCKET_6K_PRO v8.6` (and Blackmagic cameras generally, per direct hardware
-observation) confirm TIMECODE resets to `00:00:00:00` the instant recording
-starts. Snapshotting `_latest_timecode` at that point was a real bug — since
+This is deliberate: real captures on `POCKET_6K_G2 v7.9`,
+`POCKET_6K_PRO v8.6`, and `POCKET_6K_G2 v8.6` (and Blackmagic cameras
+generally, per direct hardware observation) confirm TIMECODE resets to
+`00:00:00:00` the instant recording starts. The v8.6 confirmation came free
+with that firmware's Phase 2 promotion run (2026-07-29,
+`docs/recording.md`): all 3 cycles reported `start timecode: 00:00:00:00`
+and produced sane clip durations (7s/5s/4s) from live stop readings —
+the reset behaviour holding across a firmware upgrade on the same physical
+unit, not just across models. Snapshotting `_latest_timecode` at that point was a real bug — since
 TIMECODE stops ticking while not recording, no new notification necessarily
 arrives between the *previous* clip's stop and the *next* record_start's
 echo confirmation, so the snapshot would silently carry over the previous

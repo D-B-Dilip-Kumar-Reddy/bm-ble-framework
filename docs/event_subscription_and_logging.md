@@ -22,8 +22,11 @@ is logged as uppercase hex pairs and written to a per-session file under `logs/`
 
 ### `subscribe_all()`
 
-The single entry point for establishing all three subscriptions. Called from `connect()`
-after the BLE link is confirmed up. Passes the stored callback for each characteristic:
+The single entry point for establishing all three subscriptions. Called from
+`connect()` (via `_connect_and_subscribe_once`) after the BLE link is confirmed up.
+If the camera drops the link during these CCCD writes, `connect()` rebuilds the whole
+session and calls `subscribe_all()` again — see `docs/winrt_ble_connection_hardening.md`
+issue 10. Passes the stored callback for each characteristic:
 
 - **First call** (just after connect): all three stored callbacks are `None` → default
   hex-logging handlers are used.
@@ -47,9 +50,18 @@ structure:
 2. **Handler resolution** — `callback if callback is not None else self._log_<name>`.
 3. **Generation-guarding wrapper** — wraps the resolved handler before passing it to
    `start_notify` (see below).
-4. **Retry loop** — up to 3 attempts with a 10 s delay between them. Retries on
-   `BleakError` or `OSError`. Fast-fails immediately on a `"not connected"` `BleakError`
-   (connection lost mid-subscribe; retrying would not help).
+4. **Retry loop** — up to 3 attempts with a 10 s delay between them, for the real
+   firmware timing gap where the camera does not yet accept CCCD writes. Retries on
+   `BleakError` or `OSError`, but fast-fails without sleeping whenever a retry
+   provably cannot succeed:
+   - a `"not connected"` `BleakError`, and
+   - either condition reported by `_subscribe_retry_blocked_by()` — the connection
+     generation was superseded, or the client is gone. This second check is what
+     catches a link dropping mid-CCCD on WinRT, which arrives as an ordinary
+     `OSError` and is otherwise indistinguishable from a transient failure. Since
+     `connect()` holds `_connect_lock` across `subscribe_all()`, sleeping through a
+     doomed retry would starve the reconnect loop for the full delay — see
+     `docs/winrt_ble_connection_hardening.md` issue 9.
 5. **Callback storage** — stores the **raw** resolved handler (not the wrapper) in
    `_<name>_callback` for reconnect restoration.
 

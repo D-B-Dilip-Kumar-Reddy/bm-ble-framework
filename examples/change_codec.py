@@ -37,7 +37,7 @@ import sys
 from bmd_ble import BMDUnsupportedError, BMDVerificationError, CameraSession
 
 MODEL_KEY = "POCKET_6K_G2"
-FIRMWARE = "v7.9"
+FIRMWARE = "v8.6"
 
 FPS = "25"
 COMBINATIONS = [

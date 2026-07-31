@@ -1,6 +1,68 @@
 # Recording (Record Start / Stop)
 
-**Status:** implemented and hardware-verified on `POCKET_6K_G2 v7.9` (echo-verified 3/3 cycles); storage preconditions are still planned.
+**Status:** implemented and hardware-verified on `POCKET_6K_G2 v7.9` and `POCKET_6K_G2 v8.6` (echo-verified 3/3 cycles each); storage preconditions are still planned.
+
+## Per-camera status
+
+| Profile | `commands.recording` | Notes |
+|---|---|---|
+| `POCKET_6K_G2 v7.9` | `VERIFIED` | 3/3 echo-verified cycles via `examples/record_start_stop.py`. Frozen — hardware upgraded away |
+| `POCKET_6K_G2 v8.6` | `VERIFIED` | 3/3 echo-verified cycles, 2026-07-29. **`reserved` is `0`, not v7.9's `1`** — see below |
+| `POCKET_6K_PRO v8.6` | `CANDIDATE` | See `docs/command_discovery.md` |
+
+### `POCKET_6K_G2 v8.6`: same coordinates, different reserved byte
+
+Re-sniffed on v8.6 rather than inherited from the v7.9 profile (design
+principle 6) — and the reserved byte genuinely differs, which is exactly why
+that rule exists. Category (`0x0A`), parameter (`0x01`), data type (`INT8`),
+values (`start=2`, `stop=0`) and `echo_operation` (`0x02`) all match v7.9;
+`reserved` does not.
+
+The 2026-07-29 sweep (`tools/control/discover_command.py`, manual
+`--category`/`--parameter` seed) sent all four `(value, reserved)`
+combinations and the camera **acted on every one** — so `0x00` and `0x01` are
+both accepted, and the reserved byte is indifferent for this family on this
+firmware. That matches the same finding already recorded for photo capture on
+both cameras (`docs/photo_capture.md` §7/§9).
+
+`0x00` is recorded as canonical for two reasons:
+
+1. It is the only reserved value with a clean wire echo for **both** outcomes
+   — `FF 0A 00 00 0A 01 01 02 02 00 40 00 01 03` (start) and
+   `... 00 00 40 00 01 03` (stop). The `reserved=0x01` start candidate was
+   operator-confirmed only: its capture window caught the post-connect
+   initial-payload burst instead of the response, the known first-candidate
+   race in `docs/command_discovery.md`'s safety model.
+2. It matches the reserved byte the camera itself uses in every
+   camera-originated report on this family (header byte 3 is `0x00` in all of
+   them).
+
+The echo payload's trailing bytes `00 40 00 01 03` are byte-identical to
+v7.9's and remain unexplained; only the leading byte is used.
+
+**Promoted to `VERIFIED`, 2026-07-29.** Phase 2 step 8.4
+(`tools/control/send_record_command.py`) produced clean echoes in both
+directions, then step 8.5 (`examples/record_start_stop.py`, the real
+`CameraSession` echo-verified round trip) ran **3/3 start, 3/3 stop, 0/3
+stopped early**, with clip durations 7s/5s/4s.
+
+The detail that closes the reserved-byte question: every TX in that run was
+byte-exact to the profile block — `FF 05 00 00 0A 01 01 00 02` and
+`FF 05 00 00 0A 01 01 00 00`, three of each. So `reserved=0x00` is confirmed
+through the production write path, not only through the discovery tool that
+found it. `TIMECODE` also read `00:00:00:00` at every start, independently
+matching `docs/timecode.md`'s finding that the camera resets it on record
+start rather than carrying the previous clip's value.
+
+One methodological note from this sweep: the discovery tool **refused to emit**
+a block, because a command block describes exactly one
+`(category, parameter, data_type, reserved)` family and two different reserved
+bytes had each been confirmed for the same outcome. That refusal is correct —
+but it means a genuine "the camera ignores this byte" finding has no way to be
+expressed through the tool, and has to be resolved by hand as it was here. The
+tool now explains that refusal and lists every confirmation with its echo
+state instead of surfacing a traceback (`docs/command_discovery.md`); the
+resolution is still the operator's.
 
 ## Overview
 

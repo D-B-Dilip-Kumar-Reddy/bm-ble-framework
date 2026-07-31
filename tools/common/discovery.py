@@ -115,6 +115,29 @@ def generate_candidates(
     ]
 
 
+def _is_state_report(
+    triple: tuple[int, int, str],
+    per_window_payloads: list[dict[tuple[int, int, str], set[str]]],
+) -> bool:
+    """True when a triple present in every window still looks like a *state
+    report* rather than ambient telemetry.
+
+    The distinguishing shape: the payload is **stable within** each window but
+    **differs between** windows. That is what a command family reporting state
+    looks like — the camera settles on one value per operator action and holds
+    it — whereas ambient telemetry (a storage counter, a timecode tick) keeps
+    changing inside a single window.
+
+    Only meaningful for a triple that appears in every window; the caller
+    guarantees that, so each window's payload set here is non-empty.
+    """
+    payload_sets = [window[triple] for window in per_window_payloads]
+    if any(len(payloads) != 1 for payloads in payload_sets):
+        return False
+    distinct_across_windows = {next(iter(payloads)) for payloads in payload_sets}
+    return len(distinct_across_windows) > 1
+
+
 def seed_triples_from_capture(
     capture: dict, *, exclude_ambient: bool = True
 ) -> list[tuple[int, int, str]]:
@@ -125,19 +148,30 @@ def seed_triples_from_capture(
     a camera-originated report for a (category, parameter) is the best seed
     for what command coordinates the camera will accept.
 
-    With ``exclude_ambient`` (default), triples present in *every* window are
-    dropped: ambient telemetry (e.g. categories 0x09/0x0C ticking ~1/s on
-    POCKET_6K_G2 v7.9) shows up everywhere, while the interesting triple
-    appears only in the window where the operator triggered the action.
+    With ``exclude_ambient`` (default), a triple present in *every* window is
+    dropped as ambient telemetry (e.g. categories 0x09/0x0C ticking ~1/s on
+    POCKET_6K_G2 v7.9) — **unless** its payloads mark it as a state report,
+    per ``_is_state_report``.
+
+    That exception is not a nicety. A start/stop command family reports the
+    same (category, parameter) in *both* windows by construction, so presence
+    alone dropped the very triple the sweep exists to find: on
+    POCKET_6K_G2 v8.6 (2026-07-29) the recording family (0x0A/0x01) was
+    filtered out of its own capture and every candidate the tool did offer was
+    a dead end. Its payloads are the giveaway — exactly one per window,
+    ``02 00 40 00 01 03`` in record_start and ``00 00 40 00 01 03`` in
+    record_stop — while the genuine telemetry alongside it (0x09/0x00,
+    0x09/0x02) took several different values inside each window.
+
     The filter is a no-op for single-window captures — capture at least two
     windows (e.g. record_start and record_stop) for it to bite.
     """
     windows = capture.get("windows", [])
-    per_window: list[set[tuple[int, int, str]]] = []
+    per_window: list[dict[tuple[int, int, str], set[str]]] = []
     ordered: list[tuple[int, int, str]] = []
 
     for window in windows:
-        seen: set[tuple[int, int, str]] = set()
+        seen: dict[tuple[int, int, str], set[str]] = {}
         for notification in window.get("notifications", []):
             if notification.get("characteristic_name") != INCOMING_CONTROL_NAME:
                 continue
@@ -149,13 +183,14 @@ def seed_triples_from_capture(
             if category is None or parameter is None or data_type is None:
                 continue
             triple = (category, parameter, data_type)
-            seen.add(triple)
+            seen.setdefault(triple, set()).add(notification.get("payload_hex") or "")
             if triple not in ordered:
                 ordered.append(triple)
         per_window.append(seen)
 
     if exclude_ambient and len(per_window) > 1:
-        ambient = set.intersection(*per_window)
+        in_every_window = set.intersection(*(set(window) for window in per_window))
+        ambient = {triple for triple in in_every_window if not _is_state_report(triple, per_window)}
         ordered = [triple for triple in ordered if triple not in ambient]
 
     return ordered

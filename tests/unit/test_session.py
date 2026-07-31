@@ -21,7 +21,7 @@ from bmd_ble.session import CameraSession
 from bmd_ble.timecode import TIMECODE_CATEGORY, TIMECODE_PARAMETER, Timecode
 
 MODEL_KEY = "POCKET_6K_G2"
-FIRMWARE = "v7.9"
+FIRMWARE = "v8.6"
 
 
 def _bcd(value: int) -> int:

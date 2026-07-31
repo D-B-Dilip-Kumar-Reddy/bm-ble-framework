@@ -94,6 +94,23 @@ This still
 blocks promoting the PRO's settings
 families to `VERIFIED` until the combination is either fixed or explicitly excluded.
 
+**`POCKET_6K_G2 v8.6`** (§18, 2026-07-30 — the primary reference, after the
+physical unit's firmware upgrade) has all three settings families
+`VERIFIED` as of §18.10: nine manual confirming writes plus a
+480-combination `sweep_camera_format.py` sweep (432 confirmed) via
+`CameraSession`, all re-sniffed on this firmware rather than inherited from
+the frozen v7.9 profile (design principle 6) — every codec id, dimension
+enum, and fps encoding happens to match v7.9's and the PRO's numbers
+exactly, a cross-profile finding rather than a shortcut. The same sweep
+surfaced two systematic gaps shaped like precedents already established on
+the PRO — a ProRes/4K DCI retarget gap (§18.10, matching §16) and a
+BRAW/6K/high-fps candidate ceiling (§18.10, matching §17) — but neither is
+yet promoted to a guarded profile field: design principle 7's evidence bar
+(an exhausted write-value hypothesis space for the former; an operator
+on-screen check for the latter) hasn't been met on this firmware yet. §18.10
+also documents a genuine open discrepancy in `recording_format`'s `flags`
+field at UHD — two readings each way, not resolved.
+
 ## Provenance and evidence status
 
 The byte layouts and value tables below were originally transcribed from
@@ -248,11 +265,17 @@ report confirming the codec family.
 | HD | 1920 × 1080 | ProRes | ProRes: `0x03` ✅ |
 | UHD | 3840 × 2160 | ProRes | ProRes: `0x06` ✅ |
 | 4K DCI | 4096 × 2160 | BRAW, ProRes | BRAW: `0x08` ✅; **ProRes: still unknown** |
-| 2.8K 17:9 | 2868 × 1512 | BRAW | BRAW: `0x0D` ✅ |
+| 2.8K 17:9 | 2868 × 1512 ⚠️ | BRAW | BRAW: `0x0D` ✅ |
 | 3.7K Anamorphic | 3728 × 3104 | BRAW | BRAW: `0x0F` ✅ |
 | 5.7K 17:9 | 5744 × 3024 | BRAW | BRAW: `0x12` ✅ |
 | 6K 3:2 | 6144 × 3456 | BRAW | BRAW: `0x13` ✅ |
 | 6K 2.4:1 | 6144 × 2560 | BRAW | BRAW: `0x14` ✅ |
+
+⚠️ **2.8K 17:9's width is disputed.** Both sniffed v8.6 profiles report
+**2880** at this resolution, not 2868, and §7's transcript doesn't actually
+show the `0x0D` decode that would settle it — so the `✅` on that row may have
+been applied without re-checking this specific width. See §18.1. The value
+here is left as originally recorded because v7.9 can no longer be re-tested.
 
 **Confirmed non-functional** (probed 2026-07-20, produced no state change —
 see §7): `0x01`, `0x02`, `0x04`, `0x05`, `0x07`, `0x09`, `0x10`, `0x11`.
@@ -2075,3 +2098,783 @@ camera. Check whether the tooling's own timing assumptions could explain it
 same operator-is-ground-truth discipline §16's investigation relied on
 throughout — before treating a result as a genuine `known_unreachable` or
 `max_fps_int` candidate.
+
+---
+
+## 18. `POCKET_6K_G2 v8.6` — Phase 3 step 9, the passive settings sweep (2026-07-30)
+
+The primary reference's own Phase 3, run as five `sniffer_settings.py` sessions
+with **one capture window per concrete setting** so every payload is
+unambiguously attributable to one change. What it produced, and what it
+deliberately did not.
+
+### 18.1 What the sweep confirmed
+
+Both report families behaved exactly as on the G2 v7.9 — same coordinates,
+same operation byte, same payload shapes — and every value below came from
+this firmware's own wire, not from the v7.9 profile:
+
+| Family | Coordinates | Observed on v8.6 |
+|---|---|---|
+| `codec_quality` | `0x0A`/`0x00` | operation `0x02`, data-type byte `0x01` (INT8), payload 2 bytes `[codec_id, variant_id]`, header reserved `0x00` |
+| `recording_format` | `0x01`/`0x09` | operation `0x02`, data-type byte `0x02` (INT16), payload five LE int16 `[fps_int, sensor_fps, width, height, flags]`, header reserved `0x00` |
+
+**Codec ids and every variant id, each from its own window:**
+
+- `ProRes` id `2` — `HQ` 0, `422` 1, `LT` 2, `Proxy` 3
+- `BRAW` id `3` — `Q0` 0, `Q5` 1, `3:1` 2, `5:1` 3, `8:1` 4, `12:1` 5, `Q1` 7, `Q3` 8
+
+BRAW variant id `6` was **not** observed here either — the same real gap
+between `12:1` (5) and `Q1` (7) the v7.9 profile records. Independently
+reconfirmed, not inherited; still do not invent it.
+
+**Resolutions**, from the `0x01/0x09` width/height elements: `6K` 6144×3456,
+`6K 2.4:1` 6144×2560, `5.7K 17:9` 5744×3024, `4K DCI` 4096×2160,
+`3.7K Anamorphic` 3728×3104, `2.8K 17:9` 2880×1512, `UHD` 3840×2160.
+
+**An unresolved discrepancy worth flagging:** `2.8K 17:9` read **2880** wide
+here, matching the sniffed `POCKET_6K_PRO v8.6` value (§15's enum table,
+`0x0D` → 2880×1512). The `POCKET_6K_G2 v7.9` profile records **2868**.
+
+Which is right for v7.9 cannot be settled from here, and the existing docs
+disagree with themselves about it: that profile's `resolutions._comment`
+describes the table as transcribed from `CODEC_RES_FPS_6K_G2.docx`, while
+§2.2 marks every row — including this one — as confirmed by a decoded
+`0x01/0x09` report. §7's transcript does not actually show the `0x0D` decode,
+so the `✅` on that row may be a summary applied without re-checking this
+width. Two possibilities remain open: a genuine per-firmware difference, or a
+document transcription error that the v7.9 sweep never caught. **Do not
+"correct" the v7.9 profile on the strength of this** — that camera can no
+longer be re-tested (see the registry), so the 2868 reading is now
+unfalsifiable. Both sniffed v8.6 profiles agree on 2880 and that is what they
+record.
+
+**Update (2026-07-30): settled for v8.6, still open for v7.9.** The operator
+directly confirmed `2880` on the camera's own on-screen display at `2.8K
+17:9`, on the same physical unit now running v8.6. That is a third,
+independent confirmation channel for this firmware's value — passive capture
+(above), active `dimension_enum` probe (§18.9), and now direct visual
+read — so there is no remaining ambiguity about what v8.6 reports and
+displays. It does not, and cannot, retroactively prove what v7.9 showed:
+the discrepancy this section opened with is about that frozen profile's own
+history, not about v8.6's number. `POCKET_6K_G2_v7.9.json` still records
+`2868` and stays that way.
+
+### 18.2 The flags element is not purely fps-derived — reconfirmed
+
+At a constant `fps_int=24`, element 5 read `0x0000` at `6K` and `UHD` but
+`0x0010` at every windowed/cropped resolution. Then at `2.8K 17:9`, 23.98fps
+read `0x0013` where 24fps and 30fps read `0x0010`.
+
+So `0x0010` is the **windowed-sensor bit**, not part of the fps encoding, and
+the low bits carry the NTSC/drop indicator. This independently reconfirms on
+v8.6 both the caveat already recorded in the v7.9 profile's
+`fps_modes._comment` and the windowed-mode read signal from
+`docs/photo_capture.md` §10.1. It is also why a `frame_flags` value
+transcribed per-fps-mode is only correct for windowed resolutions — worth
+remembering before populating `fps_modes` on any camera.
+
+**Correction (2026-07-31, §18.13):** the "`0x0000` at `UHD`" half of this
+paragraph's opening claim does not hold in general — a dedicated follow-up
+capture found UHD's reading depends on the camera's independent Sensor Area
+setting, not resolution, and can read either `0x0000` or `0x0010`
+depending on it. The rest of this section's finding (BRAW resolutions
+tracking the windowed bit cleanly, the NTSC/drop low bits) stands
+unaffected — UHD specifically needs §18.13's caveat, not this section's
+original blanket framing.
+
+### 18.3 What this sweep could not produce, and why
+
+Three gaps, all recorded in the profile rather than guessed at:
+
+1. **No `dimension_enums`, and no `commands.video_format`.** `video_format`
+   (`0x01`/`0x00`) never reported passively on v8.6 either — the same silence
+   as on the G2 v7.9 (§7) and the PRO (§15). Every enum needs Phase 3 step 10
+   active probing. Until then `set_camera_format` cannot reach any resolution
+   on this profile, and will raise a clear `ValueError` naming the missing
+   table entry.
+2. **No `fps_modes` at all.** Only 3 of 8 windows produced a
+   `recording_format` report (23.98 → flags `0x0013`, 24 → `0x0010`,
+   30 → `0x0010`); `25`, `29.97`, `50`, `59.94` and `60` produced none.
+   Separately, `m_rate` is a **`video_format`** field, so it cannot be
+   observed passively at all — every entry would need an invented value.
+   Writing three-eighths of a table with one fabricated field per entry is
+   worse than an empty table, so the section is omitted entirely.
+3. **No `HD` resolution.** Its window (`res_prores_hd`) was the first of its
+   run and caught the post-connect initial-payload burst instead of the
+   resolution report — the same first-window hazard as
+   `docs/command_discovery.md`'s safety model. `1920x1080` was **not**
+   assumed from the other two profiles.
+
+### 18.4 Methodological note: order windows so the burst is harmless
+
+The first window of every `sniffer_settings.py` run in this sweep was lost to
+the connect burst — twice with a real cost (`res_prores_hd` above, and
+`res_braw_6k`, whose dimensions were only recoverable because an earlier run's
+`codec_to_braw` window happened to catch the same report). `sniffer_photo.py`
+and `sniffer_sensor_area.py` already solve this by leading with a deliberate
+`idle_baseline` window; `sniffer_settings.py` has no such convention. Until it
+does, **lead each run with a throwaway window**, or repeat the first setting
+as the last window so it gets a clean second capture.
+
+### 18.5 State carry-over inside a window is normal — read the last value
+
+`quality_variant_3:1`'s window contains two `codec_quality` reports:
+`03 04` at 15:05:17.949, then `03 02` at 15:05:18.490. The first is the
+*previous* state (`8:1`, left over from the resolution windows) being
+re-reported during the settings burst; the second is the actual change. The
+settled value is the last one in the window, not the first — the same
+stale-state hazard that produced a false positive in `sweep_dimension_enum.py`
+(`docs/photo_capture.md` §10.5), here appearing in a passive capture instead.
+
+### 18.6 Bootstrapping step 10: `video_format` and `fps_modes` had to be seeded
+
+Step 10's first command failed outright:
+
+```
+ValueError: Profile POCKET_6K_G2_v8.6 has no 'video_format' command block
+```
+
+That is the loader working correctly, but it exposes a **bootstrap
+circularity**: `send_settings_command.py` must *build* a `video_format` packet
+before it can probe a `dimension_enum`, yet `video_format` is precisely the
+family that never appears in a passive capture — on any camera tried, and
+reconfirmed here (§18.3). There is nothing to seed it from, so step 10 is
+unreachable until the block exists. `POCKET_6K_PRO v8.6` hit exactly this and
+was unblocked the same way (§15's bring-up).
+
+Two blocks were therefore added to the profile **as explicit CANDIDATE
+hypotheses**, both of which the probe they unblock will confirm or refute:
+
+1. **`commands.video_format`** — category `1` / parameter `0`, the officially
+   documented FORMAT packet coordinates (`docs/protocol.md`), made plausible
+   for this firmware by `codec_quality` and `recording_format` both matching
+   v7.9's coordinates exactly on v8.6's *own* captures. `reserved` is the
+   weakest field: `0x01` is what v7.9's and the PRO's working writes used, but
+   v8.6's recording family accepts both bytes and every v8.6 report carries
+   `0x00`.
+2. **`fps_modes`, partially** — `23.98`, `24`, `30` only. `fps_int` and
+   `frame_flags` came straight off v8.6's own `0x01/0x09` reports; `m_rate` is
+   the single inferred field per entry, since it is a `video_format` element
+   and so unobservable until this probe runs. The inference is grounded in this
+   firmware's own wire rather than another profile: the windowed bit is
+   `0x0010`, so 23.98's extra `0x0003` is the NTSC/drop indicator → `m_rate=1`
+   there, `0` for the two exact rates. The other five modes stay absent.
+
+**New flag: `--reserved`.** The reserved byte was the one axis
+`send_settings_command.py` could not vary without editing a profile, and it is
+the least-evidenced field in any passively-seeded block — a camera's own
+reports need not carry the value a *write* requires, which is exactly the trap
+`recording_format`'s `0x02`-vs-`0x82` discrepancy (§3) already represents on
+the data-type axis. It joins `--data-type`, `--operation`,
+`--video-format-extra` and `--raw-payload` as a discovery-grade override,
+records itself in the send's label, and defaults to the profile's own value so
+every earlier invocation stays byte-identical.
+
+So the corrected step 10 command is unchanged from the workflow's, and the
+first thing to vary on a silent probe is now a flag rather than a profile edit:
+
+```
+python tools/control/send_settings_command.py --model-key POCKET_6K_G2 --firmware v8.6 \
+    --packet video_format --fps 24 --dimension-enum 0x08
+    # → TX FF 09 00 01 01 00 01 00 18 00 08 00 00
+
+# no response? vary the least-evidenced byte first, without touching the profile
+python tools/control/send_settings_command.py --model-key POCKET_6K_G2 --firmware v8.6 \
+    --packet video_format --fps 24 --dimension-enum 0x08 --reserved 0x00
+```
+
+Expect `video_format`'s own channel (`0x01`/`0x00`) to stay silent — judge the
+probe by the `0x01/0x09` mode-notify report's width/height, exactly as §7 and
+§15 did. `sweep_dimension_enum.py` decodes that automatically and is the better
+tool once more than a couple of candidates are in play.
+
+### 18.7 A dedicated fps sweep, and `fps_60`'s repeated silence
+
+A follow-up `sniffer_settings.py` run, one window per fps label, re-covered
+the ground step 9's combined resolution/quality/fps sweep had left thin
+(§18.3: only 3 of 8 fps modes had produced a report there). Camera state
+throughout was `BRAW` `Q5` at `2.8K 17:9` — whatever step 9's last window
+had left it at.
+
+**Five of six new windows confirmed cleanly**, each decoded directly from its
+own `0x01/0x09` report:
+
+| Label | `fps_int` | `frame_flags` | Note |
+|---|---|---|---|
+| `25` | 25 | `0x0010` | new |
+| `29.97` | 30 | `0x0013` | new — NTSC/drop encodes as `fps_int=30` |
+| `30` | 30 | `0x0010` | **reconfirms** §18.3's original `30` entry, byte-identical, from a separate session |
+| `50` | 50 | `0x0010` | new |
+| `59.94` | 60 | `0x0013` | new — NTSC/drop encodes as `fps_int=60` |
+
+The flags pattern from §18.2 holds exactly across all seven confirmed modes
+now: every NTSC/drop rate reads `0x0013`, every exact rate reads `0x0010`,
+regardless of the numeric fps. `m_rate` is set accordingly in the profile —
+still an *inferred* field per §18.6, since it's a `video_format` element and
+unobservable until step 10 runs, but the inference now rests on seven
+mutually-consistent data points instead of two.
+
+**The sixth, `fps_60`, produced no `0x01/0x09` report — for the second time.**
+Step 9's combined sweep already missed it once; this dedicated re-run, giving
+it its own clean window with nothing else competing for it, missed it again.
+That rules out the two obvious "actually a capture accident" explanations:
+
+- **Not a burst/connect-timing accident** — `codec_quality` (`0x0A`/`0x00`)
+  reported fine in the same window (`03 01`, ambient carry-over from the prior
+  session), so the capture path itself was working; only the fps report was
+  absent.
+- **Not a single-run fluke** — two independent sessions, on different runs of
+  the tool, both produced silence for this exact label.
+
+**This is left as an open finding, not promoted to `max_fps_int`.** The shape
+matches `POCKET_6K_PRO v8.6`'s real `6K`/50fps ceiling (§17) — a resolution
+that simply doesn't offer a given fps — but that precedent was only accepted
+after the operator directly confirmed the ceiling on the camera's own body UI,
+never from wire silence alone. That confirmation hasn't happened here. Two
+things could still explain the silence other than a genuine ceiling: 60fps
+might not be offered specifically at this resolution/codec combination
+(`2.8K 17:9` `BRAW`) while being available elsewhere, or the operator's own
+menu navigation could be the gap rather than the camera's capability. Before
+writing a `max_fps_int` entry: check whether `60` even appears in the body's
+fps menu at this resolution, and retry at another resolution to see whether
+the silence travels with it.
+
+### 18.8 Retraction: `fps_60` is reachable — §18.7's ceiling finding was wrong
+
+Three follow-up standalone `sniffer_settings.py` runs, each a single
+`fps_60` action in its own connect/disconnect session, refute §18.7's
+candidate-ceiling finding directly:
+
+| Attempt | Context | Window span | Result |
+|---|---|---|---|
+| 1 (§18.3, step 9's combined sweep) | preceded by `fps_59.94` | 3.9s | silent |
+| 2 (§18.7, dedicated fps sweep) | preceded by `fps_59.94` | — | silent |
+| 3 (this run, standalone A) | isolated invocation | 3.2s | **`0x01/0x09` report** |
+| 4 (this run, standalone B) | immediately after A | 1.5s | silent |
+| 5 (this run, standalone C) | immediately after B | 4.7s | **`0x01/0x09` report** |
+
+Attempts 3 and 5 decoded to the byte-identical payload
+`3C 00 3C 00 40 0B E8 05 10 00` — `fps_int=60`, `sensor_fps=60`,
+`width=2880`, `height=1512`, `flags=0x0010`. `0x0010` is the plain
+windowed-sensor bit with no NTSC/drop addition, exactly the pattern every
+other exact rate in §18.7 follows. This is not an ambiguous or partial
+report — it is the expected value, confirmed twice.
+
+**§18.7's conclusion is retracted.** A candidate ceiling means the camera
+cannot reach a state at all; this camera demonstrably reached and reported
+`60fps` at `2.8K 17:9` `BRAW` on two separate occasions. `fps_modes.60` is
+now in the profile (`fps_int=60`, `m_rate=0`, `frame_flags=16`), completing
+the table at 8/8.
+
+**What the silences are is left open, deliberately.** Two candidate
+explanations were checked, and neither is fully satisfying on its own:
+
+- *Short capture window.* Attempt 4's window (1.5s) is markedly shorter than
+  every window where a report landed (3.2–4.7s) — consistent with the
+  operator pressing Enter to close the window before a slow-to-arrive report
+  could land. But attempt 1's window was 3.9s, comparable to the successful
+  attempts, and still silent — so window length alone doesn't explain every
+  instance.
+- *Redundant-write report suppression.* `codec_quality` is already
+  established (§11) to go silent on a write that doesn't change camera
+  state; if `recording_format`'s report follows the same rule, attempt 4
+  (immediately following attempt 3's already-`60fps` state) would be a
+  genuine no-op. This doesn't explain attempt 1 either, though — it followed
+  a *different* fps (`59.94`), a real transition by any reading of the
+  payload.
+
+Neither hypothesis is asserted as the answer. What matters for the profile
+is the positive result: the camera reaches this state and reports it
+correctly when it does. Recording an absence as a "candidate ceiling" without
+first exhausting retries — exactly the lesson `docs/payload_profiles.md`'s
+`max_fps_int` section already states in the abstract ("an `unconfirmed`
+outcome is evidence about that run's timing, not automatically evidence
+about the camera") — is the mistake §18.7 made in the concrete. Three retries
+were what it took to catch the exception; a single silent window, even a
+long one, is not enough to write a ceiling.
+
+### 18.9 Step 10: the full `dimension_enum` sweep, and `video_format`'s promotion
+
+A full `0x00`–`0x1F` sweep via `tools/control/sweep_dimension_enum.py --fps 24`
+against the `commands.video_format` hypothesis block §18.6 seeded — the first
+real test of that block, not just a bootstrap placeholder.
+
+**8 of 32 candidates matched, none flagged `STALE MATCH`** by the tool's own
+repeat-check guard (the same guard added after the PRO's stale-state false
+positive, `docs/photo_capture.md` §10.5):
+
+| `dimension_enum` | Resolution | Codec/variant | `flags` |
+|---|---|---|---|
+| `0x03` | HD | ProRes/HQ | `0x0010` |
+| `0x06` | UHD | ProRes/HQ | `0x0010` |
+| `0x08` | 4K DCI | BRAW/5:1 | `0x0010` |
+| `0x0D` | 2.8K 17:9 | BRAW/5:1 | `0x0010` |
+| `0x0F` | 3.7K Anamorphic | BRAW/5:1 | `0x0010` |
+| `0x12` | 5.7K 17:9 | BRAW/5:1 | `0x0010` |
+| `0x13` | 6K | BRAW/5:1 | **`0x0000`** |
+| `0x14` | 6K 2.4:1 | BRAW/5:1 | `0x0010` |
+
+**Every number matches both other profiles exactly.** `POCKET_6K_G2 v7.9`
+(§2.2) and `POCKET_6K_PRO v8.6` (§15) already agreed with each other on all
+eight; this sweep independently sniffed the identical set on a third
+(model, firmware) combination — the same physical unit, different firmware
+from the first agreement, different hardware from the second. Per design
+principle 6 this is not a copy — nothing here was written into the profile
+before this sweep ran — but the cross-profile consistency is itself now a
+three-way-confirmed finding, not a two-way one.
+
+`0x13` (6K, full sensor) reading `flags=0x0000` against every windowed
+resolution's `0x0010` is the fourth independent confirmation of the
+windowed-sensor bit on this camera alone (passive: §18.2's fps sweep at a
+fixed resolution; now active: this enum sweep across resolutions at a fixed
+fps) — the two axes cross-check each other.
+
+**`reserved` is no longer the weakest field in `commands.video_format`.**
+`sweep_dimension_enum.py` has no `--reserved` override — reading the tool's
+source confirms it always encodes with `reserved=spec.reserved` — so all 32
+sends in this run used the profile's `reserved=0x01`. Eight clean, non-stale
+matches at that value is a real confirmation, not merely a surviving
+hypothesis. `commands.video_format.provenance.status` stays `CANDIDATE`
+(promotion to `VERIFIED` needs the full `CameraSession` round trip, step 13,
+not yet run on v8.6) but its `method`/`notes` now describe confirmed
+coordinates rather than an untested bootstrap block — mirroring exactly how
+the PRO's `video_format` block was written up after its own first successful
+sweep (§15).
+
+**A free side effect, also cross-confirming an existing finding:** every
+matched enum reset `codec_quality` to a per-codec-family default — `HQ` for
+ProRes, `5:1` for BRAW — reconfirming on this firmware's own wire the
+already-established mechanism (§10, and the `codec_quality` command block's
+own notes) where a codec-family switch via `video_format` resets/restores
+quality rather than `codec_quality` itself switching families.
+
+**HD's width/height, missing since §18.3, came from this sweep instead of a
+re-capture.** `0x03`'s `0x01/0x09` transition reported `1920×1080` directly —
+one probe closed two gaps at once (the enum and the previously-missing
+dimension), which is why the profile's `resolutions.HD` entry cites this
+sweep as its source rather than a dedicated passive re-run.
+
+**What this sweep does not settle:** no ProRes/4K DCI enum turned up
+anywhere in the exhausted range — the same gap already documented on both
+other profiles. It is **not** promoted to
+`resolutions."4K DCI".known_unreachable.ProRes` here. That designation on the
+PRO's profile followed an exhausted write-value hypothesis space — data type,
+`Operation`, the two-step `video_format`-then-`recording_format` proxy that
+works on v7.9 — none of which has been tried on this firmware yet. An
+enum-sweep gap alone is where v7.9's own investigation started, not where it
+ended (§7–§9); treat this the same way until that further work is actually
+done here.
+
+### 18.10 Steps 12/13: nine confirming writes, a 480-combination sweep, and all three families promoted to `VERIFIED` (2026-07-30)
+
+Phase 3's last two steps on this firmware: step 12 (one deterministic active
+write per settings family, some with `--repeat 2` to probe the redundant-write
+case) via `send_settings_command.py`, then step 13 (the full production round
+trip) via `sweep_camera_format.py` — the same tool, at the same evidentiary
+bar, that promoted `POCKET_6K_PRO v8.6`'s first production run (§16/§17).
+
+#### Step 12: nine manual runs
+
+| Run | Command | Before-state | Result |
+|---|---|---|---|
+| 1 | `codec_quality` ProRes/HQ | ProRes/PXY/4K DCI/24 | Echo confirms `codec_id=2, variant_id=0` |
+| 2 | `codec_quality` ProRes/HQ (resent) | ProRes/HQ/4K DCI/24 | No report — redundant write |
+| 3 | `video_format` UHD/ProRes/25 `--repeat 2` | BRAW/8:1/4K DCI/24 | Send 1 echoes `recording_format` `fps=25 3840×2160 flags=0x0010`; send 2 (resend) — no report |
+| 4 | `video_format` 4K DCI/BRAW/50 `--repeat 2` | ProRes/HQ/UHD/25 | Send 1's window: no report; the confirming report lands in send 2's window instead |
+| 5 | `recording_format` 6K/30 | BRAW/5:1/4K DCI/50 | Echo confirms `fps=30 6144×3456 flags=0x0000` |
+| 6 | `recording_format` 4K DCI/30 | BRAW/5:1/6K/30 | No report |
+| 7 | `recording_format` 4K DCI/30 `--repeat 2` | ProRes/LT/HD/29.97 | No report, either send |
+| 8 | `recording_format` 4K DCI/50 `--repeat 2` | ProRes/LT/HD/29.97 | No report, either send |
+| 9 | `recording_format` UHD/50 `--repeat 2` | ProRes/LT/HD/29.97 | Send 1 echoes `fps=50 3840×2160 flags=0x0000`; send 2 (resend) — no report |
+
+**Run 1 — `codec_quality` genuinely confirmed on the write side, not just the
+report side.** From a starting `ProRes/PXY`, sending `--codec ProRes --variant
+HQ` produced a clean `0x0A/0x00` echo `FF 06 00 00 0A 00 01 02 02 00` —
+`codec_id=2` (ProRes), `variant_id=0` (HQ) — matching the request exactly.
+This is this family's first real write on v8.6; everything in `codecs` before
+this run came from passive reports only.
+
+**Run 2 — the redundant-write-suppresses-report behavior, independently
+re-observed on v8.6.** Resending the identical command produced zero
+`0x0A/0x00` notifications, only the ambient `0x0C`/`0x09` telemetry — the same
+finding §11 established for this family on v7.9, now confirmed on this
+firmware's own wire rather than assumed to carry over (design principle 6).
+
+**Run 3 — `video_format`'s write confirmed, and §13/§14's finding
+independently re-observed here too.** Send 1, from a BRAW/4K DCI starting
+state, requested UHD/ProRes/25 and got a clean `recording_format` echo
+(`fps=25`, `3840×2160`, `flags=0x0010`) — the same collateral-channel
+confirmation mechanism established since §8 (`video_format`'s own `0x01/0x00`
+channel never echoes on this camera family). Send 2, the identical resend,
+produced no report at all — §13/§14 already closed this question for v7.9
+(both `recording_format` and `video_format` go silent on a redundant write);
+this run reconfirms it holds on v8.6 too, rather than assuming it does.
+
+**Run 4 — the lens-metadata-burst delay hazard, reproduced on the G2 for the
+first time.** Send 1's own capture window shows no `0x01/0x09` report; the
+confirming report for that exact send (`fps=50`, `4096×2160`, `flags=0x0010`)
+instead appears at the start of send 2's window. This is the same pattern
+already documented for the PRO (§15) and for `CameraSession.set_camera_format`
+against real PRO hardware (`docs/session_and_verification.md`) — a `0x0C`
+category lens-metadata dump competing for the same BLE indication queue as
+the genuine echo, delaying it past a fixed tooling window (though, per §15's
+finding, not necessarily past `CameraSession`'s own longer `echo_timeout_s`).
+This is the first time it has been caught on this camera specifically, not
+just inferred as a risk that could apply here too.
+
+**Run 5 — `recording_format` confirmed on a full-sensor resolution.**
+Retargeting BRAW from 4K DCI to 6K at 30fps echoed cleanly: `fps=30`,
+`6144×3456`, `flags=0x0000` — consistent with every other full-sensor (6K)
+reading on this firmware.
+
+**Runs 6–8 — the ProRes/4K DCI retarget gap, reproduced three separate ways.**
+All three attempts to retarget `recording_format` to 4K DCI while ProRes was
+the active codec (30fps once, 30fps repeated, 50fps repeated) produced zero
+`0x01/0x09` reports across all five attempted windows — no partial signal,
+no delayed echo turning up in a later window the way Run 4's did. This is the
+same shape of finding already closed as `known_unreachable` on the PRO
+(§16): the request is well-formed (the identical coordinates work for every
+other resolution), but nothing on the wire ever confirms it.
+
+**Run 9 — the same baseline, a different target, isolates the gap to (ProRes,
+4K DCI) specifically.** From the identical `ProRes/LT/HD/29.97` starting state
+Runs 7 and 8 used, retargeting to UHD instead of 4K DCI echoed cleanly on send
+1 (`fps=50`, `3840×2160`, `flags=0x0000`) and went silent on send 2 (the
+redundant resend, consistent with every other family's no-op behavior). The
+write path itself is not broken — only the (ProRes, 4K DCI) combination
+specifically fails to confirm, exactly the isolation the PRO's own
+investigation established before it was written up as `known_unreachable`.
+
+**Not yet a `known_unreachable` entry, though.** Design principle 7 sets the
+bar the PRO's entry met: an exhausted write-value hypothesis space (data-type
+byte, `Operation` ASSIGN/OFFSET, the exact camera-reported fps/variant,
+full-channel decode — §16's full trail). Runs 6–8 rule out the two cheapest
+alternative explanations (a simple redundant no-op; a delayed echo like
+Run 4's) but are not that full investigation. The gap is recorded here, in
+provenance, as strongly evidenced — not yet promoted to the guarded field.
+
+#### Step 13: the full `sweep_camera_format.py` sweep — 432/480 confirmed
+
+A single connected session ran `CameraSession.set_camera_format()` — the real
+production API, echo-verified end to end — across every combination the
+profile's `codecs`/`resolutions`/`fps_modes` tables claimed as supported: 8
+resolutions × up to 8 variants per codec × 8 fps modes = 480 combinations.
+
+**432 confirmed cleanly.** Every HD/UHD ProRes combination (all 4 variants,
+all 8 fps at each resolution — 64 combinations) and every BRAW combination
+outside the 6K-at-NTSC-high-fps gap below (6 BRAW-capable resolutions × 8
+variants × 8 fps = 384, minus the 16 excluded = 368 BRAW confirmations)
+matches exactly what steps 9/10/12 already established piece by piece — this
+sweep is the first time all of it was exercised together, end to end, in one
+session.
+
+**Two systematic gaps, both matching a precedent already established on
+another profile:**
+
+- **`BRAW <every variant> 6K @ 59.94/60fps` — 16/16 unconfirmed** (6.1–6.3s
+  each, at the 6.0s echo timeout). Every one of the 8 BRAW variants failed
+  at both NTSC-adjacent high fps values, and nowhere else — every other
+  BRAW/6K/fps combination (23.98 through 50) confirmed cleanly, and `6K
+  2.4:1` (a different resolution, same sensor-mode family) confirmed cleanly
+  at every fps including 59.94/60. **This does not conflict with §18.8's
+  `fps_60` retraction** — that finding was about whether 60fps is reachable
+  at all (settled: yes, confirmed at 2.8K 17:9), while this is specifically
+  about the 6K resolution's own ceiling, a distinct, resolution-scoped
+  question. This is the same shape as
+  `POCKET_6K_PRO v8.6`'s confirmed `resolutions.6K.max_fps_int = 50` (§17) —
+  but that entry required the operator to directly confirm the ceiling on
+  the camera's own UI, on top of the sweep result, before it was written.
+  That on-screen check has not been done for this firmware yet, so this
+  stays a strongly-evidenced candidate in provenance, not a guarded field.
+- **`ProRes <every variant> 4K DCI @ <every fps>` — 32/32 unconfirmed**
+  (6.1–7.9s each). Exactly the combination Runs 6–8 already found silent,
+  now shown to fail systematically across every variant and every fps, not
+  just the two fps values manually tried. Matches `POCKET_6K_PRO v8.6`'s
+  `known_unreachable` entry (§16) in shape, but — as Runs 6–8's write-up
+  above states — not yet in evidentiary completeness.
+
+**No `unsupported` and no `missing_data` outcomes at all** — every one of
+the 480 combinations was valid per the profile's own tables (nothing raised
+`BMDUnsupportedError`) and every `dimension_enum` the sweep needed was
+already populated by step 10 (nothing raised a missing-data `ValueError`).
+The only two outcomes were `confirmed` and `unconfirmed`.
+
+#### All three settings families promoted to `VERIFIED`
+
+`codec_quality`, `video_format`, and `recording_format` are now `VERIFIED` in
+`payloads/models/POCKET_6K_G2_v8.6.json` — each promoted by evidence that
+exceeds the single-round-trip bar (`examples/change_codec.py`, one
+combination) that promoted the equivalent v7.9 blocks: nine manual
+echo-verified writes plus 432 independent `CameraSession.set_camera_format()`
+confirmations in one sweep. `_meta.status` stays `UNVERIFIED` — it describes
+the whole profile, and `capabilities`/`storage` remain entirely unpopulated
+on this firmware, the same reason v7.9's `_meta.status` never reached
+`VERIFIED` either despite every one of its command families being
+individually `VERIFIED`.
+
+#### An open, unresolved discrepancy: UHD's `flags` value
+
+Four independent readings of `recording_format`'s `flags` element at UHD
+disagree, evenly:
+
+| Source | `flags` |
+|---|---|
+| Step 9's original passive capture (§18, 24fps) | `0x0000` |
+| Step 10's active `dimension_enum` sweep (§18.9, `0x06`, 24fps) | `0x0010` |
+| Run 3 above (fresh HD→UHD/ProRes/25fps transition) | `0x0010` |
+| Run 9 above (fresh HD→UHD/ProRes/50fps transition) | `0x0000` |
+
+This directly weakens §18.9's claim that `0x13`'s (6K) `0x0000` reading was
+"the fourth independent confirmation of the windowed-sensor bit" — one of
+the four data points that claim rested on is UHD, and UHD does not read
+consistently. The `0x0000`-at-full-sensor / `0x0010`-at-cropped rule still
+holds cleanly for every resolution *except* UHD (6K: `0x0000` twice, every
+cropped resolution: `0x0010` every time observed); UHD alone is a 2-2 split
+across four genuinely independent captures (different sessions, different
+fps, different tooling — not a repeat of the same measurement).
+
+No cause is asserted here. Two candidate explanations, neither confirmed:
+
+- The bit is not a static property of the resolution at all, but reflects a
+  separately-toggled sensor mode (full-sensor vs. windowed) that happens to
+  usually — but not always — track resolution. This would connect to the
+  already-closed Sensor Area investigation (`docs/photo_capture.md`
+  §10.1–§10.7), which found this same bit to be a genuine, reproducible
+  *read* signal for full-sensor-vs-cropped state, distinct from resolution
+  itself, on both other profiles — but concluded it isn't writable via any
+  BLE path tried. If the bit can vary independently of resolution by some
+  other mechanism (camera-body menu setting, prior session state, something
+  else entirely), a UHD write wouldn't pin it either way.
+- One or more of the four readings reflects stale state from before the
+  transition rather than the transition's own outcome — the same class of
+  bug `sweep_dimension_enum.py`'s `STALE MATCH` guard exists to catch
+  (`docs/photo_capture.md` §10.5) — though nothing here has been confirmed
+  stale by an immediate repeat the way that earlier false positive was.
+
+The profile records this as an open discrepancy, not a resolved value in
+either direction. Closing it needs a dedicated, repeated UHD probe with the
+before-state and camera on-screen display checked at each step — see §18.11
+below, where that probe is now scheduled.
+
+### 18.11 `resolutions."6K".max_fps_int` promoted; the ProRes/4K DCI gap deliberately held back (2026-07-30)
+
+Following up on §18.10's two candidate gaps, the operator made two explicit
+decisions rather than letting either default:
+
+**`max_fps_int = 50` written for `6K`.** The operator confirmed directly on
+the camera's own UI that 6K's fps menu does not offer 59.94 or 60fps at
+all — the one piece of evidence §18.10 was missing, since the sweep's
+16/16 systematic failure alone (every BRAW variant, both fps, nowhere else)
+already matched the shape of a real ceiling but not design principle 7's
+bar on its own. With the on-screen check done, this meets the identical
+evidence standard that closed `POCKET_6K_PRO v8.6`'s `6K` ceiling (§17) —
+same value, independently confirmed on this firmware's own sweep and this
+firmware's own camera body, not inherited (design principle 6).
+`CameraSession.set_video_format`/`set_recording_format` now reject a
+requested fps above 50 at `6K` immediately, and `sweep_camera_format.py`
+excludes those 16 combinations from its default sweep going forward.
+
+**`resolutions."4K DCI".known_unreachable.ProRes` deliberately NOT written
+yet.** §18.10's evidence for this gap — Runs 6-8's three manual retarget
+failures, the sweep's systematic 32/32 failure, and Run 9's clean contrast
+case — is real, but the operator chose to first run the same falsification
+tests that closed `POCKET_6K_PRO v8.6`'s identical gap (§16) rather than
+promote on the current evidence alone: a data-type byte retry, an
+`Operation.OFFSET` attempt, and a retry with the camera's exact reported
+fps/variant. None of those three have been tried on this firmware yet —
+that is the concrete, remaining gap between what §18.10 has and what
+design principle 7 requires. Candidate next commands, mirroring §16's own
+trail on the PRO:
+
+```
+# 1. This firmware's write already uses data-type byte 0x02 (INT16, the
+#    camera's own report byte — see commands.recording_format's
+#    provenance), unlike v7.9's confirmed write-side 0x82 (INT16_ARRAY).
+#    Retry with 0x82 instead — the one write-side byte not yet tried here:
+python tools/control/send_settings_command.py \
+    --model-key POCKET_6K_G2 --firmware v8.6 \
+    --packet recording_format --resolution "4K DCI" --fps 24 \
+    --data-type INT16_ARRAY
+
+# 2. Operation.OFFSET, with a genuine in-range delta (not an absolute
+#    target payload — see docs/protocol.md §4's OFFSET semantics) via
+#    --raw-payload, the same technique that ruled this out on the PRO:
+python tools/control/send_settings_command.py \
+    --model-key POCKET_6K_G2 --firmware v8.6 \
+    --packet recording_format --operation OFFSET \
+    --raw-payload <fps_delta> <sensor_fps_delta> <width_delta> <height_delta> <flags_delta>
+
+# 3. Retry with the exact fps/variant the camera itself reports while
+#    sitting at 4K DCI/ProRes (confirm the precondition via a fresh wire
+#    echo immediately beforehand, not just by requesting it):
+python tools/control/send_settings_command.py \
+    --model-key POCKET_6K_G2 --firmware v8.6 \
+    --packet recording_format --resolution "4K DCI" --fps <exact_reported_fps>
+```
+
+Only after these are tried (or a subset the operator judges sufficient) does
+this gap get written up and promoted, following the same runbook §16 used.
+
+### 18.12 The falsification tests, run three times over: ProRes/4K DCI promoted to `known_unreachable` (2026-07-31)
+
+The operator ran exactly the three candidate commands §18.11 proposed —
+unmodified — three separate times, once per session, each from a genuinely
+different starting state and with the camera's Sensor Area setting
+deliberately varied between runs (a control this investigation had never
+exercised before, motivated by §18.10's still-open UHD `flags` question):
+
+| Session | Sensor Area | Before-state | Target fps for test 3 |
+|---|---|---|---|
+| 1 | 6K | ProRes PXY UHD 50fps | 59.94 |
+| 2 | 2.8K | ProRes PXY HD 24fps | 59.94 |
+| 3 | 5.3K | ProRes PXY UHD 59.94fps | 59.94 |
+
+Each session ran the identical three-command battery, byte-for-byte
+identical TX across all three sessions:
+
+1. **Data-type byte retry** (`--data-type INT16_ARRAY`): `FF 0E 00 00 01 09
+   82 00 18 00 18 00 00 10 70 08 10 00` — 4K DCI/24fps with v7.9's
+   confirmed write-side byte (`0x82`) instead of this profile's own `0x02`.
+2. **`Operation.OFFSET` with a genuine in-range delta** (`--raw-payload 0 0
+   256 0 0 --operation OFFSET`): `FF 0E 00 00 01 09 02 01 00 00 00 00 00 01
+   00 00 00 00` — a `+256` width delta (UHD's `3840` → 4K DCI's `4096`),
+   not an absolute target payload.
+3. **Exact-fps retry** (`--fps 59.94`): `FF 0E 00 00 01 09 02 00 3C 00 3C
+   00 00 10 70 08 13 00`. In session 3 specifically, the before-state's own
+   fps (`59.94`) exactly matched the target — the closest this firmware's
+   version of the "exact camera-reported fps" hypothesis can get without
+   also matching the exact ProRes variant (every before-state here was
+   `PXY`, matching the target's implied variant already).
+
+**All 9 attempts produced zero `0x01/0x09` reports.** Every response window
+shows the same signature already established for this gap: the `0x0C`
+lens-metadata burst, ambient `0x09/0x00` storage telemetry, and nothing on
+the `recording_format` channel at all — not even a late one landing in an
+adjacent window, the pattern that would indicate a timing artifact rather
+than a genuine refusal (contrast §18.10 Run 4's lens-burst delay, which did
+show up one window late). Session 3's test 3, sent from a starting fps that
+already matched the target, rules out "wrong fps" as cleanly as this
+firmware allows without a fully independent match on every other axis too.
+
+**Sensor Area had no effect.** Varying it across all three values this
+camera's photo-stills menu offers (6K, 2.8K, and what the operator recorded
+as "5.3K" — the established options in this codebase are 2.8K/5.7K/6K, so
+this may be a transcription of 5.7K; recorded here verbatim as given,
+un-normalized, since resolving it isn't material to this finding) changed
+nothing about the outcome. This doesn't resolve §18.10's UHD `flags`
+discrepancy — no session's response includes a fresh UHD report, since
+every command here targets 4K DCI, and the discrepancy needs its own
+dedicated probe (§18.10's closing paragraph) — but it is a real negative
+data point: Sensor Area is not a confound for *this* gap specifically.
+
+**Promoted to `known_unreachable`.** With the write-value hypothesis space
+now covering resolution, fps (including an exact match), codec variant
+(implicitly, since every before-state was already `PXY`), data type byte,
+and `Operation` (`ASSIGN` via every earlier §18.10 attempt, `OFFSET` here) —
+run not once but three times each, from three different starting states —
+this meets the same evidence bar that closed `POCKET_6K_PRO v8.6`'s
+identical gap (§16).
+`resolutions."4K DCI".known_unreachable.ProRes` is now written in the
+profile; `CameraSession.set_camera_format` raises `BMDUnsupportedError`
+immediately for `(ProRes, "4K DCI")` on this profile, same as it already
+does on the PRO's.
+
+One honest gap versus the PRO's precedent: the PRO's entry was additionally
+supported by a passive capture of the camera reaching ProRes/4K DCI through
+its own body menu, proving the camera-side combination is genuinely real
+and not just assumed. No equivalent body-menu confirmation has been
+separately gathered for this firmware — the promotion here rests on the
+exhausted write-side investigation alone, not on independent proof the
+camera itself holds this state. `resolutions."4K DCI".codecs` correctly
+still lists `ProRes` regardless (this field describes the camera's own
+capability, not this codebase's write-path limitation — design principle 7).
+
+**Side finding, unrelated to this investigation:** session 3's response
+window includes a category/parameter never seen before in this codebase —
+`0x09`/`0x08` (`FF 06 00 00 09 08 01 02 00 01`, INT8 pair `[0x00, 0x01]`,
+`CAMERA_REPORT`). Category `0x09` already hosts several undocumented
+ambient parameters (`0x00` storage telemetry, `0x01` write-margin warning,
+`0x02` an unexplained ticker); `0x08` is a new one in that family, seen
+exactly once so far. Not investigated further here — noted for a future
+session's category-9 telemetry work.
+
+**Side confirmation, also unrelated:** session 3's log shows the
+`connect()` retry loop built earlier this session (`docs/winrt_ble_connection_hardening.md`)
+working exactly as designed against a real mid-subscribe link drop
+("`connect attempt 1/3 lost the link during the initial subscribe … retrying
+in 2.0 s`"), followed by a clean reconnect and successful run — the first
+real-hardware trigger of that retry path since it was added.
+
+### 18.13 The UHD `flags` discrepancy, resolved: it's Sensor Area, not resolution (2026-07-31)
+
+§18.10's closing paragraph proposed a leading hypothesis for the 2-2 split
+in UHD's `flags` readings: that bit 4 (`0x0010`) might be tracking the
+camera's independent Sensor Area setting (a ProRes-stills-only crop
+selector, 2.8K/5.7K/6K, unrelated to the HD/UHD video resolution) rather
+than anything about UHD or resolution generally. A dedicated passive
+capture (`tools/sniffers/sniffer_sensor_area.py --actions
+idle_baseline,sensor_area_2_8k,sensor_area_5_3k,sensor_area_6k`) tests
+exactly this, and confirms it.
+
+**Design: hold video state fixed, vary only Sensor Area.** The operator
+navigated the camera's own Sensor Area menu between each labeled window
+while the tool listened passively — no BLE write sent at any point, so
+every report is genuinely camera-originated, not a response to anything
+this codebase asked for. The video state (codec, resolution, fps) was left
+untouched throughout.
+
+**Result — same video state, different `flags`:**
+
+| Sensor Area | `recording_format` report | `codec_quality` report |
+|---|---|---|
+| 2.8K | `FF 0E 00 00 01 09 02 02 18 00 18 00 80 07 38 04 10 00` → fps=24, 1920×1080, `flags=0x0010` | `FF 06 00 00 0A 00 01 02 02 03` → ProRes/PXY |
+| 5.3K | `FF 0E 00 00 01 09 02 02 18 00 18 00 80 07 38 04 10 00` → fps=24, 1920×1080, `flags=0x0010` | ProRes/PXY (identical) |
+| 6K | `FF 0E 00 00 01 09 02 02 18 00 18 00 80 07 38 04 00 00` → fps=24, 1920×1080, `flags=0x0000` | ProRes/PXY (identical) |
+
+Width, height, fps, and codec/variant are byte-identical across all three
+rows — `1920×1080` (HD) the whole time, never UHD or any other resolution.
+The *only* thing that changed between windows was the Sensor Area menu
+selection, and that alone flipped bit 4. **Reproduced 2/2**: the capture
+ran twice in one connected session (the operator re-ran the same action
+sequence), and both runs produced byte-identical results.
+
+**This resolves §18.10's discrepancy directly.** The four earlier UHD
+readings (§18.10) split 2-2 between `0x0000` and `0x0010` not because of
+anything about UHD, but because each one happened to land with Sensor Area
+in a different state at the time — an uncontrolled variable nobody was
+tracking during that earlier settings work, since Sensor Area lives on a
+completely separate camera menu from video resolution. Once Sensor Area is
+controlled for, the "discrepancy" disappears: it was never a UHD property
+in the first place.
+
+**Why this never broke BRAW's version of the same pattern.** BRAW has no
+separate Sensor Area concept — BRAW stills inherit the recording resolution
+directly (`docs/photo_capture.md` §8) — so for BRAW, the sensor's actual
+readout mode and the video resolution are the same thing, and the `flags`
+bit tracking one is indistinguishable from it tracking the other. Every
+BRAW reading gathered in this bring-up (6K → `0x0000`, every cropped BRAW
+resolution → `0x0010`) was never wrong; it just couldn't distinguish the
+two hypotheses the way ProRes/UHD's independent Sensor Area setting could.
+
+**Extends, rather than duplicates, an already-closed investigation.** The
+Sensor Area / windowed-bit correlation itself was already established and
+closed on other camera/firmware combinations (`docs/photo_capture.md`
+§10.1–§10.7: a genuine, reproducible *read* signal for full-sensor-vs-
+cropped state, confirmed not writable by any BLE path tried). This capture
+doesn't reopen that investigation — it independently re-observes the same
+correlation on `POCKET_6K_G2 v8.6` specifically, per design principle 6
+(never assume a finding carries over to a new firmware without
+re-confirming it), and in doing so explains a genuinely new-to-this-profile
+discrepancy that the earlier investigation's cameras hadn't happened to
+surface.
+
+**No code or write-side changes needed.** `fps_modes.frame_flags` (the
+value this codebase actually sends on a `recording_format` write) was
+already derived purely from fps, never from resolution or Sensor Area —
+see `protocol/categories/settings.py`'s `encode_recording_format` and
+`session.py`'s `set_recording_format`. `set_recording_format`'s no-op guard
+also already excludes `frame_flags` from its redundant-write comparison.
+Nothing about the write path or the no-op guard was silently relying on
+the now-corrected "windowed = f(resolution)" assumption — only this
+profile's descriptive notes were, and those are what this entry fixes.
