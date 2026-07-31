@@ -119,9 +119,42 @@ this API. FTP is likewise enabled and out of scope. Neither is used.
 - **The address is never cached in a profile.** Profiles record per-endpoint behaviour;
   they do not record where the camera lives.
 
-**First-run failure worth ruling out:** Windows Firewall classifying the adapter as a
-*Public* network will make every endpoint report unreachable — as will forgetting
-`--insecure`. Check both before concluding the camera is at fault.
+### When nothing is reachable
+
+The first real run (2026-07-31) reached nothing, by either address, and is the reason the
+tool now preflights. Two distinct failure shapes showed up, and the difference between
+them is itself evidence:
+
+| Address | Time per request | Reads as |
+|---|---|---|
+| `https://10.0.0.3` | ~3 s | Fast failure — refused, or no route |
+| `https://pocket-cinema-camera-6k-g2.local` | ~11 s | Hit the timeout — the name resolved, but nothing answered at the address |
+
+A name that resolves and then hangs is a different problem from an address that refuses
+immediately. The leading hypothesis is that **Setup → Network Settings describes the
+Ethernet interface, not the USB one** — in which case `10.0.0.3` is simply the wrong
+address to probe over a USB-C cable, and the `.local` name may be resolving to that same
+address or to an IPv6 link-local one that nothing serves.
+
+Untested at the time of writing. What settles it:
+
+```powershell
+Resolve-DnsName pocket-cinema-camera-6k-g2.local   # what does the name actually resolve to?
+ping -4 pocket-cinema-camera-6k-g2.local           # force IPv4
+Test-NetConnection <ip> -Port 443                  # is 443 open at that address?
+ipconfig                                           # which adapter is the camera on?
+curl.exe -k -v https://pocket-cinema-camera-6k-g2.local/control/api/v1/system/format
+```
+
+The `curl` line is the decisive one: it shares nothing with this tool's stack, so if curl
+succeeds where `probe_endpoints.py` fails, the fault is in the tool; if curl fails too,
+the fault is in the address or the link. Run it in the same session as a working browser
+tab — the USB link drops on sleep, unplug, and power cycle, so "it worked earlier" is not
+evidence that it works now.
+
+**Also worth ruling out:** Windows Firewall classifying the adapter as a *Public* network,
+and forgetting `--insecure` (which fails every request at TLS and looks identical to an
+unreachable camera). The preflight names both when the exception matches.
 
 ---
 
@@ -225,6 +258,19 @@ no-op, so a `200` proves the *endpoint exists*, not that a *changing* write appl
 That second question belongs to the phase that needs it — and the BLE work has a
 precedent for exactly this trap (`docs/ble/settings.md` §11, §14: every settings family
 goes silent on a redundant write).
+
+### Preflight
+
+Before sweeping anything, one GET to `/system/format` — the operator-confirmed working
+endpoint — has to answer. If it does not, the tool prints the exception and an ordered
+list of next steps chosen from that exception, then exits. Sweeping 70+ endpoints against
+a host that never replies costs minutes and buries the one fact that matters. `--force`
+overrides it; that is rarely what you want.
+
+Every log line carries the real exception, not just a classification. An early version
+printed only "unreachable", which cannot distinguish a refused connection from a TLS
+failure from a DNS miss — the first real run produced 70 identical useless lines because
+of it.
 
 ### Output
 
