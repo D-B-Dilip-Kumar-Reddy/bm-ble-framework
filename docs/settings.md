@@ -2174,6 +2174,15 @@ v8.6 both the caveat already recorded in the v7.9 profile's
 transcribed per-fps-mode is only correct for windowed resolutions — worth
 remembering before populating `fps_modes` on any camera.
 
+**Correction (2026-07-31, §18.13):** the "`0x0000` at `UHD`" half of this
+paragraph's opening claim does not hold in general — a dedicated follow-up
+capture found UHD's reading depends on the camera's independent Sensor Area
+setting, not resolution, and can read either `0x0000` or `0x0010`
+depending on it. The rest of this section's finding (BRAW resolutions
+tracking the windowed bit cleanly, the NTSC/drop low bits) stands
+unaffected — UHD specifically needs §18.13's caveat, not this section's
+original blanket framing.
+
 ### 18.3 What this sweep could not produce, and why
 
 Three gaps, all recorded in the profile rather than guessed at:
@@ -2796,3 +2805,76 @@ working exactly as designed against a real mid-subscribe link drop
 ("`connect attempt 1/3 lost the link during the initial subscribe … retrying
 in 2.0 s`"), followed by a clean reconnect and successful run — the first
 real-hardware trigger of that retry path since it was added.
+
+### 18.13 The UHD `flags` discrepancy, resolved: it's Sensor Area, not resolution (2026-07-31)
+
+§18.10's closing paragraph proposed a leading hypothesis for the 2-2 split
+in UHD's `flags` readings: that bit 4 (`0x0010`) might be tracking the
+camera's independent Sensor Area setting (a ProRes-stills-only crop
+selector, 2.8K/5.7K/6K, unrelated to the HD/UHD video resolution) rather
+than anything about UHD or resolution generally. A dedicated passive
+capture (`tools/sniffers/sniffer_sensor_area.py --actions
+idle_baseline,sensor_area_2_8k,sensor_area_5_3k,sensor_area_6k`) tests
+exactly this, and confirms it.
+
+**Design: hold video state fixed, vary only Sensor Area.** The operator
+navigated the camera's own Sensor Area menu between each labeled window
+while the tool listened passively — no BLE write sent at any point, so
+every report is genuinely camera-originated, not a response to anything
+this codebase asked for. The video state (codec, resolution, fps) was left
+untouched throughout.
+
+**Result — same video state, different `flags`:**
+
+| Sensor Area | `recording_format` report | `codec_quality` report |
+|---|---|---|
+| 2.8K | `FF 0E 00 00 01 09 02 02 18 00 18 00 80 07 38 04 10 00` → fps=24, 1920×1080, `flags=0x0010` | `FF 06 00 00 0A 00 01 02 02 03` → ProRes/PXY |
+| 5.3K | `FF 0E 00 00 01 09 02 02 18 00 18 00 80 07 38 04 10 00` → fps=24, 1920×1080, `flags=0x0010` | ProRes/PXY (identical) |
+| 6K | `FF 0E 00 00 01 09 02 02 18 00 18 00 80 07 38 04 00 00` → fps=24, 1920×1080, `flags=0x0000` | ProRes/PXY (identical) |
+
+Width, height, fps, and codec/variant are byte-identical across all three
+rows — `1920×1080` (HD) the whole time, never UHD or any other resolution.
+The *only* thing that changed between windows was the Sensor Area menu
+selection, and that alone flipped bit 4. **Reproduced 2/2**: the capture
+ran twice in one connected session (the operator re-ran the same action
+sequence), and both runs produced byte-identical results.
+
+**This resolves §18.10's discrepancy directly.** The four earlier UHD
+readings (§18.10) split 2-2 between `0x0000` and `0x0010` not because of
+anything about UHD, but because each one happened to land with Sensor Area
+in a different state at the time — an uncontrolled variable nobody was
+tracking during that earlier settings work, since Sensor Area lives on a
+completely separate camera menu from video resolution. Once Sensor Area is
+controlled for, the "discrepancy" disappears: it was never a UHD property
+in the first place.
+
+**Why this never broke BRAW's version of the same pattern.** BRAW has no
+separate Sensor Area concept — BRAW stills inherit the recording resolution
+directly (`docs/photo_capture.md` §8) — so for BRAW, the sensor's actual
+readout mode and the video resolution are the same thing, and the `flags`
+bit tracking one is indistinguishable from it tracking the other. Every
+BRAW reading gathered in this bring-up (6K → `0x0000`, every cropped BRAW
+resolution → `0x0010`) was never wrong; it just couldn't distinguish the
+two hypotheses the way ProRes/UHD's independent Sensor Area setting could.
+
+**Extends, rather than duplicates, an already-closed investigation.** The
+Sensor Area / windowed-bit correlation itself was already established and
+closed on other camera/firmware combinations (`docs/photo_capture.md`
+§10.1–§10.7: a genuine, reproducible *read* signal for full-sensor-vs-
+cropped state, confirmed not writable by any BLE path tried). This capture
+doesn't reopen that investigation — it independently re-observes the same
+correlation on `POCKET_6K_G2 v8.6` specifically, per design principle 6
+(never assume a finding carries over to a new firmware without
+re-confirming it), and in doing so explains a genuinely new-to-this-profile
+discrepancy that the earlier investigation's cameras hadn't happened to
+surface.
+
+**No code or write-side changes needed.** `fps_modes.frame_flags` (the
+value this codebase actually sends on a `recording_format` write) was
+already derived purely from fps, never from resolution or Sensor Area —
+see `protocol/categories/settings.py`'s `encode_recording_format` and
+`session.py`'s `set_recording_format`. `set_recording_format`'s no-op guard
+also already excludes `frame_flags` from its redundant-write comparison.
+Nothing about the write path or the no-op guard was silently relying on
+the now-corrected "windowed = f(resolution)" assumption — only this
+profile's descriptive notes were, and those are what this entry fixes.
