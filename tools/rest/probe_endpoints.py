@@ -378,7 +378,12 @@ def build_catalog() -> list[Endpoint]:
         # LensControl
         Endpoint("/lens/iris", pick_first("apertureStop", "normalised", "apertureNumber")),
         Endpoint("/lens/zoom", pick_first("focalLength", "normalised")),
-        Endpoint("/lens/focus", pick_first("focus")),
+        # LensControl.yaml documents GET returning {"focus": <normalised>},
+        # but the real camera (2026-08-03) returns {"normalised": <value>}
+        # instead — a spec-vs-reality mismatch, not a typo. Built with
+        # "normalised" first (what the wire actually sends) and "focus" kept
+        # as a fallback in case a different firmware matches the spec.
+        Endpoint("/lens/focus", pick_first("normalised", "focus")),
         # ColorCorrectionControl
         Endpoint("/colorCorrection/lift", echo_body),
         Endpoint("/colorCorrection/gamma", echo_body),

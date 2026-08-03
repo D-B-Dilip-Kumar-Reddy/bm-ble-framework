@@ -476,6 +476,23 @@ class TestWebsocketUrl:
             websocket_url("10.0.0.3")
 
 
+class TestLensFocusSpecDeviation:
+    """LensControl.yaml documents GET /lens/focus returning {"focus": <normalised>};
+    the real camera (2026-08-03) returns {"normalised": <value>} instead. The
+    write catalog's builder must match the wire, not the spec, or every
+    /lens/focus write probe silently no-ops as "no echoable value"."""
+
+    def test_reads_the_field_name_the_real_camera_actually_sends(self):
+        by_path = {endpoint.path: endpoint for endpoint in build_catalog()}
+        build = by_path["/lens/focus"].write_body
+        assert build({"normalised": 0.0}) == {"normalised": 0.0}
+
+    def test_falls_back_to_the_documented_key_if_a_firmware_matches_the_spec(self):
+        by_path = {endpoint.path: endpoint for endpoint in build_catalog()}
+        build = by_path["/lens/focus"].write_body
+        assert build({"focus": 0.5}) == {"focus": 0.5}
+
+
 class TestRealServerRegressions:
     """Fixtures taken verbatim from the second, corrected sweep run against
     real POCKET_6K_G2 v8.6 hardware (2026-08-03) — the run that confirmed

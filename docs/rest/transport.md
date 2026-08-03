@@ -1,11 +1,11 @@
 # REST / WebSocket Transport
 
-**Status:** Phase 0 — two sweep runs on `POCKET_6K_G2 v8.6` over USB (2026-08-03). The
-second run confirms the tool bugs the first run exposed are fixed, and reaches the
-mounts hierarchy the first run could not: 53 endpoints working, 5 not implemented, 2
-`5xx` (every subdirectory under a mount root, not Stills specifically). Full results
-under "Sweep results". No write probe has been run, and no REST client, session, or
-profile exists yet.
+**Status:** Phase 0 — three sweep runs on `POCKET_6K_G2 v8.6` over USB (2026-08-03).
+Reads: 53 endpoints working, 5 not implemented, 2 `5xx` (every subdirectory under a
+mount root, not Stills specifically). Writes: **`--probe-writes` confirms `PUT
+/system/format` returns `204`** — the gate question that decides whether settings can
+move to REST at all — plus 29 other endpoints, same-value only. Full results under
+"Sweep results". No REST client, session, or profile exists yet; that is Phase 2.
 
 ## Overview
 
@@ -552,10 +552,51 @@ the abstract.
 | Timecode encoding? | **BCD, big-endian HH:MM:SS:FF**, reversed vs BLE |
 | Are the 5xx defects wider than Stills? | **Yes — every subdirectory under a mount root 500s**, not Stills specifically |
 | Which WS properties subscribe? | **46/49** — every property except the three `501` `/system/*` endpoints, which the event feed also rejects as unknown |
-| `PUT /system/format` implemented? | **Open** — needs `--probe-writes` |
+| `PUT /system/format` implemented? | **Yes — 204**, same-value probe |
 | `PUT /transports/0/record` implemented? | **Open** — never probed, and never will be by this tool (`NEVER_WRITE`) |
-| `sensorResolution` writable? | **Open** — but confirmed readable and enumerable, which BLE never achieved |
+| `sensorResolution` writable? | **Open** — the format PUT itself works, but only a same-value body has been sent; a *changing* write to `sensorResolution` specifically is untried |
 | USB link survives recording, and BLE concurrently? | **Open** |
+
+### Write probe results — `POCKET_6K_G2 v8.6`, over USB, plaintext HTTP — 2026-08-03
+
+Third sweep run, `--probe-writes`, typed-yes confirmed. **30 of 32 write-probeable
+endpoints came back `204`.** Only two were skipped, both for the reason the tool prints
+rather than a firmware refusal — see below.
+
+This settles the highest-stakes open question from Phase 0: **`PUT /system/format`
+returns `204`.** Format writes are not gated on firmware support anymore — the same-value
+body sent was the camera's own `GET /system/format` echoed back (`ProRes:Proxy`, `24fps`,
+`4096×2160`, `sensorResolution` `5744×3024`). That proves the endpoint exists and accepts
+a request shaped like the camera's own report; it does **not** prove a *changing* value
+is accepted — see the caveat every report carries, and Phase 5 still needs a real retarget
+before anything is built on this.
+
+Also confirmed writable, same-value only: `/transports/0` (mode), `/transports/0/playback`,
+`/media/active`, every probed `/video/*`, `/lens/iris`, `/lens/zoom`, all seven
+`/colorCorrection/*` endpoints, and every populated `/audio/channel/N/*` field. Nothing
+came back `501` or `5xx` on write. This is a far larger confirmed-writable surface than
+Phase 0 needed to answer just the gate table — most of the "new capability" list in this
+doc's own "New capability REST brings" section is now write-confirmed, not just
+read-confirmed.
+
+**Two endpoints were skipped, and both are informative, not failures:**
+
+- **`/video/ndFilter/displayMode`** — its `GET` returns `204 No Content` (no ND filter on
+  this camera, consistent with `/video/ndFilter` itself being `501`). There is nothing to
+  echo back, so the idempotent-probe method cannot reach this endpoint at all. A genuine
+  limitation of the method, not evidence either way about the PUT.
+- **`/lens/focus`** — `LensControl.yaml` documents `GET` returning `{"focus": <normalised>}`;
+  the real camera returns **`{"normalised": <value>}`** instead. The write catalog's
+  builder looked for the documented key, found nothing, and silently skipped — the
+  *correct* behaviour for a genuinely absent field, but for the wrong reason: the field
+  wasn't absent, it was named differently than the spec says. **Fixed** in the catalog
+  (`pick_first("normalised", "focus")`, real evidence first) with a regression test
+  pinning the real payload; a re-run will now probe this endpoint's write too.
+
+No camera setting changed as a result of this run — every write sent back exactly the
+value just read.
+
+### `POCKET_6K_PRO v8.6`
 
 ### `POCKET_6K_PRO v8.6`
 
