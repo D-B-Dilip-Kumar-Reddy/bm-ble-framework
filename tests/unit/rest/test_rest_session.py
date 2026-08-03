@@ -1099,7 +1099,15 @@ class FakeAiohttpSession:
 
 class TestConnectionLifecycle:
     @pytest.mark.asyncio
-    async def test_aenter_subscribes_to_record_property(self):
+    async def test_aenter_subscribes_to_record_and_format_properties(self):
+        """Real-hardware-confirmed defect this guards against
+        (POCKET_6K_G2 v8.6, 2026-08-03, tools/rest/sweep_camera_format.py's
+        first run): set_camera_format arms/waits on FORMAT_PROPERTY for its
+        dual-check primary channel, but nothing ever subscribed the router
+        to it — every one of 544 real writes in that run burned the full
+        verify_timeout_s before falling through to the secondary GET
+        readback. __aenter__ must subscribe to both properties it later
+        arms, not just RECORD_PROPERTY."""
         fake_session = FakeAiohttpSession()
         session = RestCameraSession("cam.local", MODEL_KEY, FIRMWARE, session=fake_session)
 
@@ -1110,8 +1118,13 @@ class TestConnectionLifecycle:
             {
                 "type": "request",
                 "id": 0,
-                "data": {"action": "subscribe", "properties": ["/transports/0/record"]},
-            }
+                "data": {"action": "subscribe", "properties": [RECORD_PROPERTY]},
+            },
+            {
+                "type": "request",
+                "id": 0,
+                "data": {"action": "subscribe", "properties": [FORMAT_PROPERTY]},
+            },
         ]
 
     @pytest.mark.asyncio

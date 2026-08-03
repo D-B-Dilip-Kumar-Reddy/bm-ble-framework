@@ -9,10 +9,12 @@ caught and fixed `wait_while_recording`'s return-value-inversion defect (see bel
 `ProRes/422/4K DCI @ 23.98` — the exact combination BLE's write path cannot reach
 (`known_unreachable`) — then hit a real `400` switching to `BRAW/5:1/4K DCI @ 23.98`
 immediately after (a `sensorResolution` derivation defect, see below); fixed, then
-re-confirmed on both cameras back to back. `tools/rest/sweep_camera_format.py`
-(also Phase 5) systematically exercises every combination, including the "sensor area"
-dimension that defect came from — implemented and unit-tested, no real-hardware run
-reported yet.
+re-confirmed on both cameras back to back. `tools/rest/sweep_camera_format.py`'s first
+real-hardware run then confirmed **544/544 (0 unconfirmed) across the full combination
+space**, including the "sensor area" dimension — while also catching a second real defect
+(`/system/format` was never subscribed for the WS dual-check's primary channel, so every
+write silently paid the full verify timeout before confirming via the secondary `GET`
+instead), now fixed. A fresh run confirming the fix itself hasn't been reported yet.
 
 ## Overview
 
@@ -69,6 +71,13 @@ whether every setup step succeeded and closes an owned session in a `finally` bl
 any failure, without catching/masking the original exception — the same "cleanup on
 failure, propagate the real error" shape as `except Exception: cleanup(); raise` gets you,
 without the broad `except` "What Not To Do" forbids.
+
+**`__aenter__` subscribes to both `/transports/0/record` and `/system/format`**, giving
+every write method's dual-check a standing WS subscription for its primary channel —
+neither `record_start`/`record_stop` nor `set_camera_format` subscribes anything itself,
+they only `arm()`/`wait_for()` on a property this method already subscribed. See
+`set_camera_format`'s "Write verbs" entry below for the real-hardware defect that exposed
+`/system/format` never being subscribed at all in the first version of this method.
 
 ---
 
@@ -351,8 +360,29 @@ everything the profile tables claim by default.
 
 `--dry-run` connects (read-only — one `supported_formats()` call) rather than staying
 fully offline like the BLE tool's, since an offline count would undercount every
-ambiguous combination before expansion. No real-hardware run of this tool has been
-reported yet.
+ambiguous combination before expansion.
+
+**Real hardware, `POCKET_6K_G2 v8.6`, 2026-08-03** (full sweep, no filters): **544
+confirmed, 16 unsupported (the `BRAW`/`6K` `59.94`/`60` combinations the camera's own
+`supportedFormats` doesn't offer — a real hardware ceiling, not a bug), 0 missing profile
+data, 0 unconfirmed.** Every requested `(codec, variant, resolution, fps, sensor
+resolution)` combination the camera claims to support was confirmed — the strongest single
+piece of evidence yet that `set_camera_format`'s write path, including the
+`sensorResolution` derivation fix above, is solid across the *entire* combination space on
+this camera, not just the two combinations manually exercised so far.
+
+**But this same run also caught a second real defect**, alongside the correctness result
+above: every one of the 544 confirmed writes took almost exactly `verify_timeout_s`
+(6.0s–6.1s each, not the fast primary-channel case) — a uniform timing signature that
+would be a strange coincidence if the primary WS-event channel were ever actually winning
+the race. It wasn't: `__aenter__` subscribed the router to `/transports/0/record` but never
+to `/system/format`, so nothing had ever told the camera to push `/system/format` events to
+this connection at all — `set_camera_format`'s `arm()`/`wait_for()` on it was waiting on a
+channel that could structurally never deliver. Every confirmation in this run came from the
+secondary `GET` readback, after burning the full primary timeout uselessly first. Fixed by
+subscribing to `/system/format` in `__aenter__` too (see "Connection lifecycle" above) — a
+fresh sweep run to confirm the primary channel actually engages now, and that writes get
+noticeably faster, hasn't been reported yet.
 
 ---
 

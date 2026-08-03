@@ -324,6 +324,23 @@ class RestCameraSession:
         closed. `connected` tracks whether every step succeeded; `finally`
         closes an owned session on any failure path without catching or
         masking the original exception.
+
+        Also subscribes to `/system/format` here, alongside
+        `/transports/0/record` — a second real-hardware-confirmed defect
+        this fixes (`POCKET_6K_G2 v8.6`, 2026-08-03,
+        `tools/rest/sweep_camera_format.py`'s first run): `set_camera_format`
+        arms and waits on `FORMAT_PROPERTY` for its dual-check's primary
+        channel, but nothing had ever subscribed the router to it, so the
+        camera never had a reason to push `/system/format` events to this
+        connection at all. Every one of 544 real writes in that run
+        therefore burned the *entire* `verify_timeout_s` (uniformly ~6.0s
+        each, not the fast primary-channel case) before falling through to
+        the secondary `GET` readback, which is what actually confirmed each
+        one — the writes were never wrong, but the "primary" channel was
+        structurally dead weight for the whole run. Subscribing here, once,
+        for the session's lifetime, gives `set_camera_format` the same
+        standing subscription `record_start`/`record_stop` already had for
+        `/transports/0/record`.
         """
         if self._session is None:
             self._session = aiohttp.ClientSession()
@@ -339,7 +356,8 @@ class RestCameraSession:
             await self._router.connect(
                 self._session, _websocket_url(self.base_url), timeout_s=self.ws_timeout_s
             )
-            await self._router.subscribe("/transports/0/record")
+            await self._router.subscribe(RECORD_PROPERTY)
+            await self._router.subscribe(FORMAT_PROPERTY)
             connected = True
         finally:
             if not connected:

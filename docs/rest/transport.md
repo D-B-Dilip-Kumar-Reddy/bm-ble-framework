@@ -856,7 +856,24 @@ live `GET /system/supportedFormats` read into one sweep item per distinct
 `sensorResolution` the camera pairs with it. Built directly from this session's own
 `sensorResolution` finding above: two manual `set_camera_format()` calls in a row were
 enough to surface a real defect, and nothing in this codebase's tooling checked
-systematically for a similar one elsewhere. No real-hardware run reported yet.
+systematically for a similar one elsewhere.
+
+**Real hardware, `POCKET_6K_G2 v8.6`, 2026-08-03**, full sweep, no filters: **544
+confirmed, 16 unsupported, 0 unconfirmed.** The 16 unsupported are exactly the `BRAW`/`6K`
+`59.94`/`60` combinations `GET /system/supportedFormats` doesn't offer — a real hardware
+ceiling, correctly pre-filtered without a write attempted, not a bug. Every combination the
+camera claims to support, across the full codec/quality/resolution/fps/sensor-area space,
+confirmed cleanly.
+
+Same run also caught a genuine defect one level down, in `RestCameraSession` itself, not
+this tool: every confirmed write took ~6 seconds (`verify_timeout_s`'s default), a uniform
+timing signature across all 544 that turned out to mean the WS-event primary channel never
+had a chance to fire — `__aenter__` had never subscribed the router to `/system/format` at
+all, so every write fell through to the secondary `GET` readback after burning the full
+primary timeout first. Fixed by subscribing to `/system/format` alongside
+`/transports/0/record` at connect time — see docs/rest/session.md's "Connection lifecycle"
+section. A fresh sweep confirming the fix (materially faster per-combination timing) hasn't
+been reported yet.
 
 ---
 
