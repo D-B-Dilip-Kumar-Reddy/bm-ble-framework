@@ -2878,3 +2878,36 @@ also already excludes `frame_flags` from its redundant-write comparison.
 Nothing about the write path or the no-op guard was silently relying on
 the now-corrected "windowed = f(resolution)" assumption — only this
 profile's descriptive notes were, and those are what this entry fixes.
+
+
+### 18.14 Both §18.11 and §18.12 independently corroborated over REST (2026-08-03)
+
+Not a BLE finding, and it changes no BLE value — recorded here because it settles two
+things this section could only argue by analogy. Full write-up: `docs/rest/transport.md`.
+
+The first REST sweep of this same camera and firmware returned
+`GET /system/supportedFormats`, the camera's own capability matrix:
+
+**§18.12's ProRes/4K DCI gap.** The matrix lists ProRes at `recordResolution`
+4096×2160 (`sensorResolution` 5744×3024), and `GET /system/format` showed the camera
+**sitting in that state** — `ProRes:Proxy`, 4096×2160. §18.12 promoted
+`known_unreachable` on the strength of the exhausted write-side investigation alone,
+explicitly flagging that "the equivalent body-menu confirmation has not been separately
+gathered on this firmware". It now has been, machine-readable, from the camera's own
+report. The conclusion is unchanged and now independently evidenced: **the camera reaches
+and holds the combination; only this codebase's BLE write path cannot get there.**
+
+**§18.11's 6K ceiling.** The matrix offers 6144×3456 up to `50` only, while 6144×2560
+(6K 2.4:1) offers `59.94` and `60`. Exactly the resolution-specific, variant-independent
+ceiling the 16/16 sweep failure found and the operator confirmed on the camera's UI.
+Three sources now agree.
+
+Neither result licenses removing the `known_unreachable` entry or relaxing the
+`max_fps_int` guard. `set_camera_format` must still raise `BMDUnsupportedError` for
+ProRes/4K DCI over BLE, because the BLE write path is what those guards describe.
+
+**One thing REST exposes that BLE never could:** `sensorResolution` is a first-class
+field, and ProRes at 1920×1080 appears three times in the matrix differing only by it
+(2880×1512 / 5376×3024 / 6144×3456). That is the Sensor Area selector — see
+`docs/photo_capture.md` §10, which closed the BLE search as having no write path by any
+means tried.

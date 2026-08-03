@@ -1285,3 +1285,37 @@ evidence about writability), but is worth noting as design principle 6 in
 practice: the same conclusion re-earned on a new firmware rather than
 assumed to carry over. `POCKET_6K_G2 v8.6`'s own `commands.recording_format`
 provenance records the capture and its resolved discrepancy directly.
+
+
+### 10.8 REST exposes Sensor Area as a readable field (2026-08-03)
+
+§§10–10.7 closed the BLE search: no write path for Sensor Area exists on either camera,
+by any means tried, and §10.6 confirmed no such parameter is documented anywhere in the
+official 115-page spec. **All of that stands** — it is a finding about BLE, and the first
+REST sweep does not contradict a word of it.
+
+What the sweep adds is that the concept exists elsewhere. `GET /system/supportedFormats`
+on `POCKET_6K_G2 v8.6` returns `sensorResolution` as a first-class field, and lists
+ProRes at 1920×1080 **three times**, differing only by it:
+
+| recordResolution | sensorResolution | Matches §10.2's option |
+|---|---|---|
+| 1920×1080 | 2880×1512 | 2.8K |
+| 1920×1080 | 5376×3024 | 5.3K |
+| 1920×1080 | 6144×3456 | 6K |
+
+`GET /system/format` reports the active one (5744×3024 while the camera sat at ProRes/4K
+DCI). So the selector §10.1–§10.5 could only infer from a single binary "windowed" flag
+bit is directly readable over REST, with its actual dimensions.
+
+Two things this does **not** establish, and must not be read as establishing:
+
+- **Whether it is writable.** `PUT /system/format` has never been sent. §10.7's
+  hard-won lesson — that a *read* signal existing says nothing about a *write* path, and
+  that only before/after SD-card photo dimensions settled it — applies with full force
+  here. The write probe is the next step.
+- **Anything about `POCKET_6K_PRO v8.6`.** Not swept.
+
+If the write does turn out to work, it resolves the gap §8 describes for ProRes stills
+(which use sensor area rather than the video resolution) — over a transport this
+investigation never had. See `docs/rest/transport.md`.
