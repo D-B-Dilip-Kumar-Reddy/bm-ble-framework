@@ -1,9 +1,9 @@
 # REST / WebSocket Transport
 
-**Status:** Phase 0 — the endpoint sweep tool (`tools/rest/probe_endpoints.py`) is
-implemented; **no sweep has been run yet**, and no REST client, session, or profile
-exists. Everything below the "Sweep results" heading is empty on purpose, waiting for
-real-hardware evidence.
+**Status:** Phase 0 — first successful sweep run on `POCKET_6K_G2 v8.6` over USB
+(2026-08-03): 52 endpoints working, 5 not implemented, no 5xx. Results and their known
+gaps are under "Sweep results". No write probe has been run, and no REST client, session,
+or profile exists yet.
 
 ## Overview
 
@@ -328,42 +328,176 @@ profiles on the same firmware diverging on a real protocol value
 
 ## Sweep results
 
-*(Empty. Populate from a real run — one section per `(model_key, firmware, transport)`,
-in the evidentiary style of `docs/ble/settings.md`: what was run, what came back, and
-what remains unexplained. Do not fill this in from the specs.)*
+### `POCKET_6K_G2 v8.6`, over USB, plaintext HTTP — 2026-08-03
 
-### `POCKET_6K_G2 v8.6` over USB
+First successful sweep. `http://pocket-cinema-camera-6k-g2.local`, 72 endpoints in
+~400 ms. **52 working, 5 not implemented, 18 not found, and — notably — zero 5xx.**
 
-Not yet swept. Confirmed by hand before any tooling existed, by browser. The scheme
-recorded at the time was `https://`, but that has not held up: on 2026-08-03 port 443
-refused for both the probe tool and `curl`, while Setup → Network Access advertises
-`http://` and is set to `Enabled` rather than `Enabled with security only`. Treat the
-browser's address bar as unreliable evidence of the scheme — it silently upgrades and
-falls back. The endpoints themselves are unaffected:
+Read this section together with "Known gaps in this run" below: three tool bugs the run
+exposed mean parts of it must be re-gathered before being trusted.
 
-| Endpoint | Status | Notes |
-|---|---|---|
-| `GET /system/format` | works | codec, frameRate, offSpeedEnabled, offSpeedFrameRate, recordResolution, sensorResolution |
-| `GET /video/iso` | works | `{"iso": 400}` |
-| `GET /video/whiteBalance` | works | `{"whiteBalance": 5600}` |
-| `GET /video/shutter` | works | `{"shutterAngle": 18000}` |
-| `GET /media/workingset` | works | active media, device name, clip count, remaining/total space, remaining record time |
-| `GET /clips/list` | works | e.g. `{"clipUniqueId": 3, "filePath": "/mnt/sd0/A001/A001_07311253_C001.mov"}` |
-| `GET /mounts/` | works | |
-| `GET /mounts/<volume>/` | works | |
-| `GET /mounts/<volume>/Stills/<file>.dng` | works | direct download by known filename |
-| `GET /mounts/<volume>/Stills/` | **500** | firmware defect; treat as permanently unusable |
-| `GET /system` | **204** | no body |
-| `GET /system/videoFormat` | **501** | |
-| `GET /system/codecFormat` | **501** | |
-| WS subscribe `/media/active` | works | `{"type": "response", "success": true}` |
-| WS subscribe `/system/format` | works | |
-| WS subscribe `/transports/0/record` | works | |
+#### Not implemented on this device (501)
 
-**No write endpoint has been exercised on any camera.**
+| Endpoint | Note |
+|---|---|
+| `/system/codecFormat` | Reconfirms the operator's manual finding |
+| `/system/videoFormat` | Reconfirms |
+| `/system/supportedCodecFormats` | New |
+| `/system/supportedVideoFormats` | New |
+| `/video/ndFilter` | Expected — this camera has no built-in ND. `/video/ndFilter/displayMode` returns 204 rather than 501, which is inconsistent but harmless |
 
-Note the WS response shape above: `success` arrives at the **top level**, while
-`Notification.yaml` documents it nested under `data`. The tool accepts both.
+All five return a body: `{"error": "Not implemented for this device"}`.
+
+`GET /system` returns **204 No Content**, as before — reachable, implemented, and empty.
+
+#### 404s that are facts about the camera, not failures
+
+`/audio/channel/2/*` and `/audio/channel/3/*` return `{"error": "Channel N does not exist"}`.
+The camera has exactly **two** audio channels. The sweep probes 0–3 deliberately, because
+the spec never says how many exist.
+
+#### `/system/supportedFormats` — the capability matrix
+
+Working, and it makes the profile's hand-maintained `codecs`/`resolutions`/`fps_modes`
+tables redundant on the REST path:
+
+| Record resolution | Sensor resolution | Codec family | Max fps | Max off-speed |
+|---|---|---|---|---|
+| 1920×1080 | 2880×1512 | ProRes | 60 | 120 |
+| 1920×1080 | 5376×3024 | ProRes | 60 | 60 |
+| 1920×1080 | 6144×3456 | ProRes | 50 | 50 |
+| 2880×1512 | 2880×1512 | BRaw | 60 | 120 |
+| 3728×3104 | 3728×3104 | BRaw | 60 | 60 |
+| 3840×2160 | 5376×3024 | ProRes | 60 | 60 |
+| 3840×2160 | 6144×3456 | ProRes | 50 | 50 |
+| **4096×2160** | **5744×3024** | **ProRes** | **60** | 60 |
+| 4096×2160 | 4096×2160 | BRaw | 60 | 60 |
+| 5744×3024 | 5744×3024 | BRaw | 60 | 60 |
+| 6144×2560 | 6144×2560 | BRaw | 60 | 60 |
+| 6144×3456 | 6144×3456 | BRaw | 50 | 50 |
+
+Three findings fall straight out of that table.
+
+**1. ProRes at 4K DCI is supported — and the camera is currently in it.**
+`GET /system/format` reports `codec: ProRes:Proxy`, `recordResolution: 4096×2160`. That is
+precisely the combination BLE records as `known_unreachable` on this same firmware
+(`docs/ble/settings.md` §18.12), after nine falsification attempts across three sessions.
+This **independently vindicates that entry's central claim** — quoted from the profile:
+"This is a software capability gap in this codebase's BLE write path, not evidence the
+camera-side combination is unsupported." The camera reaches and holds it; only the BLE
+write path could not get there. Note also its sensor resolution is **5744×3024**, which no
+BLE-side field ever captured.
+
+**2. The 6K fps ceiling is confirmed from a second, independent transport.**
+6144×3456 offers frame rates up to `50` only, while 6144×2560 (6K 2.4:1) offers `59.94`
+and `60`. That is exactly `resolutions."6K".max_fps_int = 50`, derived on BLE from a 16/16
+sweep failure plus an operator UI check. Two transports, same answer.
+
+**3. `sensorResolution` is the Sensor Area concept, exposed as a first-class field.**
+ProRes at 1920×1080 appears three times, differing only in sensor resolution: 2880×1512,
+5376×3024, 6144×3456. That is the 2.8K / 5.3K / 6K "Sensor Area" selector that
+`docs/ble/photo_capture.md` §§10–10.7 closed as having **no BLE write path by any means
+tried** — read-only through one flag bit, never writable, and absent from the official
+115-page spec. REST at minimum *enumerates* it. Whether `PUT /system/format` can *change*
+it is the single highest-value question left for the write probe.
+
+#### Codec naming
+
+| | Values |
+|---|---|
+| REST ProRes | `Proxy`, `LT`, **`Original`**, `HQ` |
+| BLE profile ProRes | `Proxy`, `LT`, **`422`**, `HQ` |
+| REST BRaw | `Q0`, `Q1`, `Q3`, `Q5`, `3_1`, `5_1`, `8_1`, `12_1` |
+| BLE profile BRAW | `Q0`, `Q1`, `Q3`, `Q5`, `3:1`, `5:1`, `8:1`, `12:1` |
+
+BRaw maps by a rule (`:` → `_`). **ProRes does not**: REST calls the variant `Original`
+where this repo calls it `422`. That single exception is exactly why `format_names` belongs
+in the profile rather than being derived in code (design principle 1).
+
+#### Storage — and why "don't index slot 0" was right
+
+`/media/workingset` reports `size: 3` with only **index 1** populated:
+
+```json
+{"index": 0, "deviceName": "",    "activeDisk": false, "totalSpace": 0}
+{"index": 1, "deviceName": "sd0", "activeDisk": true,  "volume": "A001",
+ "clipCount": 1, "remainingRecordTime": 52233, "remainingSpace": 1023925420032}
+{"index": 2, "deviceName": "",    "activeDisk": false, "totalSpace": 0}
+```
+
+The working set is a **fixed-size array with empty members**, and the active disk is not
+slot 0. Any code indexing `workingset[0]` would find an empty device on this camera today.
+`/media/active` names it directly (`{"deviceName": "sd0", "workingsetIndex": 1}`) and
+`/media/devices/sd0` reports `{"state": "Mounted"}`.
+
+Everything design principle 10 needs is here: card presence, state, free space, remaining
+record time, clip count.
+
+#### The clip-path mapping is still not string manipulation
+
+`/clips/list` returns `clipList` (not `clips`, as assumed):
+
+```json
+{"clipUniqueId": 1, "filePath": "/mnt/sd0/A001/A001_07311253_C001.mov",
+ "codecFormat": {"codec": "ProRes:Proxy", "container": "MOV"},
+ "startTimecode": "12:53:56:01", "durationTimecode": "00:00:02:12",
+ "videoFormat": "4096x2160p24"}
+```
+
+Three names for one card: `deviceName` **`sd0`**, `volume` **`A001`**, mount
+**`A001-sd1`** — note `sd0` against `sd1`. The mapping from a clip's `filePath` to a
+downloadable `/mounts/...` URL still cannot be guessed.
+
+**No stills appear in `clipList`, and there is no file size field.** So the photo
+confirmation design cannot lean on `/clips/list`; it still needs the mounts route.
+
+#### Timecode is BCD, big-endian, and byte-reversed relative to BLE
+
+`GET /transports/0/timecode` returned `{"clip": 0, "timecode": 274153986}`.
+
+```
+274153986 = 0x10574202 -> 10:57:42:02
+```
+
+The sweep ran at 10:57:46 local, so this is time-of-day timecode as **BCD HH:MM:SS:FF,
+big-endian**. The BLE `TIMECODE` characteristic decodes as `[frames, seconds, minutes,
+hours]` — **the opposite order** (`docs/ble/timecode.md`). The `Timecode` dataclass and
+`duration_seconds()` are reusable; `decode_timecode()` is not.
+
+#### Undocumented properties `/event/list` revealed
+
+`/event/list` returned 46 subscribable properties, three of which appear in **no uploaded
+spec**: `/camera/id`, `/presets`, `/presets/active`. Subscribing returned `{"id": 1}`,
+`{"presets": []}` and `{"preset": "default"}` respectively. Worth a look if camera
+identity or preset recall ever matters.
+
+`/system/codecFormat` and `/system/videoFormat` are rejected by the event feed too —
+`"Cannot subscribe to unknown property"` — consistent with their 501s.
+
+### Known gaps in this run
+
+Three tool bugs, all fixed, all requiring a re-run before the results above are complete:
+
+| Bug | Effect on this run |
+|---|---|
+| WebSocket responses matched positionally instead of by `id` | **Every subscription result shifted by one.** The camera sends a `websocketOpened` event on connect, which consumed request 0's slot. `/audio/channel/0/available` was recorded FAILED when it succeeded; `/system/codecFormat` was recorded OK when it was rejected; `/system/supportedFormats`'s real outcome was never read. Counts in the summary are not trustworthy |
+| The `/mounts/` listing was assumed to be HTML | It is **JSON** (`[{"name": "A001-sd1", "type": "directory", …}]`), so no links were extracted and the walk never descended. **The known Stills 500 was neither reproduced nor disproved** |
+| Empty working-set slots were expanded into requests | Produced two meaningless 404s (`/media/devices/`, `/media/devices//doformat`) that are facts about the tool, not the camera |
+
+### Gate table status
+
+| Question | Answer |
+|---|---|
+| `GET /system/supportedFormats` works? | **Yes** — full capability matrix, above |
+| Plaintext HTTP listener live? | **Yes** — port 80, `Server: BlackmagicDesign` |
+| `/clips/list` exposes stills or sizes? | **No** — clips only, no size field |
+| Timecode encoding? | **BCD, big-endian HH:MM:SS:FF**, reversed vs BLE |
+| Are the 5xx defects wider than Stills? | **No 5xx observed** — but Stills was not reached; re-run needed |
+| Which WS properties subscribe? | 46 offered, but results misattributed; re-run needed |
+| `PUT /system/format` implemented? | **Open** — needs `--probe-writes` |
+| `PUT /transports/0/record` implemented? | **Open** — never probed, and never will be by this tool (`NEVER_WRITE`) |
+| `sensorResolution` writable? | **Open** — but confirmed readable and enumerable, which BLE never achieved |
+| USB link survives recording, and BLE concurrently? | **Open** |
 
 ### `POCKET_6K_PRO v8.6`
 

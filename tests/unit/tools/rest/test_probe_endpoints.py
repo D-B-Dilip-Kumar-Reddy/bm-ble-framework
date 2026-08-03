@@ -27,6 +27,7 @@ from probe_endpoints import (  # noqa: E402
     echo_body,
     expand_catalog,
     extract_links,
+    is_response_to,
     is_supported,
     normalise_base_url,
     pick_first,
@@ -185,6 +186,32 @@ class TestDeviceNames:
         payload = {"workingset": [{"index": 0}, {"deviceName": 7}, {"deviceName": "sd1"}]}
         assert device_names_from_workingset(payload) == ["sd1"]
 
+    def test_skips_empty_slots(self):
+        """The working set is a fixed size with empty members reporting
+        deviceName "". Expanding those produced requests to
+        `/media/devices/` and `/media/devices//doformat`, whose 404s say
+        nothing about the camera."""
+        payload = {
+            "workingset": [
+                {"index": 0, "deviceName": ""},
+                {"index": 1, "deviceName": "sd0", "activeDisk": True},
+                {"index": 2, "deviceName": ""},
+            ]
+        }
+        assert device_names_from_workingset(payload) == ["sd0"]
+
+    def test_active_device_is_not_assumed_to_be_slot_zero(self):
+        """Real hardware: three slots, only index 1 populated. Indexing slot
+        0 would find an empty device."""
+        payload = {
+            "workingset": [
+                {"index": 0, "deviceName": ""},
+                {"index": 1, "deviceName": "sd0", "activeDisk": True},
+                {"index": 2, "deviceName": ""},
+            ]
+        }
+        assert device_names_from_workingset(payload)[0] == "sd0"
+
 
 class TestWriteBodyBuilders:
     def test_echo_returns_a_copy(self):
@@ -272,7 +299,55 @@ class TestWsResponseOk:
         assert ws_response_ok(message) is False
 
 
+class TestIsResponseTo:
+    """Regression tests for the first sweep's silent off-by-one. The camera
+    interleaves events with responses, so "the next message" is not "my
+    answer" — reading positionally credited every property with the previous
+    one's outcome, and nothing in the output looked wrong."""
+
+    def test_matches_the_response_with_the_same_id(self):
+        assert is_response_to({"type": "response", "id": 7, "data": {}}, 7) is True
+
+    def test_rejects_a_response_to_a_different_request(self):
+        assert is_response_to({"type": "response", "id": 6, "data": {}}, 7) is False
+
+    def test_rejects_the_websocket_opened_event(self):
+        """The exact message that consumed request id=0's slot in the first
+        real run."""
+        opened = {"data": {"action": "websocketOpened"}, "type": "event"}
+        assert is_response_to(opened, 0) is False
+
+    def test_rejects_a_property_value_changed_event(self):
+        event = {
+            "type": "event",
+            "data": {"action": "propertyValueChanged", "property": "/video/iso"},
+        }
+        assert is_response_to(event, 0) is False
+
+    @pytest.mark.parametrize("message", [None, {}, "text", {"type": "response"}])
+    def test_rejects_malformed_or_id_less_messages(self, message):
+        assert is_response_to(message, 0) is False
+
+
 class TestExtractLinks:
+    def test_reads_the_json_listing_the_camera_actually_serves(self):
+        """POCKET_6K_G2 v8.6 returns JSON, not HTML. Assuming HTML meant the
+        first sweep never descended past /mounts/, so the known Stills 500
+        was neither reproduced nor disproved."""
+        body = [{"name": "A001-sd1", "type": "directory", "mtime": "Mon, 31 Dec 1979 05:30:00"}]
+        assert extract_links(body) == ["A001-sd1"]
+
+    def test_json_listing_skips_files(self):
+        body = [
+            {"name": "A001-sd1", "type": "directory"},
+            {"name": "clip.mov", "type": "file"},
+        ]
+        assert extract_links(body) == ["A001-sd1"]
+
+    def test_json_listing_tolerates_malformed_entries(self):
+        body = [{"type": "directory"}, {"name": 7, "type": "directory"}, "junk"]
+        assert extract_links(body) == []
+
     def test_pulls_directory_entries(self):
         body = '<a href="A001-sd1/">A001-sd1</a><a href="A002-sd2/">A002-sd2</a>'
         assert extract_links(body) == ["A001-sd1/", "A002-sd2/"]

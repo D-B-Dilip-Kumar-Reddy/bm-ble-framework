@@ -436,10 +436,16 @@ def device_names_from_workingset(payload: Any) -> list[str]:
     entries = payload.get("workingset")
     if not isinstance(entries, list):
         return []
+    # Empty slots report deviceName "" — the camera's working set is a fixed
+    # size with empty members, so the first sweep requested `/media/devices/`
+    # and `/media/devices//doformat` and recorded two 404s that say nothing
+    # about the camera.
     names = [
         entry["deviceName"]
         for entry in entries
-        if isinstance(entry, dict) and isinstance(entry.get("deviceName"), str)
+        if isinstance(entry, dict)
+        and isinstance(entry.get("deviceName"), str)
+        and entry["deviceName"]
     ]
     return list(dict.fromkeys(names))
 
@@ -571,11 +577,25 @@ _HREF_RE = re.compile(r'href=["\']([^"\']+)["\']', re.IGNORECASE)
 def extract_links(body: Any) -> list[str]:
     """Directory entries from a Web Media Manager listing.
 
-    The listing is HTML, so this is a deliberately shallow regex over href
-    attributes rather than a parser — enough to walk one or two levels and
-    find the volume names, without taking on an HTML dependency for a
-    diagnostic tool. Parent links and absolute URLs are dropped.
+    On `POCKET_6K_G2 v8.6` the listing is **JSON**, not HTML:
+    `[{"name": "A001-sd1", "type": "directory", "mtime": "..."}]`. The first
+    sweep assumed HTML, found no links, and so never descended past
+    `/mounts/` — which is why it neither reproduced nor disproved the known
+    Stills 500. Only directories are followed; files are listed but are not
+    walkable.
+
+    The HTML branch is kept as a fallback for firmware that serves a browser
+    listing instead, as a deliberately shallow regex over href attributes
+    rather than an HTML dependency for a diagnostic tool.
     """
+    if isinstance(body, list):
+        return [
+            entry["name"]
+            for entry in body
+            if isinstance(entry, dict)
+            and isinstance(entry.get("name"), str)
+            and entry.get("type") == "directory"
+        ]
     if not isinstance(body, str):
         return []
     links = []
@@ -644,6 +664,48 @@ def ws_response_ok(message: Any) -> bool:
     return False
 
 
+def is_response_to(message: Any, request_id: int) -> bool:
+    """Whether `message` is the response to request `request_id`.
+
+    The camera interleaves unsolicited events with responses — it sends a
+    `websocketOpened` event the moment the socket opens, and
+    `propertyValueChanged` events arrive at any time once subscriptions
+    exist. Reading "the next message" therefore does not read "my answer".
+
+    The first run of this tool did exactly that and silently shifted every
+    result by one: `/audio/channel/0/available` was recorded as FAILED when
+    it had actually consumed the `websocketOpened` event, and each later
+    property was credited with the previous one's outcome. Nothing in the
+    output looked wrong. This is the same hazard NotificationRouter guards
+    against on the BLE side (docs/ble/session_and_verification.md) — a reply
+    that arrives is not necessarily a reply to *you*.
+    """
+    if not isinstance(message, dict):
+        return False
+    return message.get("type") == "response" and message.get("id") == request_id
+
+
+async def _await_response(ws: Any, request_id: int, *, timeout_s: float) -> Any:
+    """Read until the response to `request_id` arrives, or time out.
+
+    Events are discarded rather than mistaken for answers — see
+    `is_response_to`. Returns None on timeout so the caller records a
+    failure rather than a wrong success.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout_s
+    while True:
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            return None
+        try:
+            message = await asyncio.wait_for(ws.receive_json(), timeout=remaining)
+        except (TimeoutError, ValueError, TypeError):
+            return None
+        if is_response_to(message, request_id):
+            return message
+
+
 async def probe_websocket(
     session: aiohttp.ClientSession,
     base_url: str,
@@ -670,11 +732,8 @@ async def probe_websocket(
                         "data": {"action": "subscribe", "properties": [prop]},
                     }
                 )
-                try:
-                    message = await asyncio.wait_for(ws.receive_json(), timeout=timeout_s)
-                    ok = ws_response_ok(message)
-                except (TimeoutError, ValueError, TypeError):
-                    message, ok = None, False
+                message = await _await_response(ws, index, timeout_s=timeout_s)
+                ok = ws_response_ok(message)
                 outcome["subscriptions"][prop] = {"success": ok, "response": message}
                 logger.info("WS  subscribe %-46s -> %s", prop, "ok" if ok else "FAILED")
     except (aiohttp.ClientError, TimeoutError, OSError) as exc:
