@@ -26,6 +26,7 @@ from bmd_camera.exceptions import (
 from bmd_camera.rest.events import RestEventRouter
 from bmd_camera.rest.exceptions import BMDRestError
 from bmd_camera.rest.session import (
+    FORMAT_PROPERTY,
     RECORD_PROPERTY,
     Clip,
     Format,
@@ -44,6 +45,78 @@ def make_profile(*, rest_raw: dict | None = None) -> CameraProfile:
     if rest_raw is not None:
         profile.rest = CameraProfile._rest_from_raw(rest_raw)
     return profile
+
+
+def make_format_profile(
+    *,
+    format_names: dict | None = None,
+    format_endpoint_confirmed: bool = True,
+    supported_formats_confirmed: bool = True,
+) -> CameraProfile:
+    """A profile carrying the codecs/resolutions/fps_modes tables
+    set_camera_format's local validation consumes (shared with BLE — design
+    principle 1, mirrors tests/unit/test_session.py's make_settings_profile),
+    plus a rest/ file confirming /system/format's PUT side and
+    /system/supportedFormats' GET side were swept — both required before
+    set_camera_format will attempt a write."""
+    ble_raw = {
+        "_meta": {"model": "Pocket 6K G2", "ble_name": "A:TEST"},
+        "codecs": {
+            "BRAW": {"id": 3, "variants": {"Q0": 0, "5:1": 3}},
+            "ProRes": {"id": 2, "variants": {"HQ": 0, "422": 1}},
+        },
+        "resolutions": {
+            "4K DCI": {"width": 4096, "height": 2160, "codecs": ["BRAW", "ProRes"]},
+            "HD": {"width": 1920, "height": 1080, "codecs": ["ProRes"]},
+        },
+        "fps_modes": {
+            "23.98": {"fps_int": 24, "m_rate": 1, "frame_flags": 19},
+            "24": {"fps_int": 24, "m_rate": 0, "frame_flags": 0},
+        },
+    }
+    profile = CameraProfile._from_raw(MODEL_KEY, FIRMWARE, ble_raw)
+
+    endpoints: dict[str, dict] = {}
+    if format_endpoint_confirmed:
+        endpoints[FORMAT_PROPERTY] = {
+            "status": 200,
+            "supported": True,
+            "put_status": 204,
+            "put_supported": True,
+        }
+    if supported_formats_confirmed:
+        endpoints["/system/supportedFormats"] = {"status": 200, "supported": True}
+
+    rest_raw = {
+        "_meta": {"model_key": MODEL_KEY, "firmware": FIRMWARE, "status": "UNVERIFIED"},
+        "endpoints": endpoints,
+        "format_names": format_names or {},
+    }
+    profile.rest = CameraProfile._rest_from_raw(rest_raw)
+    return profile
+
+
+CURRENT_FORMAT_BODY = {
+    "codec": "ProRes:Proxy",
+    "frameRate": "24",
+    "maxOffSpeedFrameRate": 60,
+    "minOffSpeedFrameRate": 5,
+    "offSpeedEnabled": False,
+    "offSpeedFrameRate": 24,
+    "recordResolution": {"height": 1080, "width": 1920},
+    "sensorResolution": {"height": 3024, "width": 5744},
+}
+
+SUPPORTED_FORMATS_BODY_BRAW_4K_DCI = {
+    "supportedFormats": [
+        {
+            "codecs": ["BRaw:Q0", "BRaw:5_1"],
+            "frameRates": ["23.98", "24"],
+            "recordResolution": {"width": 4096, "height": 2160},
+            "sensorResolution": {"width": 4096, "height": 2160},
+        }
+    ]
+}
 
 
 def make_profile_with_record_confirmed() -> CameraProfile:
@@ -536,6 +609,187 @@ class TestRecordStop:
 
         assert client.put_calls == [(RECORD_PROPERTY, {"recording": False})]
         assert session.is_recording is False
+
+
+EXPECTED_MERGED_BODY = {
+    **CURRENT_FORMAT_BODY,
+    "codec": "BRaw:5_1",
+    "frameRate": "23.98",
+    "recordResolution": {"width": 4096, "height": 2160},
+}
+
+
+class TestSetCameraFormat:
+    @pytest.mark.asyncio
+    async def test_raises_value_error_for_unknown_codec(self):
+        client = FakeRestClient({})
+        session = make_session(make_format_profile(), client=client)
+
+        with pytest.raises(ValueError, match="codec"):
+            await session.set_camera_format("Nonexistent", "5:1", "4K DCI", "23.98")
+
+        assert client.calls == []
+        assert client.put_calls == []
+
+    @pytest.mark.asyncio
+    async def test_raises_bmd_unsupported_when_put_not_confirmed_in_profile(self):
+        client = FakeRestClient({})
+        profile = make_format_profile(format_endpoint_confirmed=False)
+        session = make_session(profile, client=client)
+
+        with pytest.raises(BMDUnsupportedError, match="system/format"):
+            await session.set_camera_format("BRAW", "5:1", "4K DCI", "23.98")
+
+        assert client.put_calls == []
+
+    @pytest.mark.asyncio
+    async def test_raises_bmd_unsupported_when_supported_formats_endpoint_missing(self):
+        client = FakeRestClient({})
+        profile = make_format_profile(supported_formats_confirmed=False)
+        session = make_session(profile, client=client)
+
+        with pytest.raises(BMDUnsupportedError, match="supportedFormats"):
+            await session.set_camera_format("BRAW", "5:1", "4K DCI", "23.98")
+
+        assert client.put_calls == []
+
+    @pytest.mark.asyncio
+    async def test_raises_bmd_unsupported_when_camera_does_not_report_combination(self):
+        client = FakeRestClient(
+            {
+                "/system/supportedFormats": {
+                    "supportedFormats": [
+                        {
+                            "codecs": ["ProRes:HQ"],
+                            "frameRates": ["24"],
+                            "recordResolution": {"width": 1920, "height": 1080},
+                            "sensorResolution": {"width": 1920, "height": 1080},
+                        }
+                    ]
+                }
+            }
+        )
+        session = make_session(make_format_profile(), client=client)
+
+        with pytest.raises(BMDUnsupportedError, match="does not report offering"):
+            await session.set_camera_format("BRAW", "5:1", "4K DCI", "23.98")
+
+        assert client.put_calls == []
+
+    @pytest.mark.asyncio
+    async def test_confirmed_by_ws_event_primary(self):
+        client = FakeRestClient(
+            {
+                FORMAT_PROPERTY: CURRENT_FORMAT_BODY,
+                "/system/supportedFormats": SUPPORTED_FORMATS_BODY_BRAW_4K_DCI,
+            }
+        )
+        session = make_session(make_format_profile(), client=client)
+
+        async def deliver_event():
+            await asyncio.sleep(0.01)
+            session._router.handle_event(
+                {
+                    "type": "event",
+                    "data": {
+                        "action": "propertyValueChanged",
+                        "property": FORMAT_PROPERTY,
+                        "value": {
+                            "codec": "BRaw:5_1",
+                            "frameRate": "23.98",
+                            "recordResolution": {"width": 4096, "height": 2160},
+                        },
+                    },
+                }
+            )
+
+        asyncio.create_task(deliver_event())
+        await session.set_camera_format("BRAW", "5:1", "4K DCI", "23.98")
+
+        assert client.put_calls == [(FORMAT_PROPERTY, EXPECTED_MERGED_BODY)]
+        # only one GET /system/format — the pre-write read; no readback needed
+        assert client.calls.count(FORMAT_PROPERTY) == 1
+
+    @pytest.mark.asyncio
+    async def test_confirmed_by_get_readback_secondary_when_no_event_arrives(self):
+        confirmed_body = {**EXPECTED_MERGED_BODY}
+        get_bodies = iter([CURRENT_FORMAT_BODY, confirmed_body])
+        client = FakeRestClient({"/system/supportedFormats": SUPPORTED_FORMATS_BODY_BRAW_4K_DCI})
+
+        async def get(path):
+            client.calls.append(path)
+            if path == FORMAT_PROPERTY:
+                return next(get_bodies)
+            return client.responses[path]
+
+        client.get = get  # type: ignore[method-assign]
+        session = make_session(make_format_profile(), client=client)
+        session.verify_timeout_s = 0.05
+
+        await session.set_camera_format("BRAW", "5:1", "4K DCI", "23.98")
+
+        assert client.put_calls == [(FORMAT_PROPERTY, EXPECTED_MERGED_BODY)]
+        assert client.calls.count(FORMAT_PROPERTY) == 2  # pre-write GET + readback
+
+    @pytest.mark.asyncio
+    async def test_raises_verification_error_when_neither_channel_confirms(self):
+        client = FakeRestClient(
+            {
+                FORMAT_PROPERTY: CURRENT_FORMAT_BODY,  # readback never changes
+                "/system/supportedFormats": SUPPORTED_FORMATS_BODY_BRAW_4K_DCI,
+            }
+        )
+        session = make_session(make_format_profile(), client=client)
+        session.verify_timeout_s = 0.05
+
+        with pytest.raises(BMDVerificationError, match="set_camera_format"):
+            await session.set_camera_format("BRAW", "5:1", "4K DCI", "23.98")
+
+    @pytest.mark.asyncio
+    async def test_uses_confirmed_format_names_over_derivation(self):
+        """ProRes's '422' -> 'Original' is not derivable (mapping.py) — only
+        a populated format_names entry gets this right; the derivation rule
+        alone would (wrongly) produce 'ProRes:422'."""
+        client = FakeRestClient(
+            {
+                FORMAT_PROPERTY: CURRENT_FORMAT_BODY,
+                "/system/supportedFormats": {
+                    "supportedFormats": [
+                        {
+                            "codecs": ["ProRes:Original"],
+                            "frameRates": ["23.98"],
+                            "recordResolution": {"width": 4096, "height": 2160},
+                            "sensorResolution": {"width": 4096, "height": 2160},
+                        }
+                    ]
+                },
+            }
+        )
+        profile = make_format_profile(format_names={"ProRes": {"422": "ProRes:Original"}})
+        session = make_session(profile, client=client)
+
+        async def deliver_event():
+            await asyncio.sleep(0.01)
+            session._router.handle_event(
+                {
+                    "type": "event",
+                    "data": {
+                        "action": "propertyValueChanged",
+                        "property": FORMAT_PROPERTY,
+                        "value": {
+                            "codec": "ProRes:Original",
+                            "frameRate": "23.98",
+                            "recordResolution": {"width": 4096, "height": 2160},
+                        },
+                    },
+                }
+            )
+
+        asyncio.create_task(deliver_event())
+        await session.set_camera_format("ProRes", "422", "4K DCI", "23.98")
+
+        put_path, put_body = client.put_calls[0]
+        assert put_body["codec"] == "ProRes:Original"
 
 
 class TestWaitWhileRecording:

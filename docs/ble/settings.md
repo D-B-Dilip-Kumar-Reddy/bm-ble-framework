@@ -2029,6 +2029,19 @@ capture and now REST both agree the camera does. The `known_unreachable` entry a
 `BMDUnsupportedError` guard it drives are unchanged — both still describe the BLE write
 path specifically, which this REST evidence says nothing about either way.
 
+### 16.2 A REST write path now exists to actually test this (2026-08-04, still unrun)
+
+§16.1 was read-only evidence — `GET /system/supportedFormats` saying the camera offers the
+combination, not a write reaching it. `RestCameraSession.set_camera_format` (Phase 5,
+`docs/rest/session.md`) is the first thing in this codebase that can actually attempt a
+`PUT` at ProRes/4K DCI over any transport: `examples/rest_change_format.py`'s default
+combinations include it specifically for this reason. No run has been reported yet, so
+this remains exactly what §16.1 already was — corroborating evidence, not a resolution.
+A successful confirmed write there would be independent proof the camera-side combination
+works end to end, not just that the camera *reports* supporting it; this section's
+`known_unreachable` entry would still stand unchanged either way, since it describes only
+this codebase's BLE write path.
+
 ---
 
 ## 17. `POCKET_6K_PRO v8.6` — `sweep_camera_format.py`'s first production run (2026-07-24)

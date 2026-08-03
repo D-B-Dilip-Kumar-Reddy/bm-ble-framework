@@ -417,7 +417,25 @@
     "/video/whiteBalance",
     "/video/whiteBalanceTint"
   ],
-  "format_names": {},
+  "format_names": {
+    "_comment": "GET /system/supportedFormats codecs list, POCKET_6K_G2 v8.6, 2026-08-03 (docs/rest/transport.md 'Codec naming'): REST BRaw = Q0/Q1/Q3/Q5/3_1/5_1/8_1/12_1, REST ProRes = Proxy/LT/Original/HQ. BRAW's ':' -> '_' matches derive_rest_codec_name's rule (present here anyway for an explicit confirmed record, design principle 1). ProRes's '422' -> 'Original' does not match any rule — the reason this table exists at all.",
+    "BRAW": {
+      "Q0": "BRaw:Q0",
+      "Q1": "BRaw:Q1",
+      "Q3": "BRaw:Q3",
+      "Q5": "BRaw:Q5",
+      "3:1": "BRaw:3_1",
+      "5:1": "BRaw:5_1",
+      "8:1": "BRaw:8_1",
+      "12:1": "BRaw:12_1"
+    },
+    "ProRes": {
+      "HQ": "ProRes:HQ",
+      "422": "ProRes:Original",
+      "LT": "ProRes:LT",
+      "Proxy": "ProRes:Proxy"
+    }
+  },
   "provenance": {
     "status": "CANDIDATE",
     "method": "tools/rest/probe_endpoints.py sweep over usb, including idempotent write probes",

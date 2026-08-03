@@ -7,9 +7,9 @@ as `ble/session.py`'s `CameraSession` composes `BMDCameraController` and
 `NotificationRouter` — see design principle 5's transport/protocol
 boundary, held here for REST.
 
-STATUS: read verbs plus record start/stop (Phase 4) — the REST dual-check
-design principle 3 has always specified: a WS `propertyValueChanged` event
-primary, a `GET` readback secondary. Format writes (Phase 5) are not here yet.
+STATUS: read verbs, record start/stop (Phase 4), and format writes (Phase 5) —
+the REST dual-check design principle 3 has always specified: a WS
+`propertyValueChanged` event primary, a `GET` readback secondary.
 
     async with RestCameraSession("172.27.97.141", "POCKET_6K_PRO", "v8.6") as session:
         fmt = await session.get_format()
@@ -18,6 +18,7 @@ primary, a `GET` readback secondary. Format writes (Phase 5) are not here yet.
         tc = await session.timecode()
         await session.record_start()
         await session.record_stop()
+        await session.set_camera_format("BRAW", "5:1", "4K DCI", "23.98")
 
 `is_recording` is the one piece of state this session tracks continuously
 rather than fetching on demand — notification-derived only, from
@@ -54,11 +55,13 @@ from .client import RestClient, require_aiohttp
 from .constants import WS_PATH
 from .events import RestEventRouter
 from .exceptions import BMDRestError
+from .mapping import resolve_rest_codec_name
 from .timecode import Timecode, decode_rest_timecode
 
 logger = logging.getLogger(__name__)
 
 RECORD_PROPERTY = "/transports/0/record"
+FORMAT_PROPERTY = "/system/format"
 
 
 def _websocket_url(base_url: str) -> str:
@@ -158,15 +161,32 @@ class Clip:
 
 def _recording_flag(value: Any) -> bool | None:
     """Extract `/transports/0/record`'s `{"recording": bool}` shape —
-    `Notification.yaml`'s documented event `value`, assumed (not yet
-    directly observed on real hardware — see events.py's docstring caveat)
-    to be shared by the `GET` readback body too. Returns None for anything
-    else, including a `wait_for()` timeout's own `None`, so a caller can
-    treat "malformed" and "no delivery yet" identically — both mean "not
+    `Notification.yaml`'s documented event `value`, shared by the `GET`
+    readback body too. Real-hardware-confirmed, `POCKET_6K_G2` and
+    `POCKET_6K_PRO v8.6`, 2026-08-03: `record_start`/`record_stop` each
+    confirmed 6/6 via this shape on at least one of the two channels every
+    time — see docs/rest/session.md. Returns None for anything else,
+    including a `wait_for()` timeout's own `None`, so a caller can treat
+    "malformed" and "no delivery yet" identically — both mean "not
     confirmed by this channel"."""
     if isinstance(value, dict) and isinstance(value.get("recording"), bool):
         return value["recording"]
     return None
+
+
+def _format_matches(
+    value: Any, *, codec: str, frame_rate: str, resolution: tuple[int, int]
+) -> bool:
+    """Whether `/system/format`'s event `value` or `GET` readback body
+    reports exactly the requested `codec`/`frameRate`/`recordResolution` —
+    the shape `Format`/`_parse_format` already parses. Returns False for
+    anything malformed, mirroring `_recording_flag`'s "not confirmed by
+    this channel" treatment of a bad or missing value."""
+    if not isinstance(value, dict):
+        return False
+    if value.get("codec") != codec or value.get("frameRate") != frame_rate:
+        return False
+    return _resolution(value.get("recordResolution")) == resolution
 
 
 def _resolution(body: dict | None) -> tuple[int, int]:
@@ -524,3 +544,121 @@ class RestCameraSession:
                 f"nor a GET readback confirmed recording={recording} within "
                 f"{self.verify_timeout_s}s"
             )
+
+    # ── Writes (Phase 5) ─────────────────────────────────────────────────
+
+    async def set_camera_format(self, codec: str, variant: str, resolution: str, fps: str) -> None:
+        """Set codec family, quality variant, resolution, and frame rate
+        together via one `PUT /system/format` — the REST analogue of the BLE
+        `CameraSession.set_camera_format` orchestration, but collapsed to a
+        single request instead of three separate packets, since REST's
+        `/system/format` carries codec, resolution, and frame rate together.
+
+        Takes the same profile vocabulary a BLE script already uses
+        (`"BRAW"`/`"5:1"`, `"4K DCI"`, `"23.98"`) so a script's vocabulary is
+        identical on either transport — `codec`/`variant` are translated to
+        REST's own spelling via `rest/mapping.py`'s `resolve_rest_codec_name`
+        (preferring the profile's confirmed `rest/<fw>.json` `format_names`
+        entry, falling back to the derivation rule only when unconfirmed);
+        `resolution` and `fps` need no translation at all — REST already
+        uses this repo's own `resolutions` width/height and `fps_modes`
+        names/strings directly (see `mapping.py`'s module docstring).
+
+        `codec`/`variant`/`resolution`/`fps` are validated against the
+        profile's own tables first (`require_codec`/`require_resolution`/
+        `require_fps_mode`, shared with BLE — design principle 1), raising
+        `ValueError` for a name the profile doesn't know at all. None of
+        BLE's `dimension_enums`, `m_rate`, `frame_flags`, `known_unreachable`,
+        or `max_fps_int` are consulted here — those stay BLE-only (do not
+        delete them; `CameraSession` still needs them). Instead, the
+        requested combination is checked against the camera's own **live**
+        `supported_formats()` capability matrix (design principle 7's REST
+        sibling to BLE's static ceiling checks — see `_require_format_supported`),
+        raising `BMDUnsupportedError` when the camera doesn't report
+        offering it, before any write is attempted.
+
+        **The write preserves every field this method doesn't touch.**
+        `GET /system/format` first, then only `codec`/`frameRate`/
+        `recordResolution` are overwritten in that same body before the
+        `PUT` — never a hand-built partial body — because a partial body
+        risks resetting `offSpeedEnabled`/`offSpeedFrameRate`/
+        `sensorResolution` to defaults (see the module-level `GET`-merge-
+        `PUT` pattern this mirrors from `record_start`/`record_stop`'s
+        simpler single-field case). `sensorResolution` in particular is
+        deliberately never set by this method — whether it's writable at
+        all is still an open question, see docs/ble/photo_capture.md §10
+        and docs/rest/transport.md's "Sensor Area" finding.
+
+        Verified via the same dual-check as `record_start`/`record_stop`:
+        a WS `propertyValueChanged` event on `/system/format` primary, a
+        `GET /system/format` readback secondary — `BMDVerificationError` if
+        neither confirms the requested `codec`/`frameRate`/`recordResolution`
+        within `verify_timeout_s`.
+        """
+        self.profile.require_codec(codec, variant)
+        resolution_spec = self.profile.require_resolution(resolution)
+        self.profile.require_fps_mode(fps)
+
+        endpoint = self.profile.rest_endpoint(FORMAT_PROPERTY)
+        if endpoint is None or not endpoint.put_supported:
+            raise BMDUnsupportedError(
+                f"[{self.host}] PUT {FORMAT_PROPERTY} is not confirmed supported in the "
+                f"{self.profile.model_key} {self.profile.firmware} rest/ profile — run "
+                "tools/rest/probe_endpoints.py --probe-writes against this camera first."
+            )
+
+        rest_codec = resolve_rest_codec_name(self.profile.rest.format_names, codec, variant)
+        record_resolution = (resolution_spec.width, resolution_spec.height)
+        await self._require_format_supported(rest_codec, fps, record_resolution)
+
+        current = await self._rest_client.get(FORMAT_PROPERTY)
+        body = dict(current)
+        body["codec"] = rest_codec
+        body["frameRate"] = fps
+        body["recordResolution"] = {
+            "width": resolution_spec.width,
+            "height": resolution_spec.height,
+        }
+
+        self._router.arm(FORMAT_PROPERTY)
+        await self._rest_client.put(FORMAT_PROPERTY, body)
+        event_value = await self._router.wait_for(FORMAT_PROPERTY, timeout=self.verify_timeout_s)
+        confirmed = _format_matches(
+            event_value, codec=rest_codec, frame_rate=fps, resolution=record_resolution
+        )
+        if not confirmed:
+            readback = await self._rest_client.get(FORMAT_PROPERTY)
+            confirmed = _format_matches(
+                readback, codec=rest_codec, frame_rate=fps, resolution=record_resolution
+            )
+        if not confirmed:
+            raise BMDVerificationError(
+                f"set_camera_format({codec} {variant} {resolution} {fps}): neither a WS "
+                f"'{FORMAT_PROPERTY}' propertyValueChanged event nor a GET readback "
+                f"confirmed codec={rest_codec!r} frameRate={fps!r} "
+                f"recordResolution={record_resolution} within {self.verify_timeout_s}s"
+            )
+
+    async def _require_format_supported(
+        self, rest_codec: str, fps: str, record_resolution: tuple[int, int]
+    ) -> None:
+        """Design principle 7's REST sibling to BLE's static
+        `known_unreachable`/`max_fps_int` checks: instead of a hand-
+        maintained profile ceiling, ask the camera's own live
+        `GET /system/supportedFormats` capability matrix (`supported_formats()`)
+        whether it offers `rest_codec` at `record_resolution` and `fps`
+        together, raising `BMDUnsupportedError` immediately when it
+        doesn't — before any write is attempted."""
+        formats = await self.supported_formats()
+        for entry in formats:
+            if (
+                entry.record_resolution == record_resolution
+                and rest_codec in entry.codecs
+                and fps in entry.frame_rates
+            ):
+                return
+        raise BMDUnsupportedError(
+            f"[{self.host}] {self.profile.model_key} {self.profile.firmware} does not "
+            f"report offering codec={rest_codec!r} at recordResolution={record_resolution} "
+            f"frameRate={fps!r} in GET /system/supportedFormats"
+        )

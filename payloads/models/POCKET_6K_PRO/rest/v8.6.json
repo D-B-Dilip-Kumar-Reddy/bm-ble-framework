@@ -425,7 +425,25 @@
     "/video/whiteBalance",
     "/video/whiteBalanceTint"
   ],
-  "format_names": {},
+  "format_names": {
+    "_comment": "GET /system/supportedFormats codecs list, POCKET_6K_PRO v8.6, 2026-08-03 (docs/rest/transport.md 'POCKET_6K_PRO v8.6, over USB...' section): 'structurally identical to the G2's — the same twelve (codec, resolution) combinations', independently confirmed on this camera's own connection, not copied from the G2 run. Same REST spellings as G2 (BRaw Q0/Q1/Q3/Q5/3_1/5_1/8_1/12_1, ProRes Proxy/LT/Original/HQ) despite this camera's own BLE profile spelling the Proxy variant 'PXY' rather than 'Proxy' — REST's spelling doesn't follow BLE's per-camera operator-label convention.",
+    "BRAW": {
+      "Q0": "BRaw:Q0",
+      "Q1": "BRaw:Q1",
+      "Q3": "BRaw:Q3",
+      "Q5": "BRaw:Q5",
+      "3:1": "BRaw:3_1",
+      "5:1": "BRaw:5_1",
+      "8:1": "BRaw:8_1",
+      "12:1": "BRaw:12_1"
+    },
+    "ProRes": {
+      "HQ": "ProRes:HQ",
+      "422": "ProRes:Original",
+      "LT": "ProRes:LT",
+      "PXY": "ProRes:Proxy"
+    }
+  },
   "provenance": {
     "status": "CANDIDATE",
     "method": "tools/rest/probe_endpoints.py sweep over usb, including idempotent write probes",

@@ -32,7 +32,7 @@ the documentation map below.
 ## Target operations
 
 - Record start / stop *(implemented over BLE — echo-verified on real hardware; implemented over REST — dual-check verified on real hardware, `POCKET_6K_G2`/`POCKET_6K_PRO v8.6`, see [`docs/rest/session.md`](docs/rest/session.md))*
-- Settings changes: codec, quality, resolution, FPS *(implemented — CANDIDATE values from an external reverse-engineering doc, pending re-verification on real hardware; see [`docs/ble/settings.md`](docs/ble/settings.md))*
+- Settings changes: codec, quality, resolution, FPS *(implemented over BLE — CANDIDATE values from an external reverse-engineering doc, pending re-verification on real hardware, see [`docs/ble/settings.md`](docs/ble/settings.md); implemented over REST via `RestCameraSession.set_camera_format` — one `PUT /system/format`, live-capability-gated, unit-tested, real-hardware confirmation still open, see [`docs/rest/session.md`](docs/rest/session.md))*
 - Photo capture *(planned)*
 - Video playback / gallery browsing *(planned)*
 - Video and photo metadata capture — *(planned over BLE; implemented read-only over REST via `RestCameraSession.clips()`, see [`docs/rest/session.md`](docs/rest/session.md))*
@@ -60,9 +60,8 @@ install if you don't want the editable package.
 
 User scripts import from `bmd_camera` — the public API is `CameraSession` (BLE, async
 context manager) and `RestCameraSession` (REST/WebSocket — read verbs plus
-`record_start`/`record_stop`; format writes are still planned, see
-docs/rest/session.md), plus `CameraProfile`/`get_profile`/`KNOWN_PROFILES` and
-`BMDVerificationError`. Example scripts:
+`record_start`/`record_stop` and `set_camera_format`, see docs/rest/session.md), plus
+`CameraProfile`/`get_profile`/`KNOWN_PROFILES` and `BMDVerificationError`. Example scripts:
 
 ```bash
 python examples/scan_camera.py            # discover cameras by BLE advertisement name
@@ -71,11 +70,13 @@ python examples/monitor_incoming.py       # stream raw INCOMING_CONTROL notifica
 python examples/record_start_stop.py      # echo-verified record start/stop via CameraSession
 python examples/rest_read_state.py        # read current format/storage/clips/timecode over REST
 python examples/rest_record_start_stop.py # dual-check-verified record start/stop via RestCameraSession
+python examples/rest_change_format.py     # BRAW <-> ProRes round trip via RestCameraSession.set_camera_format
 ```
 
 Edit `MODEL_KEY` / `FIRMWARE` at the top of each script to target your
 camera. `record_start_stop.py` and `rest_record_start_stop.py` **start a real
-recording** on the connected camera — use deliberately.
+recording** on the connected camera; `change_codec.py` and `rest_change_format.py`
+**change real camera settings** — use deliberately.
 
 ---
 

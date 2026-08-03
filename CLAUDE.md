@@ -164,10 +164,11 @@ src/bmd_camera/
     exceptions.py            # BMDRestError + re-exports of the shared exception types
     session.py                # RestCameraSession — user-facing API. Read verbs
                               # (get_format, supported_formats, storage_state, clips,
-                              # timecode, notification-driven is_recording) plus
-                              # record_start/record_stop (Phase 4, dual-check verified,
-                              # storage-gated). Format writes not yet built (Phase 5).
-                              # See docs/rest/session.md
+                              # timecode, notification-driven is_recording); writes —
+                              # record_start/record_stop (Phase 4, real-hardware-
+                              # confirmed) and set_camera_format (Phase 5, dual-check
+                              # verified, live-capability-gated via supported_formats(),
+                              # real-hardware confirmation still open). See docs/rest/session.md
     mapping.py                 # Codec name derivation between the BLE profile's vocabulary
                               # and REST's own spelling — confirmed strings always win
                               # (design principle 1); this is a fallback seed only
@@ -223,6 +224,9 @@ examples/
                             # clips, timecode, notification-driven is_recording
   rest_record_start_stop.py # Dual-check-verified record start/stop via RestCameraSession
                             # (Phase 4); see docs/rest/session.md
+  rest_change_format.py     # BRAW <-> ProRes round trip via RestCameraSession.set_camera_format
+                            # (Phase 5, single PUT /system/format vs BLE's up-to-three
+                            # packets); see docs/rest/session.md
   capture_photo.py          # (planned)
   playback.py               # (planned)
 
@@ -267,7 +271,7 @@ added, a new `docs/<feature>.md` must be created alongside the code change.
 | `docs/ble/reverse_engineering.md` | Tool-by-tool procedure for bringing up a new `(MODEL_KEY, FIRMWARE)` pair, and for adding a single new command |
 | `docs/ble/camera_registry.md` | Full evidentiary notes behind the Camera Registry table above |
 | `docs/rest/transport.md` | REST/WebSocket transport (8.6) — addressing the camera over USB, scheme discovery, `tools/rest/probe_endpoints.py`, sweep results for both cameras, the `RestClient`/`RestEventRouter` library surface |
-| `docs/rest/session.md` | `RestCameraSession` — the REST state/control surface: read verbs (Phase 3 — format, storage, clips, timecode, notification-driven `is_recording`) plus `record_start`/`record_stop` (Phase 4 — dual-check verification, storage precondition); codec name mapping and REST timecode decode |
+| `docs/rest/session.md` | `RestCameraSession` — the REST state/control surface: read verbs (Phase 3 — format, storage, clips, timecode, notification-driven `is_recording`); `record_start`/`record_stop` (Phase 4 — dual-check verification, storage precondition, real-hardware-confirmed); `set_camera_format` (Phase 5 — one `PUT /system/format`, live-capability-gated via `supported_formats()`); codec name mapping and REST timecode decode |
 
 ---
 

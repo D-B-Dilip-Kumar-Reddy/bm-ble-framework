@@ -1,12 +1,12 @@
-# REST Session — State and Control Surface (Phases 3-4)
+# REST Session — State and Control Surface (Phases 3-5)
 
-**Status:** read verbs (Phase 3) are implemented and confirmed against real
-`POCKET_6K_PRO v8.6` hardware. `record_start`/`record_stop` (Phase 4) are implemented
-and unit-tested but **real-hardware confirmation of the `PUT` is still pending** —
-`tools/rest/probe_endpoints.py` deliberately never exercises `/transports/0/record`
-(`NEVER_WRITE`: it would start or stop a real recording), so this session's own
-dual-check verification is the first and only confirmation channel this endpoint will
-ever get. Format writes (Phase 5) are not built yet.
+**Status:** read verbs (Phase 3) and `record_start`/`record_stop` (Phase 4) are
+implemented and **real-hardware-confirmed** — `POCKET_6K_G2` and `POCKET_6K_PRO v8.6`,
+2026-08-03, `record_start`/`record_stop` each 6/6 via the dual-check
+(`examples/rest_record_start_stop.py`), the same run that also caught and fixed
+`wait_while_recording`'s return-value-inversion defect (see below). `set_camera_format`
+(Phase 5) is implemented and unit-tested but **real-hardware confirmation is still
+open** — no run of `examples/rest_change_format.py` has been reported yet.
 
 ## Overview
 
@@ -27,11 +27,14 @@ async with RestCameraSession("172.27.97.141", "POCKET_6K_PRO", "v8.6") as sessio
     await session.record_start()
     await session.wait_while_recording(timeout=5)
     await session.record_stop()
+
+    await session.set_camera_format("BRAW", "5:1", "4K DCI", "23.98")
 ```
 
 `examples/rest_read_state.py` exercises the read verbs; `examples/rest_record_start_stop.py`
 exercises `record_start`/`record_stop` across several cycles, mirroring the BLE
-`examples/record_start_stop.py`.
+`examples/record_start_stop.py`; `examples/rest_change_format.py` exercises
+`set_camera_format`, mirroring `examples/change_codec.py`.
 
 Every read verb (`get_format`, `supported_formats`, `storage_state`, `clips`, `timecode`)
 is a plain `GET`, fetched fresh on every call — there is no background cache to go stale.
@@ -178,7 +181,7 @@ cross-check today should read the transport mode/state directly rather than rely
 
 ---
 
-## Write verbs (Phase 4)
+## Write verbs (Phases 4-5)
 
 ### `record_start()` / `record_stop()`
 
@@ -230,11 +233,65 @@ going to be the only channel this endpoint ever got). This run is also what surf
 came from the same run: the writes themselves were solid 6/6, only the surrounding
 hold-and-check helper had the bug.
 
+### `set_camera_format(codec, variant, resolution, fps)`
+
+`PUT /system/format`, carrying `codec`/`frameRate`/`recordResolution` together — the REST
+analogue of BLE `CameraSession.set_camera_format`, but one request where BLE needs up to
+three packets (`set_video_format`/`set_codec_quality`/`set_recording_format`) and a
+two-step proxy workaround for the one combination its `dimension_enum` table can't reach
+directly. `RestCameraSession.set_camera_format` needs neither: `/system/format` carries
+codec, resolution, and frame rate together, so there's nothing to sequence.
+
+Takes the same profile vocabulary a BLE script already uses (`"BRAW"`/`"5:1"`, `"4K DCI"`,
+`"23.98"`), translated to REST's own spelling via "Codec name mapping" below —
+`resolution`/`fps` need no translation at all (see that section). Local validation first
+(`require_codec`/`require_resolution`/`require_fps_mode`, shared with BLE — design
+principle 1), raising `ValueError` for a name the profile doesn't know. **None of BLE's
+`dimension_enums`/`m_rate`/`frame_flags`/`known_unreachable`/`max_fps_int` are consulted
+here** — those stay BLE-only (`CameraSession` still needs them). Instead, the requested
+`(codec, resolution, fps)` combination is checked against the camera's own **live**
+`supported_formats()` capability matrix before any write — design principle 7's REST
+sibling to BLE's static ceiling checks — raising `BMDUnsupportedError` immediately when the
+camera doesn't report offering it.
+
+**Merge-before-write, not a partial body.** `GET /system/format` first, then only
+`codec`/`frameRate`/`recordResolution` are overwritten in that same body before the `PUT` —
+never a hand-built partial one — because a partial body risks resetting
+`offSpeedEnabled`/`offSpeedFrameRate`/`sensorResolution` to defaults. `sensorResolution` in
+particular is **deliberately never set** by this method: whether `PUT /system/format` can
+change it at all is still open (see docs/rest/transport.md's "Sensor Area" finding and
+docs/ble/photo_capture.md §10, which closed it as unwritable over BLE by any means tried).
+Settling that is a separate, not-yet-run investigation — nothing here assumes an answer
+either way.
+
+Verified via the same dual-check pattern as `record_start`/`record_stop`: a WS
+`propertyValueChanged` event on `/system/format` primary, a `GET /system/format` readback
+secondary, `BMDVerificationError` if neither confirms the requested
+`codec`/`frameRate`/`recordResolution` within `verify_timeout_s`.
+
+**Capability check is put_supported-gated, unlike `record_start`/`record_stop`.**
+`/system/format`'s `PUT` *was* write-probed (`tools/rest/probe_endpoints.py --probe-writes`
+— it's not on the `NEVER_WRITE` list, since a same-value `PUT` here is genuinely
+idempotent), so both `payloads/models/POCKET_6K_G2/rest/v8.6.json` and
+`.../POCKET_6K_PRO/rest/v8.6.json` carry a real `put_supported: true` for this path
+(`docs/rest/transport.md`'s "**`PUT /system/format` returns `204`**" finding). This method
+raises `BMDUnsupportedError` immediately unless that flag is confirmed — the more direct
+design principle 7 check `record_start`/`record_stop` couldn't use, since their endpoint
+was structurally never write-probed.
+
+**Real-hardware confirmation is still open.** Unlike `record_start`/`record_stop`, no run
+of `examples/rest_change_format.py` has been reported yet. The evidentiary interest is
+high: its default combinations include ProRes/4K DCI, exactly the pair BLE's `settings.md`
+records as `known_unreachable` after nine falsification attempts — `docs/rest/transport.md`
+already shows the camera holding that combination and `GET /system/supportedFormats`
+confirming it, so a successful `set_camera_format` write there would be the clearest
+evidence yet that REST reaches what BLE's write path structurally cannot.
+
 ---
 
 ## Codec name mapping (`rest/mapping.py`)
 
-`RestCameraSession` (and, later, its write orchestration) takes profile *names* — the
+`RestCameraSession`'s write path (`set_camera_format`) takes profile *names* — the
 same vocabulary a BLE script already uses (`"BRAW"`/`"5:1"`, `"ProRes"`/`"422"`) — so a
 script's vocabulary stays identical on either transport. `mapping.py` supplies the
 translation:
@@ -292,16 +349,25 @@ concurrent task" shape `TestWaitWhileRecording`'s tests already use for the read
 GET-readback secondary path is exercised by never delivering an event and shortening
 `verify_timeout_s` to keep the test fast.
 
+`set_camera_format` reuses the same fake-`RestClient`/deliver-an-event pattern, plus a
+`make_format_profile()` helper carrying both a `codecs`/`resolutions`/`fps_modes` BLE table
+(mirroring `tests/unit/test_session.py`'s `make_settings_profile`) and a `rest/` profile
+confirming `/system/format`'s `put_supported` and `/system/supportedFormats`'s `supported`.
+Coverage includes: the local-validation `ValueError`s; both capability-check
+`BMDUnsupportedError`s (endpoint not confirmed, and camera-reported combination mismatch);
+the merge-before-write body (asserting every untouched field from the canned `GET` survives
+into the `PUT`); both dual-check paths; and that a profile's confirmed `format_names` entry
+is what makes `"422"` resolve to `"ProRes:Original"` rather than the derivation rule's
+(wrong) `"ProRes:422"`.
+
 ---
 
 ## What's deliberately out of scope
 
-- **No format writes yet.** `set_camera_format`'s REST equivalent (`PUT /system/format`)
-  is Phase 5 — gated on real-hardware confirmation that the endpoint's `PUT` applies a
-  *changing* value, not just accepts a same-value probe (docs/rest/transport.md). It will
-  reuse `RestEventRouter.arm()`/`wait_for()` exactly as `record_start`/`record_stop`
-  already do, and exactly as `tools/rest/smoke_test_client.py`'s `--verify-write` mode
-  already proved works end to end on real hardware.
+- **No `sensorResolution` writes.** `set_camera_format` reads it via the pre-write `GET`
+  and always writes it back unchanged — whether `PUT /system/format` can actually *change*
+  it is a real open question (docs/rest/transport.md's "Sensor Area" finding), not
+  something this method attempts to answer or exposes a parameter for.
 - **No storage precondition on `record_stop()`.** Only `record_start()` checks
   `storage_state()` — matching CLAUDE.md design principle 10's wording ("before recording
   or photo capture"), which names starting an operation, not ending one.
