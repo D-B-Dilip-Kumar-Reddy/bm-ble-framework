@@ -58,7 +58,7 @@ Codec IDs, quality variant IDs, FPS encodings, resolution encodings, category/pa
 
 Use a dual-check strategy — per transport:
 - **BLE**: primary — await an echo on `INCOMING_CONTROL` (fast; subscribe and buffer *before* sending the command, not after); secondary — read `CAMERA_STATUS` as a cross-check
-- **REST**: primary — a WebSocket `propertyValueChanged` event; secondary — a `GET` readback. `204` on a `PUT` means accepted, not applied
+- **REST**: primary — a WebSocket `propertyValueChanged` event; secondary — a `GET` readback. `204` on a `PUT` means accepted, not applied. The property must already be subscribed (via `RestEventRouter.subscribe()`) before a write method can `arm()`/`wait_for()` it — unlike BLE's echo channel, which is always live once `INCOMING_CONTROL` notifications are subscribed globally at connect, each REST property needs its own explicit subscription, and a write method that arms one nothing ever subscribed will silently starve on the primary channel and always fall through to the secondary check. `RestCameraSession.__aenter__` subscribes every property its write methods arm (`/transports/0/record`, `/system/format`) once, at connect time, for exactly this reason — see `docs/rest/session.md`'s "Connection lifecycle"
 
 Both checks carry configurable timeouts. If neither confirms the state change, raise `BMDVerificationError`. On `POCKET_6K_G2 v7.9`, `CAMERA_STATUS` notifications are unreliable — always attempt the echo first and treat the status read as a secondary check only.
 
