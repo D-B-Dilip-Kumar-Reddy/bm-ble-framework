@@ -172,8 +172,11 @@ tools/
   rest/                     # 8.6 REST/WebSocket transport tooling — no BLE, no bmd_camera.ble
                             # imports. probe_endpoints.py (endpoint sweep — read-only by default,
                             # opt-in idempotent write probes; standalone, no bmd_camera imports
-                            # at all) and watch_events.py (streams WS events via RestEventRouter,
-                            # the first consumer of the Phase 2 library outside its own tests).
+                            # at all), watch_events.py (streams WS events via RestEventRouter,
+                            # the first consumer of the Phase 2 library outside its own tests),
+                            # and smoke_test_client.py (exercises RestClient's status-code
+                            # contract and, opt-in, a full arm()/PUT/wait_for() write-verify
+                            # round trip — the two pieces watch_events.py doesn't touch).
                             # See docs/rest/transport.md
   captures/                 # Runtime output of sniffers/, control/, and rest/ scripts (gitignored)
 
