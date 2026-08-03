@@ -67,7 +67,7 @@ Both checks carry configurable timeouts. If neither confirms the state change, r
 Photo capture is a harder case still unresolved over BLE: the trigger command is confirmed on real hardware on both cameras, but no BLE channel — neither echo nor `CAMERA_STATUS` — has ever been observed to move in response to it. This is why `CameraSession.capture_photo()` isn't built yet. `POCKET_6K_G2 v8.6`'s USB/HTTP interface is the leading candidate for the out-of-band confirmation channel BLE never had — see `docs/ble/photo_capture.md` §7/§9 for the full evidentiary record and open decision.
 
 ### 4. Observable state model *(planned)*
-A `CameraState` object reflects the last-known camera state. It is updated **only** from incoming BLE notifications — never inferred from "I sent command X therefore state is now Y". On connect, read the current state before any automation begins. *(The full `state.py` / `CameraState` / `StorageState` object is not yet implemented. A small, notification-driven slice of this already exists directly on `CameraSession` — `is_recording`/`last_stop_reason`, updated only from decoded recording-category notifications, used to detect a camera-initiated stop (e.g. on a slow SD card) without waiting on a command's own echo; `last_known_codec_variant`, updated only from decoded codec_quality-category notifications; and `last_known_recording_format`, updated only from decoded recording_format-category notifications (including `set_video_format`'s own mode-notify confirmations, which share that same category/parameter). All three no-op guards — `set_codec_quality`, `set_video_format`, and `set_recording_format` — use these fields to recognize an already-satisfied write and skip it instead of waiting on an echo the camera won't send for a no-op (real-hardware-confirmed for all three families, 2026-07-21) — see `docs/ble/session_and_verification.md`, `docs/ble/recording.md`, and `docs/ble/settings.md`.)*
+A `CameraState` object reflects the last-known camera state. It is updated **only** from incoming BLE notifications — never inferred from "I sent command X therefore state is now Y". On connect, read the current state before any automation begins. *(The full `state.py` / `CameraState` / `StorageState` object is not yet implemented. A small, notification-driven slice of this already exists directly on `CameraSession` — `is_recording`/`last_stop_reason`, updated only from decoded recording-category notifications, used to detect a camera-initiated stop (e.g. on a slow SD card) without waiting on a command's own echo; `last_known_codec_variant`, updated only from decoded codec_quality-category notifications; and `last_known_recording_format`, updated only from decoded recording_format-category notifications (including `set_video_format`'s own mode-notify confirmations, which share that same category/parameter). All three no-op guards — `set_codec_quality`, `set_video_format`, and `set_recording_format` — use these fields to recognize an already-satisfied write and skip it instead of waiting on an echo the camera won't send for a no-op (real-hardware-confirmed for all three families, 2026-07-21) — see `docs/ble/session_and_verification.md`, `docs/ble/recording.md`, and `docs/ble/settings.md`. `RestCameraSession` holds the same discipline on the REST side: its `is_recording` updates only from `/transports/0/record` `propertyValueChanged` events, never from a request the session itself made — see `docs/rest/session.md`.)*
 
 ### 5. Strict transport / protocol separation
 - `camera_controller.py` — BLE transport only: connect, disconnect, raw byte read/write, notification subscription. No BMD protocol knowledge.
@@ -111,8 +111,8 @@ future subsystems. Everything else is implemented and on disk today.
 
 ```
 src/bmd_camera/
-  __init__.py               # Public API surface — exports CameraSession, CameraProfile,
-                            # get_profile, KNOWN_PROFILES, BMDVerificationError,
+  __init__.py               # Public API surface — exports CameraSession, RestCameraSession,
+                            # CameraProfile, get_profile, KNOWN_PROFILES, BMDVerificationError,
                             # BMDUnsupportedError
   exceptions.py             # BMDConnectionError, BMDTimeoutError, BMDCommandError,
                             # BMDVerificationError, BMDUnsupportedError, BMDStorageError
@@ -157,9 +157,17 @@ src/bmd_camera/
                               # mirrors ble/notification_router.py's arm()/wait_for() contract
                               # exactly, keyed by property path instead of (category, parameter)
     exceptions.py            # BMDRestError + re-exports of the shared exception types
-    session.py                # (planned) RestCameraSession — user-facing API, Phase 3+
+    session.py                # RestCameraSession — user-facing API, read verbs only so far
+                              # (get_format, supported_formats, storage_state, clips,
+                              # timecode, notification-driven is_recording). No writes yet
+                              # (Phase 4/5). See docs/rest/session.md
+    mapping.py                 # Codec name derivation between the BLE profile's vocabulary
+                              # and REST's own spelling — confirmed strings always win
+                              # (design principle 1); this is a fallback seed only
+    timecode.py                # REST TIMECODE decode — BCD HH:MM:SS:FF, big-endian,
+                              # byte-reversed relative to BLE; reuses ble/timecode.py's
+                              # Timecode dataclass and duration_seconds() as-is
     media.py                  # (planned) Photo-capture confirmation, playback controls
-    mapping.py                 # (planned) Codec/resolution/fps name derivation rules
 
 tools/
   common/                   # Shared BLE capture/decode engine (tools/common/capture.py)
@@ -247,7 +255,8 @@ added, a new `docs/<feature>.md` must be created alongside the code change.
 | `docs/ble/photo_capture.md` | Photo-capture reverse engineering — trigger confirmed on both cameras, no BLE-observable confirmation signal found; Sensor Area BLE investigation (closed, unwritable) |
 | `docs/ble/reverse_engineering.md` | Tool-by-tool procedure for bringing up a new `(MODEL_KEY, FIRMWARE)` pair, and for adding a single new command |
 | `docs/ble/camera_registry.md` | Full evidentiary notes behind the Camera Registry table above |
-| `docs/rest/transport.md` | REST/WebSocket transport (8.6) — addressing the camera over USB, scheme discovery, `tools/rest/probe_endpoints.py`, sweep results for both cameras |
+| `docs/rest/transport.md` | REST/WebSocket transport (8.6) — addressing the camera over USB, scheme discovery, `tools/rest/probe_endpoints.py`, sweep results for both cameras, the `RestClient`/`RestEventRouter` library surface |
+| `docs/rest/session.md` | `RestCameraSession` — the read-only REST state surface (Phase 3): format, storage, clips, timecode, notification-driven `is_recording`; codec name mapping and REST timecode decode |
 
 ---
 

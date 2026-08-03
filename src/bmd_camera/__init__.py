@@ -9,6 +9,7 @@ from .camera_profile import (
     get_profile,
 )
 from .exceptions import BMDUnsupportedError, BMDVerificationError
+from .rest.session import RestCameraSession
 
 __all__ = [
     "BMDUnsupportedError",
@@ -16,5 +17,6 @@ __all__ = [
     "CameraProfile",
     "CameraSession",
     "KNOWN_PROFILES",
+    "RestCameraSession",
     "get_profile",
 ]

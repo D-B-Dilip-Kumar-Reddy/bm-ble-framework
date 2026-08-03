@@ -58,15 +58,17 @@ install if you don't want the editable package.
 
 ## Quick start
 
-User scripts import from `bmd_camera` — the public API is `CameraSession`
-(async context manager) plus `CameraProfile`/`get_profile`/`KNOWN_PROFILES`
-and `BMDVerificationError`. Example scripts:
+User scripts import from `bmd_camera` — the public API is `CameraSession` (BLE, async
+context manager) and `RestCameraSession` (REST/WebSocket, read-only so far — see
+docs/rest/transport.md), plus `CameraProfile`/`get_profile`/`KNOWN_PROFILES` and
+`BMDVerificationError`. Example scripts:
 
 ```bash
 python examples/scan_camera.py          # discover cameras by BLE advertisement name
 python examples/connect_to_camera.py    # connect-only smoke test (connect, hold, disconnect)
 python examples/monitor_incoming.py     # stream raw INCOMING_CONTROL notifications
 python examples/record_start_stop.py    # echo-verified record start/stop via CameraSession
+python examples/rest_read_state.py      # read current format/storage/clips/timecode over REST
 ```
 
 Edit `MODEL_KEY` / `FIRMWARE` at the top of each script to target your

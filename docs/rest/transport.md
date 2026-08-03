@@ -679,10 +679,10 @@ timeline. All of it unverified until swept.
 ## Library surface (Phase 2)
 
 Everything above was the evidence phase (Phase 0). Phase 2 turned it into the
-transport-only client layer `RestCameraSession` (Phase 3+) will sit on top of —
-`src/bmd_camera/rest/`: `constants.py`, `client.py`, `events.py`, `exceptions.py`. No
-camera semantics live here, mirroring the boundary `camera_controller.py` holds for BLE
-(design principle 5).
+transport-only client layer `RestCameraSession` (Phase 3, see docs/rest/session.md) sits
+on top of — `src/bmd_camera/rest/`: `constants.py`, `client.py`, `events.py`,
+`exceptions.py`. No camera semantics live here, mirroring the boundary
+`camera_controller.py` holds for BLE (design principle 5).
 
 ### `RestClient` (`src/bmd_camera/rest/client.py`)
 
@@ -825,7 +825,8 @@ leaves untested:
   overridden with `--property`.
 
 This is the first real exercise of `arm()`/`wait_for()` against live hardware — the exact
-verification primitive `RestCameraSession` (Phase 3+) will build on.
+verification primitive future write orchestration (Phase 4/5) will build on. `RestCameraSession`
+(Phase 3, docs/rest/session.md) is read-only so far and does not use it yet.
 
 **Confirmed against real hardware, 2026-08-04** — both modes run against `POCKET_6K_PRO
 v8.6` over USB:
