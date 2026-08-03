@@ -8,7 +8,7 @@ sys.path pattern for importing a standalone (non-package) tools/ script.
 CameraProfile.for_model() reads local profile JSON only — no network/BLE —
 so real G2/PRO profiles are used directly, the same way
 test_sweep_dimension_enum.py exercises them. The PRO profile in particular
-already has a real known_unreachable entry (ProRes/4K DCI, docs/settings.md
+already has a real known_unreachable entry (ProRes/4K DCI, docs/ble/settings.md
 §16), which is exactly what the exclusion tests need — no fixture profile
 has to fake one up.
 """
@@ -25,8 +25,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "tools" / "control"
 
 import sweep_camera_format as scf  # noqa: E402
 
-from bmd_ble.camera_profile import CameraProfile  # noqa: E402
-from bmd_ble.exceptions import BMDUnsupportedError, BMDVerificationError  # noqa: E402
+from bmd_camera.camera_profile import CameraProfile  # noqa: E402
+from bmd_camera.exceptions import BMDUnsupportedError, BMDVerificationError  # noqa: E402
 
 
 def _g2_profile() -> CameraProfile:
@@ -114,7 +114,7 @@ class TestEnumerateCombinations:
         assert all(codec == "BRAW" for codec, _v, _r, _f in combos)
 
     def test_excludes_fps_above_max_fps_int_by_default(self):
-        # PRO's real "6K" entry has max_fps_int=50 (docs/settings.md) —
+        # PRO's real "6K" entry has max_fps_int=50 (docs/ble/settings.md) —
         # 59.94/60 (fps_int=60) must not appear by default.
         profile = _pro_profile()
 

@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Python package (`bmd_ble`) for automated Blackmagic Design camera control over Bluetooth Low Energy.
+Python package (`bmd_camera`) for automated Blackmagic Design camera control over Bluetooth Low Energy.
 
 **Target operations:**
 - Record start / stop
@@ -20,10 +20,14 @@ Python package (`bmd_ble`) for automated Blackmagic Design camera control over B
 
 ## Camera Registry
 
+Full evidentiary notes for every entry below — the reasoning behind each status,
+promotion history, and open gaps — live in `docs/ble/camera_registry.md`. This table
+is the at-a-glance summary.
+
 | Model Key | Model Name | Firmware | Status | Notes |
 |---|---|---|---|---|
-| `POCKET_6K_G2` | Pocket Cinema Camera 6K G2 | v8.6 | In progress | **Primary reference.** The operator's physical unit was upgraded from v7.9 to v8.6 on 2026-07-27, so this is the only G2 firmware that can be tested against real hardware. **Phase 1 complete** (2026-07-28): GAP and device-info metadata are both `readable: true` here, unlike v7.9. **Phase 2 complete** (2026-07-29): `commands.recording` is `VERIFIED` — 3/3 echo-verified `CameraSession` cycles. Same coordinates as v7.9 but `reserved` is `0`, not `1` (both accepted; see `docs/recording.md`), a live example of why design principle 6 forbids inheriting. **Phase 3 complete for all three settings families** (2026-07-30): step 9's passive sweep populated `codecs`, 7 of 8 `resolutions`, and the report-side coordinates of `codec_quality`/`recording_format` (all CANDIDATE at that point). `video_format` + a seed `fps_modes` were then added as explicit CANDIDATE hypotheses to unblock step 10. A follow-up dedicated fps sweep filled `fps_modes` to 8/8, with `60` initially recorded as a candidate ceiling after two silent sweeps — **retracted** after three standalone retries reported it cleanly twice, byte-identical (`docs/settings.md` §18.7/§18.8, a live example of why a single silent window isn't enough to write a ceiling). Step 10's full `0x00`–`0x1F` `dimension_enum` sweep then confirmed all 8 enums, matching both `POCKET_6K_G2 v7.9`'s and `POCKET_6K_PRO v8.6`'s numbers exactly, and supplied HD's width/height (`docs/settings.md` §18.9). Steps 12 and 13 (2026-07-30) then promoted `codec_quality`, `video_format`, and `recording_format` all to **VERIFIED**: nine manual confirming writes plus a 480-combination `sweep_camera_format.py` sweep via `CameraSession` (432 confirmed), exceeding the single-round-trip bar that promoted v7.9's equivalents (`docs/settings.md` §18.10). That sweep also surfaced two systematic gaps shaped like precedents already established on the PRO — a ProRes/4K DCI retarget gap and a BRAW/6K/high-fps candidate ceiling. The 6K ceiling was **promoted the same day**: the operator confirmed on the camera's own UI that 6K doesn't offer 59.94/60fps, meeting design principle 7's evidence bar — `resolutions."6K".max_fps_int` is now `50` (`docs/settings.md` §18.11). The ProRes/4K DCI gap was **promoted 2026-07-31** (`docs/settings.md` §18.12): the operator ran the same three falsification hypotheses (data-type byte, `Operation.OFFSET`, exact fps/variant) that closed the PRO's identical gap, three times each from three different starting states and Sensor Area settings — all 9 attempts stayed silent — `resolutions."4K DCI".known_unreachable.ProRes` is now written. It also surfaced a discrepancy in `recording_format`'s `flags` field at UHD (two readings each way) — **resolved 2026-07-31** (`docs/settings.md` §18.13): a dedicated passive Sensor Area capture showed the bit tracks the camera's independent Sensor Area setting under ProRes, not video resolution, fully explaining the earlier split. `_meta.status` stays UNVERIFIED — `capabilities`/`storage` are still entirely unpopulated on this firmware. All Python defaults (`DEFAULT_FIRMWARE` in `tools/`, `FIRMWARE` in `examples/`) point here |
-| `POCKET_6K_G2` | Pocket Cinema Camera 6K G2 | v7.9 | Frozen | Former primary reference; most reverse-engineered profile in the repo and still the reference for how a fully-populated profile looks. **No longer testable** — the physical unit was upgraded to v8.6, so nothing here can be re-confirmed or extended. Kept as-is for its evidentiary record and because the settings-table unit tests still load it |
+| `POCKET_6K_G2` | Pocket Cinema Camera 6K G2 | v8.6 | In progress | **Primary reference.** All Python defaults point here |
+| `POCKET_6K_G2` | Pocket Cinema Camera 6K G2 | v7.9 | Frozen | Former primary reference; hardware upgraded away, no longer testable |
 | `POCKET_6K_PRO` | Pocket Cinema Camera 6K Pro | v8.6 | In progress | Second target |
 | `URSA_BROADCAST_G2` | URSA Broadcast G2 | v7.5 | Planned | Different category/param combos expected |
 | `URSA_MINI_PRO_12K` | URSA Mini Pro 12K | v8.1 | Planned | Different category/param combos expected |
@@ -31,13 +35,8 @@ Python package (`bmd_ble`) for automated Blackmagic Design camera control over B
 
 Start all new features with `POCKET_6K_G2 v8.6`. Add `POCKET_6K_PRO v8.6` second.
 
-v8.6 also brings the reason for the upgrade: the camera exposes its recorded video
-and photos to a PC over USB/HTTP. That gives photo capture and playback work an
-out-of-band verification channel that BLE alone never provided — see
-`docs/photo_capture.md` §7/§9, where the absence of any BLE-observable photo
-confirmation is what currently blocks `CameraSession.capture_photo()`.
-
-The `ble_name` field in every profile JSON is the real BLE advertisement name broadcast by the camera — not a placeholder.
+The `ble_name` field in every BLE profile JSON is the real BLE advertisement name
+broadcast by the camera — not a placeholder.
 
 ---
 
@@ -49,7 +48,7 @@ yet implemented — the docs in `docs/` record exactly what exists today. Never
 describe a planned subsystem as implemented.
 
 ### 1. No hardcoded protocol values
-Codec IDs, quality variant IDs, FPS encodings, resolution encodings, category/parameter combinations — none of these belong in code. They live in `payloads/models/<MODEL_KEY>_<FIRMWARE>.json`. Code reads from the profile. The only values permitted in `constants.py` are those that are fixed by the Bluetooth spec or the BMD BLE API spec and do not vary between models.
+Codec IDs, quality variant IDs, FPS encodings, resolution encodings, category/parameter combinations — none of these belong in code. They live in `payloads/models/<MODEL_KEY>/ble/<FIRMWARE>.json`. Code reads from the profile. The only values permitted in `constants.py` are those that are fixed by the Bluetooth spec or the BMD BLE API spec and do not vary between models.
 
 ### 2. Profile-driven behaviour
 `CameraProfile` is the single source of truth for all model/firmware-specific constants. Everything the controller and protocol layer need to construct a command comes through the profile.
@@ -57,18 +56,18 @@ Codec IDs, quality variant IDs, FPS encodings, resolution encodings, category/pa
 ### 3. Verification-first writes
 **Every write command must be verified before reporting success.** Silently assuming a command worked is never acceptable.
 
-Use a dual-check strategy:
-- **Primary** — await an echo on `INCOMING_CONTROL` (fast; subscribe and buffer *before* sending the command, not after)
-- **Secondary** — read `CAMERA_STATUS` as a cross-check
+Use a dual-check strategy — per transport:
+- **BLE**: primary — await an echo on `INCOMING_CONTROL` (fast; subscribe and buffer *before* sending the command, not after); secondary — read `CAMERA_STATUS` as a cross-check
+- **REST *(planned)***: primary — a WebSocket `propertyValueChanged` event; secondary — a `GET` readback. `204` on a `PUT` means accepted, not applied
 
 Both checks carry configurable timeouts. If neither confirms the state change, raise `BMDVerificationError`. On `POCKET_6K_G2 v7.9`, `CAMERA_STATUS` notifications are unreliable — always attempt the echo first and treat the status read as a secondary check only.
 
-*Current implementation status:* recording verification is **echo-only** — none of the known `CAMERA_STATUS` bits encode recording state, so there is no meaningful secondary cross-check for it yet. See `docs/session_and_verification.md`.
+*Current implementation status:* recording verification is **echo-only** — none of the known `CAMERA_STATUS` bits encode recording state, so there is no meaningful secondary cross-check for it yet. See `docs/ble/session_and_verification.md`.
 
-Photo capture (both `POCKET_6K_G2 v7.9`'s and `POCKET_6K_PRO v8.6`'s confirmed `commands.photo`, independently verified on each camera, see `docs/photo_capture.md` §7 and §9) is a harder case still unresolved: the trigger command itself is confirmed on real hardware on both cameras (verified by inspecting the SD card's contents, not any BLE signal), but **no channel at all** — neither echo nor `CAMERA_STATUS` — has ever been observed to move in response to it on either camera, on either the passive or active evidence gathered so far. This is why `CameraSession.capture_photo()` is not built yet: this principle requires every write to be confirmed before reporting success, and there is currently nothing on `INCOMING_CONTROL` or `CAMERA_STATUS` to confirm against. Resolving this (a real per-photo signal, a documented best-effort exception, or something else) is an open decision, not yet made — see `docs/photo_capture.md` §7's closing discussion.
+Photo capture is a harder case still unresolved over BLE: the trigger command is confirmed on real hardware on both cameras, but no BLE channel — neither echo nor `CAMERA_STATUS` — has ever been observed to move in response to it. This is why `CameraSession.capture_photo()` isn't built yet. `POCKET_6K_G2 v8.6`'s USB/HTTP interface is the leading candidate for the out-of-band confirmation channel BLE never had — see `docs/ble/photo_capture.md` §7/§9 for the full evidentiary record and open decision.
 
 ### 4. Observable state model *(planned)*
-A `CameraState` object reflects the last-known camera state. It is updated **only** from incoming BLE notifications — never inferred from "I sent command X therefore state is now Y". On connect, read the current state before any automation begins. *(The full `state.py` / `CameraState` / `StorageState` object is not yet implemented. A small, notification-driven slice of this already exists directly on `CameraSession` — `is_recording`/`last_stop_reason`, updated only from decoded recording-category notifications, used to detect a camera-initiated stop (e.g. on a slow SD card) without waiting on a command's own echo; `last_known_codec_variant`, updated only from decoded codec_quality-category notifications; and `last_known_recording_format`, updated only from decoded recording_format-category notifications (including `set_video_format`'s own mode-notify confirmations, which share that same category/parameter). All three no-op guards — `set_codec_quality`, `set_video_format`, and `set_recording_format` — use these fields to recognize an already-satisfied write and skip it instead of waiting on an echo the camera won't send for a no-op (real-hardware-confirmed for all three families, 2026-07-21) — see `docs/session_and_verification.md`, `docs/recording.md`, and `docs/settings.md`.)*
+A `CameraState` object reflects the last-known camera state. It is updated **only** from incoming BLE notifications — never inferred from "I sent command X therefore state is now Y". On connect, read the current state before any automation begins. *(The full `state.py` / `CameraState` / `StorageState` object is not yet implemented. A small, notification-driven slice of this already exists directly on `CameraSession` — `is_recording`/`last_stop_reason`, updated only from decoded recording-category notifications, used to detect a camera-initiated stop (e.g. on a slow SD card) without waiting on a command's own echo; `last_known_codec_variant`, updated only from decoded codec_quality-category notifications; and `last_known_recording_format`, updated only from decoded recording_format-category notifications (including `set_video_format`'s own mode-notify confirmations, which share that same category/parameter). All three no-op guards — `set_codec_quality`, `set_video_format`, and `set_recording_format` — use these fields to recognize an already-satisfied write and skip it instead of waiting on an echo the camera won't send for a no-op (real-hardware-confirmed for all three families, 2026-07-21) — see `docs/ble/session_and_verification.md`, `docs/ble/recording.md`, and `docs/ble/settings.md`.)*
 
 ### 5. Strict transport / protocol separation
 - `camera_controller.py` — BLE transport only: connect, disconnect, raw byte read/write, notification subscription. No BMD protocol knowledge.
@@ -80,12 +79,14 @@ Never mix concerns across these boundaries.
 ### 6. Sniffer-first for all protocol values
 Every codec ID, quality variant, FPS encoding, category/parameter pair must originate from a real sniffer capture on that specific camera and firmware. Never copy protocol values from one profile to another without re-verifying on that model. `tools/sniffers/` (passive) and `tools/control/` (active send-then-capture) drive the payload population workflow.
 
+REST's sibling rule: no endpoint is trusted until it has been swept on that exact camera, firmware, and transport (`tools/rest/probe_endpoints.py`). A result from one camera, or over USB, is not evidence about another camera or about LAN/Wi-Fi — see `docs/rest/transport.md`.
+
 ### 7. Explicit capability model
 Each profile JSON declares what the camera supports (e.g. `supports_raw`, `supports_playback`, `supports_photo`). Code checks capabilities before attempting an operation. Attempting an unsupported operation raises `BMDUnsupportedError` immediately — no silent failures.
 
-A second, distinct flavor of this: `resolutions.<name>.known_unreachable` (codec name → evidence note) records a *software* capability gap — a `(codec, resolution)` combination the camera itself demonstrably supports, but that this codebase's write path cannot reach despite exhausting every write-value hypothesis (real example: `POCKET_6K_PRO v8.6`'s ProRes/4K DCI gap, `docs/settings.md` §16). Never remove the codec from `codecs` on the strength of a `known_unreachable` entry — the camera's own capability is unchanged; only this codebase's current write path is limited. `CameraSession.set_camera_format` checks this before any write and raises `BMDUnsupportedError` immediately, quoting the evidence note. Entries here are added only after a real investigation is exhausted (see `docs/payload_profiles.md`) — `tools/control/sweep_camera_format.py` surfaces *candidates* systematically, but a human reviews the evidence before writing the field.
+A second, distinct flavor of this: `resolutions.<name>.known_unreachable` (codec name → evidence note) records a *software* capability gap — a `(codec, resolution)` combination the camera itself demonstrably supports, but that this codebase's write path cannot reach despite exhausting every write-value hypothesis (real example: `POCKET_6K_PRO v8.6`'s ProRes/4K DCI gap, `docs/ble/settings.md` §16). Never remove the codec from `codecs` on the strength of a `known_unreachable` entry — the camera's own capability is unchanged; only this codebase's current write path is limited. `CameraSession.set_camera_format` checks this before any write and raises `BMDUnsupportedError` immediately, quoting the evidence note. Entries here are added only after a real investigation is exhausted (see `docs/ble/payload_profiles.md`) — `tools/control/sweep_camera_format.py` surfaces *candidates* systematically, but a human reviews the evidence before writing the field.
 
-A third flavor is the opposite kind of fact: `resolutions.<name>.max_fps_int` records a real *camera hardware* ceiling — the camera itself cannot exceed this fps at this resolution at all (real example: `POCKET_6K_PRO v8.6`'s `"6K"` topping out at 50fps, confirmed both by `sweep_camera_format.py`'s first production run and by the operator checking the camera's own UI — `docs/settings.md` §17). Unlike `known_unreachable`, this isn't a software gap to fix later — there's nothing to fix. `CameraSession.set_video_format` and `set_recording_format` both check this before any write (not just the `set_camera_format` orchestration, since both take `(resolution, fps)` directly) and raise `BMDUnsupportedError` immediately for a requested fps above the ceiling. `sweep_camera_format.py` excludes fps values above a resolution's ceiling from its default sweep for the same reason it excludes `known_unreachable` combinations. That same first production run also demonstrated a real methodological hazard worth remembering for any sweep tool: one `unconfirmed` result turned out to be a false negative in the tool's own default echo timeout (confirmed successful on-screen despite reporting failure) — an `unconfirmed` outcome is evidence about that run's timing, not automatically evidence about the camera; check the on-screen state before trusting it as a `known_unreachable`/`max_fps_int` candidate. A same-shape hazard in the opposite direction hit `sweep_dimension_enum.py` on `POCKET_6K_PRO v8.6` (2026-07-27, `docs/photo_capture.md` §10.5): a candidate that looked like a genuine `MATCH` turned out to be a false positive — leftover state from before the write, not a result the candidate caused, exposed only by an immediate repeat run giving a different answer. A `MATCH`, like an `unconfirmed`, is not automatically evidence about the camera either; the tool now tracks and flags this specific failure mode directly.
+A third flavor is the opposite kind of fact: `resolutions.<name>.max_fps_int` records a real *camera hardware* ceiling — the camera itself cannot exceed this fps at this resolution at all (real example: `POCKET_6K_PRO v8.6`'s `"6K"` topping out at 50fps, confirmed both by `sweep_camera_format.py`'s first production run and by the operator checking the camera's own UI — `docs/ble/settings.md` §17). Unlike `known_unreachable`, this isn't a software gap to fix later — there's nothing to fix. `CameraSession.set_video_format` and `set_recording_format` both check this before any write (not just the `set_camera_format` orchestration, since both take `(resolution, fps)` directly) and raise `BMDUnsupportedError` immediately for a requested fps above the ceiling. `sweep_camera_format.py` excludes fps values above a resolution's ceiling from its default sweep for the same reason it excludes `known_unreachable` combinations. That same first production run also demonstrated a real methodological hazard worth remembering for any sweep tool: one `unconfirmed` result turned out to be a false negative in the tool's own default echo timeout (confirmed successful on-screen despite reporting failure) — an `unconfirmed` outcome is evidence about that run's timing, not automatically evidence about the camera; check the on-screen state before trusting it as a `known_unreachable`/`max_fps_int` candidate. A same-shape hazard in the opposite direction hit `sweep_dimension_enum.py` on `POCKET_6K_PRO v8.6` (2026-07-27, `docs/ble/photo_capture.md` §10.5): a candidate that looked like a genuine `MATCH` turned out to be a false positive — leftover state from before the write, not a result the candidate caused, exposed only by an immediate repeat run giving a different answer. A `MATCH`, like an `unconfirmed`, is not automatically evidence about the camera either; the tool now tracks and flags this specific failure mode directly.
 
 ### 8. Fail loud on unverified profiles
 If `status == "UNVERIFIED"` in a profile JSON, log a prominent warning at session start. Code can still run against unverified profiles, but the user must know.
@@ -109,41 +110,46 @@ Entries marked *(planned)* do not exist yet — they are the target layout for
 future subsystems. Everything else is implemented and on disk today.
 
 ```
-src/bmd_ble/
+src/bmd_camera/
   __init__.py               # Public API surface — exports CameraSession, CameraProfile,
                             # get_profile, KNOWN_PROFILES, BMDVerificationError,
                             # BMDUnsupportedError
-  constants.py              # BLE UUIDs and timing constants (fixed by spec)
   exceptions.py             # BMDConnectionError, BMDTimeoutError, BMDCommandError,
                             # BMDVerificationError, BMDUnsupportedError, BMDStorageError
                             # (BMDVerificationError and BMDUnsupportedError are raised
                             # today — the latter by the settings writes; the rest are
                             # reserved for the planned subsystems that will use them)
-  scanner.py                # BLE discovery by advertisement name
-  camera_profile.py         # Load, validate, and cache model/firmware profiles
-  camera_controller.py      # BLE transport layer — raw bytes only
-  notification_router.py    # Buffer and route INCOMING_CONTROL notifications by (category, param)
-  timecode.py               # TIMECODE characteristic decode + clip-duration math
-                            # (wrapped BMD packet, distinct characteristic — see docs/timecode.md)
-  state.py                  # (planned) CameraState + StorageState dataclasses —
-                            # updated from notifications only
-  session.py                # CameraSession context manager — user-facing API
-  protocol/
-    __init__.py
-    codec.py                # BMD packet header encode / decode
-    types.py                # BMD data type constants (official spec coding — see
-                            # "Data types" below)
-    categories/
+  camera_profile.py         # Load, validate, and cache model/firmware profiles —
+                            # shared across transports; loads a model's ble/ profile
+                            # today, and its rest/ profile once one exists (planned)
+  ble/
+    constants.py            # BLE UUIDs and timing constants (fixed by spec)
+    scanner.py               # BLE discovery by advertisement name
+    camera_controller.py     # BLE transport layer — raw bytes only
+    notification_router.py   # Buffer and route INCOMING_CONTROL notifications by (category, param)
+    timecode.py               # TIMECODE characteristic decode + clip-duration math
+                              # (wrapped BMD packet, distinct characteristic — see docs/ble/timecode.md)
+    state.py                  # (planned) CameraState + StorageState dataclasses —
+                              # updated from notifications only
+    session.py                # CameraSession context manager — user-facing API
+    protocol/
       __init__.py
-      recording.py          # Record start / stop
-      storage.py            # Passive decode of storage-monitoring
-                            # notifications (CANDIDATE write-margin signal)
-      settings.py           # Codec/quality, video format (codec-family switch),
-                            # recording format (resolution + FPS) — values from
-                            # an external RE doc, all VERIFIED on real
-                            # POCKET_6K_G2 v7.9 hardware, see docs/settings.md
-      media.py              # (planned) Photo capture, playback controls
-      metadata.py           # (planned) Video / photo metadata reads
+      codec.py                # BMD packet header encode / decode
+      types.py                # BMD data type constants (official spec coding — see
+                              # "Data types" below)
+      categories/
+        __init__.py
+        recording.py          # Record start / stop
+        storage.py            # Passive decode of storage-monitoring
+                              # notifications (CANDIDATE write-margin signal)
+        settings.py           # Codec/quality, video format (codec-family switch),
+                              # recording format (resolution + FPS) — values from
+                              # an external RE doc, all VERIFIED on real
+                              # POCKET_6K_G2 v7.9 hardware, see docs/ble/settings.md
+        media.py              # (planned) Photo capture, playback controls
+        metadata.py           # (planned) Video / photo metadata reads
+  rest/                      # (planned) REST/WebSocket client, event router, RestCameraSession —
+                             # see docs/rest/transport.md
 
 tools/
   common/                   # Shared BLE capture/decode engine (tools/common/capture.py)
@@ -153,7 +159,7 @@ tools/
   control/                  # Active camera control — sends commands, captures the response
                             # (changes real camera state; use deliberately)
   query/                    # Read-only characteristic inspection
-  rest/                     # 8.6 REST/WebSocket transport tooling — no BLE, no bmd_ble
+  rest/                     # 8.6 REST/WebSocket transport tooling — no BLE, no bmd_camera.ble
                             # imports. Currently one endpoint-sweep tool; read-only by
                             # default, opt-in idempotent write probes. See docs/rest/transport.md
   captures/                 # Runtime output of sniffers/, control/, and rest/ scripts (gitignored)
@@ -161,11 +167,16 @@ tools/
 Tools are grouped by folder according to what kind of thing they do — read-only
 query, passive listen, or active send — not by feature. Shared library code used
 by more than one tool type lives in `tools/common/`, never duplicated per folder
-or reached via an awkward cross-folder import. See `docs/active_camera_control.md`.
+or reached via an awkward cross-folder import. See `docs/ble/active_camera_control.md`.
 
 payloads/
-  models/                   # One JSON file per (MODEL_KEY, firmware) pair
-  schema.json               # JSON Schema — validates all payload files at load time
+  models/
+    <MODEL_KEY>/
+      ble/                  # <FIRMWARE>.json — one per firmware, validated against ble_schema.json
+      rest/                 # (planned) <FIRMWARE>.json — one per firmware, validated
+                            # against rest_schema.json
+  ble_schema.json           # JSON Schema — validates all ble/ payload files at load time
+  rest_schema.json          # (planned) JSON Schema for rest/ payload files
 
 examples/
   scan_camera.py            # Discover cameras by BLE advertisement name
@@ -174,7 +185,7 @@ examples/
   record_start_stop.py      # Echo-verified record start/stop via CameraSession
   change_codec.py           # BRAW <-> ProRes round trip via set_camera_format
                             # (codec+quality+resolution+fps orchestration;
-                            # see docs/settings.md and docs/session_and_verification.md)
+                            # see docs/ble/settings.md and docs/ble/session_and_verification.md)
   capture_photo.py          # (planned)
   playback.py               # (planned)
 
@@ -203,177 +214,40 @@ added, a new `docs/<feature>.md` must be created alongside the code change.
 
 | File | Covers |
 |---|---|
-| `docs/protocol.md` | **Full protocol reference** — SDI camera control categories/parameters, data types, operations, BLE GATT layer, spec-vs-sniffer divergences. Read before any protocol work |
-| `docs/packet_structure_and_constants.md` | Packet header byte layout, length-field counting base, `protocol/codec.py` design, and how the original spec-assumed structure was corrected against a real capture |
-| `docs/winrt_ble_connection_hardening.md` | BLE transport reliability on Windows/WinRT — reconnect loop, liveness detection via notification timestamps, connection-generation guards, connect-lock, known limitations |
-| `docs/event_subscription_and_logging.md` | Notification subscription strategy (`subscribe_all`), generation-guarding wrapper, per-session file logging |
-| `docs/recording.md` | Record start/stop category scaffold, verification and storage-precondition strategy, remaining sniffer work |
-| `docs/sniffer_capture_engine.md` | Reusable BLE-notification capture engine (`tools/common/capture.py`) driving labeled operator-triggered capture windows |
-| `docs/active_camera_control.md` | Active camera control — `write_outgoing_control`, `run_send_and_capture`, `tools/control/` tool-type segregation |
-| `docs/session_and_verification.md` | `CameraSession`, `NotificationRouter` echo buffering (`arm`/`wait_for`), why `CAMERA_STATUS` isn't a secondary cross-check for recording yet |
-| `docs/payload_profiles.md` | Profile JSON structure (`commands` map, `values`, `provenance`), `payloads/schema.json` load-time validation, `CommandSpec` API |
-| `docs/command_discovery.md` | Guided command discovery (`tools/control/discover_command.py`) — candidate sweep, operator confirmation, emitted profile blocks |
-| `docs/rest/transport.md` | **REST/WebSocket transport (8.6)** — why the endpoint sweep precedes any code; how to address the camera over USB (its `.local` mDNS name on a /30 point-to-point link — **not** the IP from Setup → Network Settings, which is the Ethernet port's and is refused, and **not** a default gateway, since a /30 has none) and which scheme it serves (Setup → Network Access is the authority; `Enabled` means plaintext on :80, `Enabled with security only` means TLS on :443); a table of every assumption this doc got wrong and what corrected it; the gate questions the sweep must answer; and `tools/rest/probe_endpoints.py`'s two modes (read-only; opt-in idempotent same-value write probes, with destructive endpoints never probed). **First sweep run 2026-08-03** on `POCKET_6K_G2 v8.6` over USB: 52 endpoints working, 5 `501`, no 5xx. `/system/supportedFormats` returns the whole capability matrix, independently confirming both `6K`'s 50fps ceiling and that the camera holds ProRes/4K DCI — the combination BLE records as `known_unreachable` — and exposing Sensor Area as a readable `sensorResolution` field, which BLE never achieved. A second run fixed two tool bugs (WS responses matched positionally instead of by `id`; the `/mounts/` listing assumed HTML but is JSON) and reached the mounts hierarchy the first run couldn't — revealing the `500` is not Stills-specific: every subdirectory under a mount root fails, while the root itself lists fine with real file sizes. A third run fixed one tool bug of its own — the `/lens/focus` write builder looked for the spec's documented key (`focus`) but the real camera reports `normalised` instead — and then `--probe-writes` confirmed `PUT /system/format` returns `204` (same-value body), the gate question deciding whether settings can move to REST at all, along with 29 other endpoints (video, lens, color correction, audio) all writable. A fourth run swept `POCKET_6K_PRO v8.6` independently (design principle 6) — same addressing, same scheme, same mounts defect, a structurally identical `supportedFormats` matrix, and 32/32 write-probeable endpoints succeeding (the two G2 gaps both explained by hardware: the PRO has a built-in ND filter the G2 lacks) — plus a third independent confirmation of two findings originally established on this camera over BLE (`docs/settings.md` §16.1, §17.1) |
-| `docs/timecode.md` | `TIMECODE` wire format (wrapped BMD packet, confirmed by real capture), BCD decode, clip-duration math (`timecode.py`), and why the `frames` field isn't used in duration yet |
-| `docs/settings.md` | Settings families (codec/quality, video format, recording format) — byte layouts and value tables from an external RE doc, now hardware-verified for all three; why `codec_quality` can't switch BRAW↔ProRes but `video_format` can, the `0x82` data type, `set_camera_format`'s combination orchestration, and the verification runbook (`sniffer_settings.py`, `send_settings_command.py`, `change_codec.py`) |
-| `docs/photo_capture.md` | Photo-capture reverse engineering — passive phase complete (2026-07-27, both cameras): a body-triggered still produces NO report at all. First active probe (G2, same day) was **inconclusive** (§6: every INT8 candidate confirmed, a sign of an unreliable read). A same-day VOID retry, this time verified via SD card contents on a PC rather than a glance, **confirmed** `commands.photo` on `POCKET_6K_G2 v7.9` (§7) — category `0x0A`/param `0x03`, void trigger, reserved byte indifferent (`0x00`/`0x01` both work) — then **independently reconfirmed identically on `POCKET_6K_PRO v8.6`** the same day (§9), same SD-card verification method. Still open on both cameras: no BLE-observable signal confirms a photo was taken (neither echo nor status), so `CameraSession.capture_photo()` isn't built yet — that verification-strategy question is the next decision. TODO (operator-proposed, not yet started): verify out-of-band over `POCKET_6K_PRO v8.6`'s USB/HTTP clip-playback interface instead of BLE — explicitly v8.6-only, picked up in a future session. §8 records operator-provided (non-wire) knowledge that BRAW stills inherit the recording resolution while ProRes stills use a separate sensor-area concept (2.8K/5.7K/6K, unrelated to ProRes's own UHD/HD video resolutions), all saved as DNG on the G2 — §8.4 corrects that DNG claim for the PRO, where file format follows the active codec (`.braw` for BRAW, DNG for ProRes). §§10–10.7: the resulting Sensor Area BLE investigation is now **closed** — passive sniffing (§10.1/§10.3), an active `dimension_enum` alias hunt (§10.5, an apparent match refuted as a stale-state false positive — `sweep_dimension_enum.py` now guards against this class of bug), a full official-115-page-spec search (§10.6, no such parameter documented anywhere), and a closing isolated write test (§10.7, confirmed via before/after SD-card photo dimensions, not just wire silence, that the one real lead — `recording_format`'s "windowed mode" flag bit, a genuine reproducible **read** signal for full-sensor-vs-cropped, §10.1/§10.3/§10.4 — is **not writable** either) all converge on the same answer: no BLE write path for Sensor Area exists on either camera, by any means tried. That read-only correlation was independently reconfirmed a third time on `POCKET_6K_G2 v8.6` (2026-07-31), incidentally resolving an unrelated open discrepancy in that profile's own `recording_format.flags` field at UHD — see `docs/settings.md` §18.13 |
+| `docs/ble/protocol.md` | Full protocol reference — SDI categories/parameters, data types, operations, BLE GATT layer, spec-vs-sniffer divergences |
+| `docs/ble/packet_structure_and_constants.md` | Packet header byte layout, length-field counting base, `protocol/codec.py` design |
+| `docs/ble/winrt_ble_connection_hardening.md` | BLE transport reliability on Windows/WinRT — reconnect loop, liveness detection, connection-generation guards |
+| `docs/ble/event_subscription_and_logging.md` | Notification subscription strategy, generation-guarding wrapper, per-session file logging |
+| `docs/ble/recording.md` | Record start/stop, verification and storage-precondition strategy, per-camera status |
+| `docs/ble/sniffer_capture_engine.md` | Reusable BLE-notification capture engine (`tools/common/capture.py`) |
+| `docs/ble/active_camera_control.md` | Active camera control — `write_outgoing_control`, `run_send_and_capture`, `tools/control/` tool-type segregation |
+| `docs/ble/session_and_verification.md` | `CameraSession`, `NotificationRouter` echo buffering, why `CAMERA_STATUS` isn't a secondary cross-check for recording yet |
+| `docs/ble/payload_profiles.md` | Profile JSON structure, `payloads/ble_schema.json` load-time validation, `CommandSpec` API |
+| `docs/ble/command_discovery.md` | Guided command discovery (`tools/control/discover_command.py`) |
+| `docs/ble/timecode.md` | `TIMECODE` wire format, BCD decode, clip-duration math |
+| `docs/ble/settings.md` | Settings families (codec/quality, video format, recording format) — byte layouts, verification runbook |
+| `docs/ble/photo_capture.md` | Photo-capture reverse engineering — trigger confirmed on both cameras, no BLE-observable confirmation signal found; Sensor Area BLE investigation (closed, unwritable) |
+| `docs/ble/reverse_engineering.md` | Tool-by-tool procedure for bringing up a new `(MODEL_KEY, FIRMWARE)` pair, and for adding a single new command |
+| `docs/ble/camera_registry.md` | Full evidentiary notes behind the Camera Registry table above |
+| `docs/rest/transport.md` | REST/WebSocket transport (8.6) — addressing the camera over USB, scheme discovery, `tools/rest/probe_endpoints.py`, sweep results for both cameras |
 
 ---
 
 ## BMD BLE Protocol
 
-Commands are written as binary packets to `OUTGOING_CONTROL`. Echoes and responses arrive on `INCOMING_CONTROL`. This section is the quick summary — `docs/protocol.md` is the full reference (all SDI categories/parameters, data-type coding discrepancy, transport-mode echo hypothesis) and must be read before any protocol work.
-
-### Packet structure
-
-```
-Byte 0      Fixed prefix byte (0xFF — sniffer-verified on POCKET_6K_G2 v7.9,
-            both directions; not a per-destination address over BLE)
-Byte 1      Length field — counts only bytes 4 onwards (category, parameter,
-            data type, operation, payload). Sniffer-verified: does NOT count
-            command_id/reserved, unlike the generic BMD spec assumption of
-            "everything after byte 1".
-Byte 2      Command ID / type
-Byte 3      Reserved
-Byte 4      Category
-Byte 5      Parameter
-Byte 6      Data type  (see protocol/types.py)
-Byte 7      Operation  (0x00 = assign, 0x01 = offset, 0x02 = camera report —
-            sniffer-verified on every camera-originated notification
-            captured so far; official spec meaning unconfirmed)
-Bytes 8+    Payload
-```
-
-This structure was corrected after a real sniffer capture on `POCKET_6K_G2 v7.9`
-caught a systematic decode failure — the byte 0 value and the length field's
-counting base above were originally assumed from the generic BMD spec and had
-never been verified against real BLE hardware. See `protocol/codec.py` and
-`docs/packet_structure_and_constants.md`.
-
-### Command categories
-Populate this table as categories are confirmed from sniffer sessions. Each category maps to a file in `protocol/categories/`.
-
-| Category | Description | File |
-|---|---|---|
-| `0x0A` (param `0x01`) | Recording (record start/stop) — VERIFIED on `POCKET_6K_G2 v7.9` (`reserved` `0x01`) and on `POCKET_6K_G2 v8.6` (2026-07-29, 3/3 echo-verified `CameraSession` cycles), same category/parameter/data-type/values/echo_operation but `reserved` recorded as `0x00`. The sweep confirmed the camera acts on **both** reserved bytes on v8.6, so the byte is indifferent for this family; `0x00` is canonical there as the only value with a clean wire echo for both outcomes and the one the camera's own reports use. Same reserved-byte indifference already recorded for photo capture on both cameras | `protocol/categories/recording.py` |
-| `0x0A` (param `0x03`) | Still Capture (photo trigger) — VERIFIED on **both** `POCKET_6K_G2 v7.9` and `POCKET_6K_PRO v8.6` (2026-07-27: `tools/control/discover_command.py --data-type VOID`, operator-confirmed on each camera independently via SD card contents inspected on a PC after each send, not a wire or on-screen signal — same coordinates and same reserved-byte indifference reached independently on both). Matches the [spec] void typing (`docs/protocol.md` §5, 10.3). Reserved byte confirmed indifferent on both cameras — `0x00` and `0x01` both triggered a photo; `0x00` recorded as canonical. NO INCOMING_CONTROL notification of any kind appeared for any confirmed write on either camera, consistent with the passive finding (`docs/photo_capture.md` §5) that a body-triggered still produces no report either — there is currently no known BLE-observable signal that confirms a photo was taken, which is why `protocol/categories/media.py` and `CameraSession.capture_photo()` are not built yet despite the trigger itself being confirmed on both cameras (see `docs/photo_capture.md` §7/§9 for the open verification-strategy question this leaves, required before a session-level API can satisfy design principle 3) | `protocol/categories/media.py` (not yet built) |
-| `0x0A` (param `0x00`) | Codec + quality variant — VERIFIED on `POCKET_6K_G2 v7.9` (2026-07-20: `CameraSession.set_codec_quality()` genuine real-hardware write+echo cycle); does NOT switch BRAW↔ProRes (see `docs/settings.md`). Same category/parameter and payload shape independently confirmed on `POCKET_6K_PRO v8.6` too — a real `CameraSession.set_camera_format()` write+echo cycle to ProRes/422 also confirmed cleanly there (2026-07-22, `docs/settings.md` §16), but the block stays CANDIDATE pending §16's blocking `recording_format` gap. Also used 2026-07-24 as the isolating target for an unrelated `recording_format` `Operation.OFFSET` investigation (a `+1` variant delta via `OFFSET` got zero response, same as every other `OFFSET` test on this camera — evidence toward `OFFSET` being unimplemented camera-wide, not evidence about this block's own values, see `docs/settings.md` §16) Report-side coordinates confirmed on `POCKET_6K_G2 v8.6` 2026-07-30 (`docs/settings.md` §18) and the write side promoted to **VERIFIED** the same day via nine manual confirming writes and a 432/480 `sweep_camera_format.py` sweep (`docs/settings.md` §18.10) | `protocol/categories/settings.py` |
-| `0x01` (param `0x00`) | Video format (FORMAT packet) — VERIFIED on `POCKET_6K_G2 v7.9` (2026-07-20: `CameraSession.set_video_format()` 2/2 real-hardware round trip); dimension_enum locks resolution + codec family, the actual BRAW↔ProRes switch. Never appears in notifications itself — enums need active probing (`docs/settings.md` §7–§8). Same coordinates confirmed working on `POCKET_6K_PRO v8.6` via an active `dimension_enum` sweep and, for the UHD/ProRes proxy resolution specifically, via a real `CameraSession` write+echo cycle too (2026-07-22, `docs/settings.md` §16) — still CANDIDATE there pending §16's blocking gap; every enum value found matches the G2's number for the same resolution (`docs/settings.md` §15) — and on that camera, the on-screen display doesn't reflect the change until a power cycle even though the write took effect. An exhaustive `0x00`–`0x16` sweep (`tools/control/sweep_dimension_enum.py`, 2026-07-22, `docs/settings.md` §16) found no ProRes/4K DCI enum in that range on the PRO either — same negative result as the G2's own exhausted search. A follow-up sweep of `0x17`–`0x1F` (2026-07-23, `docs/settings.md` §16) found nothing there either — 32 values now exhausted with no match, making further blind enum guessing a weaker lead than retrying `recording_format` with a different `data_type` byte (since ruled out too) or `video_format`'s unexplained trailing elements — also probed via `tools/control/send_settings_command.py --video-format-extra E1 E2` (added 2026-07-24) and found no support either (2026-07-24): one `(extra1, extra2)` pair was accepted but still landed UHD, three others were silently rejected. All three candidate hypotheses for this gap are now exhausted; a full-channel decode of the passive-capture evidence (§16, 2026-07-24) then found nothing new either — `recording_format` is the only channel that moves with the transition, everything else is ambient telemetry or a one-time connect-burst dump — leaving `Operation.OFFSET` (never tried; every write above used `ASSIGN`) as the one remaining untested axis — now testable via `tools/control/send_settings_command.py --operation OFFSET` (added 2026-07-24, not yet tried on real hardware); per `docs/protocol.md` §4's documented OFFSET semantics ("add the payload to the current value"), a faithful test needs the delta from the current state, not the same absolute target payload `ASSIGN` uses. Tried 2026-07-24 with the absolute target payload anyway (as a first, simpler check): zero response over a 10s window — inconclusive on `OFFSET` itself, since an absolute width sent as an `OFFSET` requests an out-of-range `current + 4096`, not a real test of the delta hypothesis. `tools/control/send_settings_command.py --raw-payload` (added 2026-07-24) then bypassed the profile's lookup tables to send a genuine `+256` width delta via `OFFSET` — and it got the identical zero-response signature (2026-07-24), stronger evidence than the absolute-payload result since the delta landed exactly in-range. Every hypothesis for this gap (enum sweep, data_type byte, trailing elements, full-channel decode, OFFSET absolute, OFFSET delta) is now exhausted with no confirming echo. A follow-up isolating test then sent an `OFFSET` delta against `codec_quality` instead (2026-07-24, `docs/settings.md` §16) — a family whose `ASSIGN` echo behavior is already well-characterized — and got silence there too, pointing at `Operation.OFFSET` being unimplemented camera-wide rather than refused specifically for `recording_format` On `POCKET_6K_G2 v8.6` it produced no passive report either, so its block was seeded as an explicit CANDIDATE hypothesis to unblock step 10's probing — then confirmed by a full `0x00`–`0x1F` active sweep (2026-07-30, `--fps 24`): 8 of 32 candidates matched, none flagged stale, all 8 numbers agreeing exactly with both `POCKET_6K_G2 v7.9`'s and `POCKET_6K_PRO v8.6`'s enums (HD `0x03`, UHD `0x06`, 4K DCI/BRAW `0x08`, 2.8K 17:9/BRAW `0x0D`, 3.7K Anamorphic/BRAW `0x0F`, 5.7K 17:9/BRAW `0x12`, 6K/BRAW `0x13`, 6K 2.4:1/BRAW `0x14`) — same ProRes/4K DCI gap as both other profiles, not yet investigated to that depth here. **Promoted to VERIFIED 2026-07-30**: two manual confirming writes plus a 432/480 `sweep_camera_format.py` sweep (`docs/settings.md` §18.10) exceeded the single-round-trip bar that promoted v7.9's equivalent — see `docs/settings.md` §18.3/§18.6/§18.9/§18.10 | `protocol/categories/settings.py` |
-| `0x01` (param `0x09`) | Recording format (fps/sensor-fps/width/height/flags, int16 ×5) — VERIFIED on `POCKET_6K_G2 v7.9` (2026-07-20: `CameraSession.set_recording_format()` real-hardware write+echo cycle with the `0x82` write byte accepted); the camera's own reports still use data-type byte `0x02`. Same category/parameter and payload shape independently confirmed on `POCKET_6K_PRO v8.6` too (still CANDIDATE there); on that camera this write never confirms a resolution retarget to 4K DCI while ProRes is the active codec, 2/2 real `CameraSession` round trips (2026-07-22, `docs/settings.md` §16) — not a timing artifact, but also not a proven camera-side refusal: a passive capture of the camera reaching that exact state through its own body menu (§16 addendum) shows it genuinely holds and reports ProRes/4K DCI, so the gap is in this codebase's write path, not the camera. With the `dimension_enum` search exhausted, `tools/control/send_settings_command.py --data-type INT16` (added 2026-07-23) let this write be retried with the camera's own report byte (`0x02`) instead of the claimed write byte `0x82`, without touching the profile — and ruled that out too (2026-07-23/24): zero fresh confirming reports over a full 8s window, the same signature already established for `0x82`. `video_format`'s unexplained trailing elements were then probed via `--video-format-extra` too (2026-07-24) with no support found either. An `--operation OFFSET` retry with the same absolute target payload (2026-07-24) also got zero response over a 10s window, but per `docs/protocol.md` §4's OFFSET semantics an absolute payload isn't a faithful test — `--raw-payload` (2026-07-24) then sent a genuine `+256` width delta (UHD → 4K DCI) via `OFFSET` instead of the absolute width `4096`, and got the same zero-response signature anyway, ruling the delta hypothesis out too. A follow-up isolating test then sent an equivalent `OFFSET` delta against `codec_quality` instead (2026-07-24) — a family whose `ASSIGN` echo behavior is already well-characterized — and it stayed silent too, pointing at `Operation.OFFSET` being unimplemented camera-wide rather than refused specifically for this parameter. A follow-up test then retried the retarget with the *exact* `fps_int=24` the camera itself reports at that state (every earlier write had used `25`) — TX-confirmed byte-identical to the passive capture, sent from two genuinely different starting states 2/2, with the operator directly confirming the on-screen display never changed either time (2026-07-24) — ruling out both "wrong value" and "echo-only confirmation problem": the write is genuinely ignored, not just unconfirmed. A follow-up test then retried the retarget with the exact camera-reported codec *variant* too (ProRes HQ, not `422`/`PXY` as every earlier attempt used) — this time with the ProRes/HQ/UHD/24fps precondition confirmed by genuine fresh wire echoes immediately beforehand, not just requested (2026-07-24) — still zero response, still no on-screen change. With resolution, fps, codec, variant, data type, and operation now all tried at their confirmed-correct values, **the write-value hypothesis space is exhausted**; the remaining question is whether this transition is reachable over BLE `OUTGOING_CONTROL` at all, not what this codebase sends. **Accepted and guarded, 2026-07-24**: `resolutions."4K DCI".known_unreachable.ProRes` records the finding and `CameraSession.set_camera_format` now raises `BMDUnsupportedError` immediately for this combination instead of attempting a write known to fail (design principle 7) — see `docs/settings.md` §3/§4/§16 for the full write-up. Report-side coordinates confirmed on `POCKET_6K_G2 v8.6` 2026-07-30 (`docs/settings.md` §18); that profile records the observed report byte `0x02`/reserved `0x00` rather than inheriting v7.9's write-side `0x82`/reserved `0x01`. **Promoted to VERIFIED the same day** via manual confirming writes (six/nine of `docs/settings.md` §18.10's runs targeted this family) plus the 432/480 `sweep_camera_format.py` sweep. That work also found this firmware's own version of the PRO's ProRes/4K DCI gap — three manual retarget attempts and a systematic 32/32 sweep failure. **Promoted to `known_unreachable` 2026-07-31**: the operator then ran the same falsification hypotheses that closed the PRO's investigation (data-type byte, `Operation.OFFSET`, exact fps/variant) three times each, from three different starting states and Sensor Area settings, with all 9 attempts staying silent (`docs/settings.md` §18.12) — `resolutions."4K DCI".known_unreachable.ProRes` is now written for this profile too. It also surfaced a candidate BRAW/6K/59.94-60fps ceiling (16/16 sweep failure, matching the PRO's confirmed `max_fps_int=50`), **promoted the same day** after the operator confirmed on the camera's own UI that 6K doesn't offer those fps values (`resolutions."6K".max_fps_int` is now `50`, `docs/settings.md` §18.11) — and a discrepancy in the flags element's value at UHD, read as both `0x0000` and `0x0010` twice each across four independent captures. **Resolved 2026-07-31** (`docs/settings.md` §18.13): a dedicated passive Sensor Area capture (`tools/sniffers/sniffer_sensor_area.py`) held video state fixed and varied only the camera's independent Sensor Area setting, reproducing the flip 2/2 — the `0x0010`-windowed/`0x0000`-full-sensor bit tracks Sensor Area under ProRes, not video resolution; it only ever looked resolution-driven because BRAW has no separate Sensor Area concept to disagree with it | `protocol/categories/settings.py` |
-| `0x09` (param `0x01`) | Storage write-margin signal — CANDIDATE, not confirmed causation, see `docs/recording.md` (category `0x09` is the same ambient-telemetry category `TIMECODE` param `0x04` already lives in) | `protocol/categories/storage.py` |
-
-### Data types (`protocol/types.py`)
-
-The coding follows the official *Blackmagic Camera Control Developer
-Information* document:
-
-| Value | Type | Notes |
-|---|---|---|
-| 0 | void / boolean | void = no payload (trigger); boolean = 1 byte per element (0 = false). `DataType.BOOL` is an alias of `DataType.VOID` |
-| 1 | int8 | signed byte |
-| 2 | int16 | |
-| 3 | int32 | |
-| 4 | int64 | |
-| 5 | string | UTF-8 |
-| 128 | fixed16 | signed 5.11 fixed point: `encoded = round(real × 2048)` |
-| 130 (`0x82`) | int16 array | NOT official coding — CANDIDATE wire byte reported on the `POCKET_6K_G2 v7.9` recording-format packet (five LE int16 elements), see `docs/settings.md` §3 |
-
-Provenance: data-type bytes sniffer-verified over BLE so far: `0x01` (int8 —
-recording command/echo, codec reports), `0x02` (int16 — recording-format and
-category-9 reports; note the camera reports the recording-format parameter
-with `0x02` even though the claimed *write* byte is `0x82`), `0x03` (int32 —
-a shutter-angle report) — all on `POCKET_6K_G2 v7.9` — plus, from the
-2026-07-27 photo-capture connect bursts on both cameras: `0x00` (both
-flavors — payloadless void reports and a one-byte boolean report), `0x05`
-(UTF-8 lens strings), and `0x80` (fixed16 — an aperture report decoding to
-exactly the lens's stated f-stop, though with an unexplained second, zero
-element). Only int64 (`0x04`) has never been observed on hardware — capture
-one before trusting a multi-byte decode. Full discussion:
-`docs/protocol.md` §3.
+Commands are written as binary packets to `OUTGOING_CONTROL`; echoes and responses arrive on `INCOMING_CONTROL`. `docs/ble/protocol.md` is the full reference (packet structure, all SDI categories/parameters, data types, operations, spec-vs-sniffer divergences) and must be read before any protocol work; `docs/ble/packet_structure_and_constants.md` covers the packet header byte layout and `protocol/codec.py` design in detail.
 
 ---
 
 ## Payload JSON Structure
 
-`payloads/models/<MODEL_KEY>_<FIRMWARE>.json` — validated against `payloads/schema.json` at load time (see `docs/payload_profiles.md` for the full design and rationale):
-
-```json
-{
-  "_meta": {
-    "model": "Pocket Cinema Camera 6K G2",
-    "model_key": "POCKET_6K_G2",
-    "firmware": "v7.9",
-    "ble_name": "A:AF3DC814",
-    "status": "VERIFIED | UNVERIFIED"
-  },
-  "ble": {
-    "incoming_property": "indicate",
-    "_comment": "Add characteristic_incoming only if overriding the default UUID in constants.py"
-  },
-  "gap_meta_data": { "readable": false },
-  "device_info_meta_data": { "readable": true },
-  "commands": {
-    "recording": {
-      "category": 10,
-      "parameter": 1,
-      "data_type": "INT8",
-      "reserved": 1,
-      "values": { "start": 2, "stop": 0 },
-      "echo_operation": 2,
-      "provenance": {
-        "status": "VERIFIED | UNVERIFIED | CANDIDATE",
-        "method": "how the values were obtained",
-        "capture_refs": ["tools/captures/..."],
-        "verified_on": "YYYY-MM-DD",
-        "notes": "..."
-      }
-    }
-  },
-  "capabilities":   { "supports_raw": true, "supports_photo": true, "supports_playback": true },
-  "codecs":         { "BRAW": { "id": 3, "variants": { "Q0": 0, "5:1": 3 } } },
-  "resolutions":    { "4K DCI": { "width": 4096, "height": 2160,
-                                  "codecs": ["BRAW", "ProRes"],
-                                  "dimension_enums": { "BRAW": 8 } } },
-  "fps_modes":      { "23.98": { "fps_int": 24, "m_rate": 1, "frame_flags": 19 } }
-}
-```
-
-Every sniffer-confirmed command family gets one block under `commands`, all the same shape: protocol coordinates, a named `values` map, the observed `echo_operation`, and structured `provenance` (per-command verification state — `_meta.status` still describes the profile as a whole). `values` is optional for multi-element families (codec_quality, video_format, recording_format) whose payloads are composed from the `codecs`/`resolutions`/`fps_modes` lookup tables instead — those tables' provenance rides with the command blocks that consume them (see `docs/settings.md` and `docs/payload_profiles.md`) — and for a `VOID` trigger family, which has no payload at all. `capabilities` is reserved in the schema but only populated once sniffed on that camera. Code reads commands via `profile.require_command(name, value_names)` → `CommandSpec`, and the tables via `require_codec` / `require_resolution` / `require_fps_mode`.
-
-All protocol values come from sniffer captures. `status` is set to `"VERIFIED"` only after testing on real hardware.
+`payloads/models/<MODEL_KEY>/ble/<FIRMWARE>.json` — validated against `payloads/ble_schema.json` at load time. Every sniffer-confirmed command family gets one block under `commands`: protocol coordinates, a named `values` map, the observed `echo_operation`, and structured `provenance`. See `docs/ble/payload_profiles.md` for the full structure, an example profile, design rationale, and the `CommandSpec` / `require_codec` / `require_resolution` / `require_fps_mode` API.
 
 ---
 
 ## Storage Media Monitoring *(planned)*
 
-This section is design intent — no storage monitoring is implemented yet
-(`StorageState`/`CameraState` do not exist; see design principle 4).
-
-**Scope: the SD card slot.** The CFast slot may be added later; **external USB
-media is out of scope entirely**. Code must not assume a single media device
-anyway — the camera reports a working set with an active member, so resolve the
-active device rather than indexing slot 0, and adding CFast becomes a data change
-rather than a code change.
-
-Storage state is read on connect and updated from `CAMERA_STATUS` notifications. It is tracked in `StorageState` (part of `CameraState`) and covers:
-
-- Slot presence (card inserted or not)
-- Card status (ready, formatting, write-protected, error)
-- Remaining recording time (derived from free space + current codec/quality/FPS)
-- Remaining photo capacity
-
-### How storage state gates operations
-
-| Operation | Pre-condition check | Post-condition check |
-|---|---|---|
-| Record start | Card ready, remaining time > 0 | `CameraState.is_recording` becomes `True` |
-| Record stop | Camera is recording | `CameraState.is_recording` becomes `False`, remaining time decreased |
-| Photo capture | Card ready, remaining photos > 0 | Remaining photo count decreased |
-| Playback | Card ready, media index readable | Playback state transitions to playing |
-
-If the pre-condition fails, raise `BMDStorageError` immediately — do not attempt the command.
-
-Storage characteristics to monitor are per-camera. Add them to the payload JSON under `storage` as they are confirmed via sniffer.
+Design intent only — no storage monitoring is implemented yet (`StorageState`/`CameraState` do not exist; see design principle 4). Scope is the SD card slot only; external USB media is out of scope entirely. See `docs/ble/recording.md`'s "Storage Media Monitoring — full design intent" section for the complete pre/post-condition table and scope notes, including how REST's `/media/workingset` may change this plan.
 
 ---
 
@@ -382,7 +256,7 @@ Storage characteristics to monitor are per-camera. Add them to the payload JSON 
 All loggers use `logging.getLogger(__name__)`, or a per-instance child of it
 derived from `__name__` (e.g. `logging.getLogger(f"{__name__}.{profile.model_key}")`,
 as `camera_controller.py` does for per-session file logging — see
-`docs/event_subscription_and_logging.md`). Never invent a logger name that is
+`docs/ble/event_subscription_and_logging.md`). Never invent a logger name that is
 not rooted in `__name__`.
 
 ### Log levels
@@ -409,310 +283,19 @@ The `CameraSession` (or `CameraController`) must inject the identity prefix so t
 
 ### BLE byte logging
 
-Log raw bytes as uppercase hex pairs separated by spaces — matching the format used by Wireshark and nRF Sniffer. This allows direct copy-paste comparison with sniffer captures:
-
-```python
-logger.debug("TX: %s", " ".join(f"{b:02X}" for b in packet))
-logger.debug("RX echo: %s", " ".join(f"{b:02X}" for b in response))
-```
-
-Log TX bytes immediately before writing to `OUTGOING_CONTROL`. Log RX bytes immediately when they arrive on `INCOMING_CONTROL`, before any decoding.
+Raw BLE bytes are logged as uppercase hex pairs, never as plain integers or Python `repr` — see `docs/ble/event_subscription_and_logging.md` for the exact convention and code example. REST's own identity-prefix convention (`[<host>]`) will be documented in `docs/rest/transport.md` once a REST client exists.
 
 ---
 
 ## Verification Strategy
 
-For every write command:
-
-1. Confirm `INCOMING_CONTROL` notifications are active and `NotificationRouter` is buffering
-2. Write command bytes to `OUTGOING_CONTROL`
-3. Await matching echo on `INCOMING_CONTROL` with configurable timeout (default 3 s — bumped from an initial 2 s after real-hardware logs showed occasional echo arrivals taking close to that long)
-4. If echo arrives — optionally read `CAMERA_STATUS` as a cross-check
-5. If echo times out and camera is still connected — attempt `CAMERA_STATUS` read
-6. If neither check confirms the expected state → raise `BMDVerificationError`
-
-The echo must be buffered *before* the write is issued. A router that only starts listening after the write will race against the camera's response.
-
-**Known risk on `POCKET_6K_PRO v8.6` (with a lens attached), unconfirmed on the G2:** a lens-metadata burst (category `0x0C`, params `0x00`–`0x0F` — lens name, aperture, focal length, a focus-distance readout) has repeatedly dominated capture windows during settings work, delaying a genuine settings echo past the window/timeout it belongs to (see `docs/settings.md` §15 for a worked example — a `recording_format` echo arrived in the *next* send's capture window instead of its own). Since this burst competes for the same BLE indication queue a real `CameraSession` write's echo would, it could plausibly delay that echo past the default `echo_timeout_s` (3 s) too, in production, not just in `tools/control/send_settings_command.py`'s fixed-window tooling — a real write could raise `BMDVerificationError` from an echo that was only late, not missing. **Confirmed 2026-07-22** against a real `CameraSession.set_camera_format()` round trip on the PRO (not yet added to `KNOWN_PROFILES`, tested via a locally-edited `examples/change_codec.py`): a `set_video_format` write that genuinely succeeded raised `BMDVerificationError` under the default 3 s timeout because its echo arrived ~4.2 s late, exactly this pattern. Raising `echo_timeout_s` to 6.0 avoided that false negative — but then exposed a second, unrelated, genuine limitation underneath it (`set_recording_format` cannot retarget resolution to 4K DCI while ProRes is active on this camera — see `docs/settings.md` §16). Lesson for any model: a wider timeout can retire the *timing* hypothesis while leaving a real failure exposed underneath — don't stop investigating just because a longer timeout stops the error.
+BLE's dual-check strategy — echo primary, `CAMERA_STATUS` secondary, timeouts, buffer-before-write ordering, and the known lens-metadata-burst risk on `POCKET_6K_PRO v8.6` that can delay a genuine echo past its timeout — is fully documented in `docs/ble/session_and_verification.md`. See design principle 3 above for the transport-general statement of this rule.
 
 ---
 
-## Workflow: Adding Support for a New Camera (Reverse-Engineering Procedure)
+## Workflow: Adding Support for a New Camera / Adding a New Command
 
-This is the concrete, tool-by-tool procedure for bringing up a new `(MODEL_KEY, FIRMWARE)`
-pair — which tool to run in which order, and what profile change each step produces.
-Follow the phases in order; each one depends on the profile state the previous phase left
-behind. Derived from three bring-ups at different stages:
-
-| Bring-up | Stage reached | Evidentiary write-up |
-|---|---|---|
-| `POCKET_6K_G2 v7.9` | All phases (frozen — hardware upgraded away, see the registry) | `docs/recording.md`, `docs/settings.md` |
-| `POCKET_6K_PRO v8.6` | Phase 2 done; Phase 3 in progress — resolutions, dimension_enums, and codec ids transcribed, nothing yet promoted past CANDIDATE | `docs/settings.md` §15–§17 |
-| `POCKET_6K_G2 v8.6` | **Phase 3 complete for all three settings families** (2026-07-30) — the current primary reference, and the live worked example of the firmware-upgrade variant below. Steps 9-13 all done: passive sweep, fps sweep, full `dimension_enum` sweep (all 8 confirmed), nine manual confirming writes, and a 432/480 `sweep_camera_format.py` round trip promoted `codec_quality`/`video_format`/`recording_format` to VERIFIED. Two systematic gaps found (ProRes/4K DCI retarget; BRAW/6K/high-fps) mirror PRO precedents but aren't yet promoted to guarded fields — evidence bar not yet met on this firmware. Phase 4 (whole-profile `_meta.status` promotion) still open: `capabilities`/`storage` remain unpopulated | `docs/recording.md` ("Per-camera status"), `docs/settings.md` §18, §18.7, §18.9, §18.10 |
-
-`docs/command_discovery.md` covers Phase 2's tooling; `docs/settings.md` covers Phase 3's.
-
-### Which camera a script talks to
-
-Three conventions to keep straight — the defaults all point at the primary reference
-(`POCKET_6K_G2 v8.6`), so **any of these run with no flags will target it**:
-
-| Script group | How the camera is selected |
-|---|---|
-| `tools/query/*`, `tools/sniffers/*`, `tools/control/send_record_command.py` | `--model-key`/`--firmware` flags, **defaulted** via module-level `DEFAULT_MODEL_KEY`/`DEFAULT_FIRMWARE` constants |
-| `tools/control/discover_command.py`, `send_settings_command.py`, `sweep_dimension_enum.py`, `sweep_camera_format.py` | `--model-key`/`--firmware` flags, **`required=True` — no default**. Deliberate: these change real camera state or emit profile blocks, so the target is never implicit |
-| `examples/*.py` | No CLI flags at all — `MODEL_KEY`/`FIRMWARE` are module-level constants near the top of the file. Edit them, or uncomment the alternate model's line where one is already present |
-
-When bringing up a *non-primary* camera, pass `--model-key`/`--firmware` explicitly on
-every command in the phases below (as they are written) rather than relying on the
-default — a defaulted run against the wrong camera is silent, not an error.
-
-### Two variants of this procedure
-
-**A brand-new model** (e.g. `URSA_BROADCAST_G2 v7.5`) starts from nothing: every phase
-runs in full, with no prior expectations about any value.
-
-**A new firmware for a model already reverse-engineered** (e.g. `POCKET_6K_G2`
-v7.9 → v8.6, the 2026-07-27 upgrade) is the same procedure with one difference in
-posture, not in steps. Design principle 6 still forbids inheriting any protocol value
-from the old profile — but the old profile is the best available *hypothesis source*,
-so seed each phase's candidates from it and let the camera confirm or refute them.
-Phase 2 step 8.2's `--values 2,0 --reserved 1,0` is exactly this pattern in practice.
-Two concrete rules for this variant:
-
-- `_meta.ble_name` **does** carry over when it is the same physical unit — the
-  advertisement name identifies the hardware, not the firmware. Re-confirm it with
-  `examples/scan_camera.py` (Phase 1 step 2) anyway; that step is cheap and the whole
-  bring-up depends on it.
-- Nothing else carries over. Every codec id, dimension_enum, category/parameter pair,
-  and fps encoding must be re-sniffed on the new firmware even when you fully expect
-  it to be unchanged, and each lands in the new profile with its own `provenance`
-  naming its own capture.
-
-### Phase 1 — Profile scaffold and transport sanity
-
-1. **Scaffold the profile.** Add `payloads/models/<MODEL_KEY>_<FIRMWARE>.json` with only
-   `_meta` (`model`, `model_key`, `firmware`, `ble_name` — the real advertised name, never
-   a placeholder — `status: "UNVERIFIED"`) and `ble` populated. No `commands` yet.
-   Validate against `payloads/schema.json` — only `_meta` is schema-required, so a
-   two-section scaffold is a valid profile and loads cleanly (`commands` is simply `{}`).
-   `POCKET_6K_G2_v8.6.json` is the reference for what this stage looks like.
-
-   **Register it in `KNOWN_PROFILES` now, not at Phase 4**, if any Python default is
-   going to point at this camera (see step 14 — the rule is only ever "never before the
-   JSON exists"; the scaffold *is* the JSON). Two consequences to expect immediately:
-   - Every `KNOWN_PROFILES`-parametrized unit test starts running against the scaffold.
-     Tests asserting sniffed content must skip a profile that has none rather than
-     demand it — `test_every_known_profile_resolves_write_margin_warning_storage_signal`
-     skips when `profile.storage` is empty, and is the pattern to copy.
-   - Loading it logs the design-principle-8 `status is UNVERIFIED` warning on every run.
-     That is working as intended for the whole bring-up; it clears at Phase 4.
-2. **Confirm discoverability** — `python examples/scan_camera.py` (after setting
-   `MODEL_KEY`/`FIRMWARE`). Confirms the camera actually advertises under `ble_name`.
-3. **Confirm a bare connect works** — `python examples/connect_to_camera.py`. Connect,
-   hold, disconnect — nothing else.
-4. **Confirm GATT UUIDs match expectations** —
-   `python tools/query/ble_services_chars.py --model-key <MODEL_KEY> --firmware <FIRMWARE>`.
-   If a characteristic UUID differs from `constants.py`'s default, override it under the
-   profile's `ble` section (e.g. `characteristic_incoming`) — never edit `constants.py`
-   for a per-model value (design principle 1).
-5. **Check GAP metadata readability** —
-   `python tools/query/gap_meta_data.py --model-key <MODEL_KEY> --firmware <FIRMWARE>`.
-   Record the result in `gap_meta_data.readable`. Known hazard: on `POCKET_6K_G2 v7.9`,
-   reading GAP characteristics disconnects the camera — if the new model does the same,
-   set `readable: false` and don't retry the read anywhere else for this camera.
-   **That hazard is firmware-specific, not model-specific** — re-checked on
-   `POCKET_6K_G2 v8.6` (2026-07-28) on the same physical unit and it did not reproduce:
-   both GAP characteristics read back cleanly with no disconnect, so that profile
-   records `readable: true` where v7.9 records `false`. A worked example of the
-   firmware-upgrade rule above: the old profile's value was a hypothesis, and the
-   camera refuted it.
-6. **Check device-info metadata readability** —
-   `python tools/query/device_meta_data.py --model-key <MODEL_KEY> --firmware <FIRMWARE>`.
-   Record the result in `device_info_meta_data.readable`.
-7. **Confirm notifications stream** — `python examples/monitor_incoming.py` (after
-   setting `MODEL_KEY`/`FIRMWARE`). Watch raw INCOMING_CONTROL bytes while performing a
-   few obvious actions on the camera body — gives a first feel for the protocol before
-   any targeted sniffing begins.
-
-### Phase 2 — Recording start/stop
-
-8. Sniff → discover → paste → verify → session round-trip:
-   1. `python tools/sniffers/sniffer_recording.py --model-key <MODEL_KEY> --firmware <FIRMWARE>`
-      — passive capture while the operator starts/stops recording on the camera body.
-   2. `python tools/control/discover_command.py --model-key <MODEL_KEY> --firmware <FIRMWARE> --label recording --from-capture <path to the capture saved by step 8.1> --values 2,0 --reserved 1,0 --outcomes start,stop`
-      — seeds candidates from the passive capture, sweeps them with operator confirmation
-      per candidate, emits the ready-to-paste `commands.recording` block (see
-      `docs/command_discovery.md`). `--reserved 1,0` tries the G2's known reserved byte
-      first; a genuinely new family may need different candidates.
-
-      Two failure modes seen for real on the `POCKET_6K_G2 v8.6` run (2026-07-29):
-      - **The right triple can be filtered out of the seeded list.** `--from-capture`
-        drops triples present in *every* window as ambient telemetry, but a start/stop
-        pair reports the same `(category, parameter)` in *both* windows — so the
-        recording family itself was excluded and all three offered candidates were
-        dead ends. **Fixed 2026-07-29**: a triple whose payload is stable within each
-        window but differs between them is now recognised as a state report and kept
-        (`docs/command_discovery.md`). If a family still goes missing from the seeded
-        list, seed it manually with `--category`/`--parameter`/`--data-type` — the
-        capture shows you the coordinates.
-      - **A reserved-byte-indifferent family can't be emitted.** If the camera acts
-        on more than one reserved byte, two candidates confirm the same outcome and
-        no single block can describe them — a `commands` entry carries one scalar
-        `reserved`. The tool prints a summary of every confirmation with its echo
-        state and exits 1 (it does not emit, and does not traceback). Resolve it by
-        hand: prefer the reserved value with a clean wire echo for every outcome, and
-        record the indifference in `provenance.notes`.
-   3. Paste the emitted block into the profile's `commands.recording`, then
-      `pytest tests/unit` — no Python code should need to change; the protocol layer
-      already handles the recording category generically.
-   4. `python tools/control/send_record_command.py --model-key <MODEL_KEY> --firmware <FIRMWARE>`
-      — deterministic active send-then-capture, confirming the pasted block's echo on
-      demand rather than waiting to catch it inside a passive window.
-   5. `python examples/record_start_stop.py` (after setting `MODEL_KEY`/`FIRMWARE`) — the
-      real `CameraSession.record_start()`/`record_stop()` round trip with echo
-      verification. Passing this promotes `commands.recording.provenance.status` to
-      `"VERIFIED"`.
-
-### Phase 3 — Settings: codec, quality, resolution, FPS
-
-9. **Sniff all three families passively**, one capture window per concrete setting so
-   each result is unambiguously attributable:
-   ```
-   python tools/sniffers/sniffer_settings.py --model-key <MODEL_KEY> --firmware <FIRMWARE> \
-       --actions res_HD,res_UHD,res_4K_DCI,codec_prores,codec_braw,quality_variant_change,fps_change
-   ```
-   (adjust the action list to the model's actual resolutions/codecs). The operator
-   performs each change on the camera body between prompts. This is expected to confirm
-   `codec_quality` (`0x0A/0x00`) and `recording_format` (`0x01/0x09`) reports — on the G2,
-   `video_format`'s own channel (`0x01/0x00`) never reported passively at all, so its
-   `dimension_enum` values could not be captured this way; assume the same here unless
-   proven otherwise, and probe them actively next.
-10. **Probe every (resolution, codec) `dimension_enum` actively**, one candidate at a
-    time:
-    ```
-    python tools/control/send_settings_command.py --model-key <MODEL_KEY> --firmware <FIRMWARE> \
-        --packet video_format --fps <fps> --dimension-enum 0x<candidate>
-    ```
-    Typed-yes gated; the operator watches the body, and the resulting `0x01/0x09` report's
-    width/height plus the on-screen codec identifies what the enum selects. Repeat per
-    candidate until every needed (resolution, codec) pair has a confirmed enum, or the
-    search is exhausted for a pair like the G2's 4K DCI/ProRes (see `docs/settings.md`
-    §7-§9 for that precedent and the two-step `set_camera_format` proxy workaround it
-    needs when a gap can't be closed). For an **exhaustive** sweep across many untried
-    candidates in one connected session — e.g. hunting a still-missing enum like
-    ProRes/4K DCI — use `tools/control/sweep_dimension_enum.py` instead of repeating
-    single-candidate sends by hand: it decodes each result from the wire automatically
-    (`--target-resolution`/`--target-codec`) rather than requiring the operator to read
-    the on-screen display, which is known-unreliable on at least one camera (see below).
-    See `docs/active_camera_control.md` for the full writeup.
-    **The G2's proxy workaround is not guaranteed to generalize:**
-    on `POCKET_6K_PRO v8.6`, the equivalent proxy workaround's second step
-    (`set_recording_format` retargeting resolution within the proxied-to codec) never
-    confirms for ProRes/4K DCI, confirmed 2/2 via real `CameraSession` round trips —
-    not a G2 pattern to assume elsewhere (see `docs/settings.md` §16). A passive
-    capture of the camera reaching the same state through its own body menu then
-    confirmed the target state itself is real and correctly held/reported by the
-    camera (§16 addendum) — so this is a gap in the write path this codebase uses,
-    not proof the camera-side combination is unsupported. Don't assume a retarget
-    failure like this means "unreachable" without checking whether the camera can
-    be observed in that state at all.
-11. **Transcribe confirmed values into the profile** — `commands.codec_quality` /
-    `commands.video_format` / `commands.recording_format`, plus the `codecs` /
-    `resolutions` / `fps_modes` lookup tables. Nothing may be copied from another model's
-    profile (design principle 6); every value must come from this model's own capture.
-12. **Confirm each family's write+echo cycle**, one deterministic active send per family:
-    ```
-    python tools/control/send_settings_command.py --model-key <MODEL_KEY> --firmware <FIRMWARE> \
-        --packet codec_quality --codec <codec> --variant <variant>
-    python tools/control/send_settings_command.py --model-key <MODEL_KEY> --firmware <FIRMWARE> \
-        --packet video_format --resolution <resolution> --codec <codec> --fps <fps>
-    python tools/control/send_settings_command.py --model-key <MODEL_KEY> --firmware <FIRMWARE> \
-        --packet recording_format --resolution <resolution> --fps <fps>
-    ```
-    Add `--repeat 2` to any of these to also probe that family's redundant-write echo
-    behavior (send the identical command twice; compare whether the second window shows
-    `(none observed)`) before relying on a `last_known_*` no-op guard for it in
-    `session.py` — every family went silent on a repeated identical write on the G2
-    (`docs/settings.md` §11, §14), but that must be reconfirmed per model, not assumed.
-13. **Session round-trip** — `python examples/change_codec.py` (after setting
-    `MODEL_KEY`/`FIRMWARE`). Runs `CameraSession.set_camera_format()`, which orchestrates
-    all three writes with echo verification. Passing this promotes all three families'
-    `provenance.status` to `"VERIFIED"`.
-
-    This confirms one combination. Before trusting the profile's full `codecs`/
-    `resolutions`/`fps_modes` tables, run `tools/control/sweep_camera_format.py
-    --model-key <MODEL_KEY> --firmware <FIRMWARE> --dry-run` first to see the full
-    combination count, then a real (possibly narrowed) sweep — it runs
-    `set_camera_format()` across every combination the tables claim is supported and
-    flags any that never confirm, the same shape of gap `POCKET_6K_PRO v8.6`'s
-    ProRes/4K DCI combination turned out to be (`docs/settings.md` §16) after being
-    found by accident rather than checked systematically. An `unconfirmed` result is a
-    candidate for a `known_unreachable` entry, not an automatic one — it still needs
-    the same real-hardware follow-up that investigation took (see
-    `docs/active_camera_control.md`) before being written into the profile.
-
-### Phase 4 — Finish
-
-14. Add the `(MODEL_KEY, FIRMWARE)` tuple to `KNOWN_PROFILES` in `camera_profile.py`, if
-    Phase 1 step 1 didn't already. The rule is "never before the profile JSON exists"
-    (see "What Not To Do") — not "never before Phase 4".
-15. **Promote `_meta.status` to `"VERIFIED"`** now that every populated section has been
-    confirmed on real hardware. This is the whole-profile status; each command block's
-    own `provenance.status` was promoted as its phase completed.
-16. Run `pytest tests/unit` and `ruff check . && ruff format --check .` — both must pass
-    before committing.
-17. Update the camera registry table at the top of this file (status column, notes).
-
-#### If this camera becomes the primary reference
-
-Making a camera the primary reference is a separate, deliberate change — the registry
-table's "Primary reference" designation and every Python default must move together, or
-a defaulted run silently targets the old camera. The `POCKET_6K_G2` v7.9 → v8.6 move
-(2026-07-28) is the worked example:
-
-1. Repoint every default named in "Which camera a script talks to" above —
-   `DEFAULT_MODEL_KEY`/`DEFAULT_FIRMWARE` in `tools/query/`, `tools/sniffers/`, and
-   `tools/control/send_record_command.py`; `MODEL_KEY`/`FIRMWARE` in every
-   `examples/*.py`. Grep for the outgoing firmware string to confirm none were missed.
-2. Repoint the `MODEL_KEY`/`FIRMWARE` identity constants in the **mocked** unit tests
-   (`test_session.py`, `test_camera_controller.py`) — they are labels on
-   `_from_raw`/`SimpleNamespace` profiles, so this is free. Tests that call
-   `CameraProfile.for_model(...)` against a **real** JSON for its populated
-   `codecs`/`resolutions`/`fps_modes` tables must stay on the old profile until the new
-   one is populated (`test_send_settings_command.py`, `test_sweep_camera_format.py`,
-   `test_sweep_dimension_enum.py` are still on v7.9 for exactly this reason).
-3. Update the registry table: the new primary gets the **Primary reference** note, and
-   the outgoing one is marked `Frozen` with why it can no longer be tested and why it is
-   nonetheless kept (evidentiary record, and tests that still load it).
-4. Leave the `docs/` write-ups alone. They are the historical evidence for the camera
-   and firmware they were gathered on; a primary-reference move does not invalidate a
-   single finding in them, and rewriting them to the new firmware would fabricate
-   provenance.
-
-Every profile JSON change in this procedure needs a doc touch in the same commit, per the
-"Feature doc convention": `docs/recording.md` for Phase 2, `docs/settings.md` for Phase 3.
-
-### Phases not yet defined
-
-Photo capture, playback, and metadata have **no phase here** because no camera has
-completed them. The photo trigger itself is confirmed on two cameras, but with no
-BLE-observable confirmation signal it cannot satisfy design principle 3, so there is no
-repeatable procedure to write down yet — see `docs/photo_capture.md` §7/§9 for the open
-verification-strategy question that blocks it. `POCKET_6K_G2 v8.6`'s USB/HTTP media
-access is the most promising route to an out-of-band confirmation channel.
-
----
-
-## Workflow: Adding a New Command
-
-1. Capture the command via sniffer on the target camera/firmware
-2. Add protocol values (category, param, data type, payload encodings) to the profile JSON
-3. Add encoder function in `protocol/categories/<category>.py`
-4. Define the expected echo or `CAMERA_STATUS` mask for verification
-5. Expose the command through `session.py`
-6. Write unit test with a mocked BLE client — covers encode, send, echo, verify
-7. Test on real hardware before marking profile `VERIFIED`
+The full tool-by-tool reverse-engineering procedure — bringing up a new `(MODEL_KEY, FIRMWARE)` pair phase by phase, the two procedure variants (brand-new model vs. new firmware for an existing model), which camera a script talks to by default, and the checklist for adding a single new command to an already-brought-up camera — has moved to `docs/ble/reverse_engineering.md`. Read it before starting any new camera bring-up or adding a new BLE command.
 
 ---
 

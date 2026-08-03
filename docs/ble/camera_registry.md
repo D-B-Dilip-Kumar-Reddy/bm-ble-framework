@@ -1,0 +1,26 @@
+# Camera Registry
+
+Full evidentiary notes for every `(MODEL_KEY, FIRMWARE)` pair the repo tracks —
+moved verbatim from CLAUDE.md, which keeps a slim summary table pointing here.
+
+---
+
+| Model Key | Model Name | Firmware | Status | Notes |
+|---|---|---|---|---|
+| `POCKET_6K_G2` | Pocket Cinema Camera 6K G2 | v8.6 | In progress | **Primary reference.** The operator's physical unit was upgraded from v7.9 to v8.6 on 2026-07-27, so this is the only G2 firmware that can be tested against real hardware. **Phase 1 complete** (2026-07-28): GAP and device-info metadata are both `readable: true` here, unlike v7.9. **Phase 2 complete** (2026-07-29): `commands.recording` is `VERIFIED` — 3/3 echo-verified `CameraSession` cycles. Same coordinates as v7.9 but `reserved` is `0`, not `1` (both accepted; see `docs/ble/recording.md`), a live example of why design principle 6 forbids inheriting. **Phase 3 complete for all three settings families** (2026-07-30): step 9's passive sweep populated `codecs`, 7 of 8 `resolutions`, and the report-side coordinates of `codec_quality`/`recording_format` (all CANDIDATE at that point). `video_format` + a seed `fps_modes` were then added as explicit CANDIDATE hypotheses to unblock step 10. A follow-up dedicated fps sweep filled `fps_modes` to 8/8, with `60` initially recorded as a candidate ceiling after two silent sweeps — **retracted** after three standalone retries reported it cleanly twice, byte-identical (`docs/ble/settings.md` §18.7/§18.8, a live example of why a single silent window isn't enough to write a ceiling). Step 10's full `0x00`–`0x1F` `dimension_enum` sweep then confirmed all 8 enums, matching both `POCKET_6K_G2 v7.9`'s and `POCKET_6K_PRO v8.6`'s numbers exactly, and supplied HD's width/height (`docs/ble/settings.md` §18.9). Steps 12 and 13 (2026-07-30) then promoted `codec_quality`, `video_format`, and `recording_format` all to **VERIFIED**: nine manual confirming writes plus a 480-combination `sweep_camera_format.py` sweep via `CameraSession` (432 confirmed), exceeding the single-round-trip bar that promoted v7.9's equivalents (`docs/ble/settings.md` §18.10). That sweep also surfaced two systematic gaps shaped like precedents already established on the PRO — a ProRes/4K DCI retarget gap and a BRAW/6K/high-fps candidate ceiling. The 6K ceiling was **promoted the same day**: the operator confirmed on the camera's own UI that 6K doesn't offer 59.94/60fps, meeting design principle 7's evidence bar — `resolutions."6K".max_fps_int` is now `50` (`docs/ble/settings.md` §18.11). The ProRes/4K DCI gap was **promoted 2026-07-31** (`docs/ble/settings.md` §18.12): the operator ran the same three falsification hypotheses (data-type byte, `Operation.OFFSET`, exact fps/variant) that closed the PRO's identical gap, three times each from three different starting states and Sensor Area settings — all 9 attempts stayed silent — `resolutions."4K DCI".known_unreachable.ProRes` is now written. It also surfaced a discrepancy in `recording_format`'s `flags` field at UHD (two readings each way) — **resolved 2026-07-31** (`docs/ble/settings.md` §18.13): a dedicated passive Sensor Area capture showed the bit tracks the camera's independent Sensor Area setting under ProRes, not video resolution, fully explaining the earlier split. `_meta.status` stays UNVERIFIED — `capabilities`/`storage` are still entirely unpopulated on this firmware. All Python defaults (`DEFAULT_FIRMWARE` in `tools/`, `FIRMWARE` in `examples/`) point here |
+| `POCKET_6K_G2` | Pocket Cinema Camera 6K G2 | v7.9 | Frozen | Former primary reference; most reverse-engineered profile in the repo and still the reference for how a fully-populated profile looks. **No longer testable** — the physical unit was upgraded to v8.6, so nothing here can be re-confirmed or extended. Kept as-is for its evidentiary record and because the settings-table unit tests still load it |
+| `POCKET_6K_PRO` | Pocket Cinema Camera 6K Pro | v8.6 | In progress | Second target |
+| `URSA_BROADCAST_G2` | URSA Broadcast G2 | v7.5 | Planned | Different category/param combos expected |
+| `URSA_MINI_PRO_12K` | URSA Mini Pro 12K | v8.1 | Planned | Different category/param combos expected |
+| `POCKET_4K` | Pocket Cinema Camera 4K | v8.6 | Planned | |
+
+Start all new features with `POCKET_6K_G2 v8.6`. Add `POCKET_6K_PRO v8.6` second.
+
+v8.6 also brings the reason for the upgrade: the camera exposes its recorded video
+and photos to a PC over USB/HTTP. That gives photo capture and playback work an
+out-of-band verification channel that BLE alone never provided — see
+`docs/ble/photo_capture.md` §7/§9, where the absence of any BLE-observable photo
+confirmation is what currently blocks `CameraSession.capture_photo()`.
+
+The `ble_name` field in every profile JSON is the real BLE advertisement name broadcast by the camera — not a placeholder.
+

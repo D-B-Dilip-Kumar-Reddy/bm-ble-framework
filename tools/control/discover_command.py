@@ -12,11 +12,11 @@ confirmation before the first write, and asks the operator to confirm what
 the camera physically did after every candidate — the operator, not the
 echo, is the ground truth here.
 
-Workflow (see docs/command_discovery.md for the full writeup):
+Workflow (see docs/ble/command_discovery.md for the full writeup):
 
   A. Seed (category, parameter, data_type) — either from a saved passive
      capture (tools/sniffers/, --from-capture) or from CLI flags. The
-     [spec] tables in docs/protocol.md are the map for choosing seeds.
+     [spec] tables in docs/ble/protocol.md are the map for choosing seeds.
   B. Generate the candidate sweep (--values × --reserved) and confirm it.
   C. For each candidate: send, capture the response for --listen-seconds,
      show the decoded packets, ask the operator what the camera did.
@@ -32,7 +32,7 @@ Example — recording start/stop on the Pocket 6K Pro:
 
 Example — probing a void (payloadless) trigger, seeded manually because the
 2026-07-27 passive photo captures showed body-triggered stills produce no
-report at all to seed from (docs/photo_capture.md). A VOID sweep has no
+report at all to seed from (docs/ble/photo_capture.md). A VOID sweep has no
 payload axis, so --values is omitted and only reserved bytes are swept:
 
     python tools/control/discover_command.py \
@@ -41,7 +41,7 @@ payload axis, so --values is omitted and only reserved bytes are swept:
         --reserved 0,1 --outcomes photo_taken
 
 The tool never edits the profile JSON itself — paste the emitted block into
-payloads/models/<MODEL_KEY>_<FIRMWARE>.json and run `pytest tests/unit`
+payloads/models/<MODEL_KEY>/ble/<FIRMWARE>.json and run `pytest tests/unit`
 (the schema tests validate it immediately).
 """
 
@@ -73,10 +73,10 @@ from discovery import (  # noqa: E402
     seed_triples_from_capture,
 )
 
-from bmd_ble.camera_controller import BMDCameraController  # noqa: E402
-from bmd_ble.camera_profile import CameraProfile  # noqa: E402
-from bmd_ble.protocol.types import DataType  # noqa: E402
-from bmd_ble.scanner import scan_for_camera  # noqa: E402
+from bmd_camera.ble.camera_controller import BMDCameraController  # noqa: E402
+from bmd_camera.ble.protocol.types import DataType  # noqa: E402
+from bmd_camera.ble.scanner import scan_for_camera  # noqa: E402
+from bmd_camera.camera_profile import CameraProfile  # noqa: E402
 
 
 async def prompt(text: str) -> str:
@@ -259,7 +259,7 @@ def print_unemittable_summary(
     `reserved` (and one value per outcome) and the confirmations disagree.
 
     That disagreement can be either of two very different things, and the tool
-    cannot tell them apart — only the operator can (docs/command_discovery.md):
+    cannot tell them apart — only the operator can (docs/ble/command_discovery.md):
     a genuine finding (the camera really does act on more than one reserved
     byte — established on both cameras for photo capture and on
     POCKET_6K_G2 v8.6 for recording), or an unreliable read (confirming out of
@@ -287,7 +287,7 @@ def print_unemittable_summary(
         "the indifference in provenance.notes. If instead the confirmations look\n"
         "undiscriminating, re-run and verify each one against an independent\n"
         "signal (an on-camera counter, not an impression) before answering.\n"
-        "See docs/command_discovery.md for both precedents."
+        "See docs/ble/command_discovery.md for both precedents."
     )
 
 

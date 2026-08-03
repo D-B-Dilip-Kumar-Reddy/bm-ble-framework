@@ -1,10 +1,10 @@
-"""Unit tests for :mod:`bmd_ble.timecode`."""
+"""Unit tests for :mod:`bmd_camera.ble.timecode`."""
 
 import pytest
 
-from bmd_ble.protocol.codec import CommandHeader, Operation, encode_packet
-from bmd_ble.protocol.types import DataType
-from bmd_ble.timecode import (
+from bmd_camera.ble.protocol.codec import CommandHeader, Operation, encode_packet
+from bmd_camera.ble.protocol.types import DataType
+from bmd_camera.ble.timecode import (
     TIMECODE_CATEGORY,
     TIMECODE_PARAMETER,
     Timecode,

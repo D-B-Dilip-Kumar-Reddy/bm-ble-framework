@@ -1,6 +1,6 @@
 # bmd-camera-control
 
-Python package (`bmd_ble`) for automated Blackmagic Design camera control over
+Python package (`bmd_camera`) for automated Blackmagic Design camera control over
 Bluetooth Low Energy: record start/stop, settings changes, photo capture,
 playback, metadata, and storage monitoring — driven entirely from Python
 scripts.
@@ -32,7 +32,7 @@ the documentation map below.
 ## Target operations
 
 - Record start / stop *(implemented — echo-verified on real hardware)*
-- Settings changes: codec, quality, resolution, FPS *(implemented — CANDIDATE values from an external reverse-engineering doc, pending re-verification on real hardware; see [`docs/settings.md`](docs/settings.md))*
+- Settings changes: codec, quality, resolution, FPS *(implemented — CANDIDATE values from an external reverse-engineering doc, pending re-verification on real hardware; see [`docs/ble/settings.md`](docs/ble/settings.md))*
 - Photo capture *(planned)*
 - Video playback / gallery browsing *(planned)*
 - Video and photo metadata capture *(planned)*
@@ -51,7 +51,7 @@ pip install -r requirements-dev.txt    # development (tests, lint)
 
 ## Quick start
 
-User scripts import from `bmd_ble` — the public API is `CameraSession`
+User scripts import from `bmd_camera` — the public API is `CameraSession`
 (async context manager) plus `CameraProfile`/`get_profile`/`KNOWN_PROFILES`
 and `BMDVerificationError`. Example scripts:
 
@@ -73,17 +73,17 @@ camera — use deliberately.
 | Document | Covers |
 |---|---|
 | [`CLAUDE.md`](CLAUDE.md) | Project reference: architecture, package structure, design principles, camera registry, workflows for adding cameras/commands, testing and logging conventions |
-| [`docs/protocol.md`](docs/protocol.md) | Full protocol reference — SDI categories/parameters, data types, operations, BLE GATT layer, spec-vs-sniffer divergences |
-| [`docs/packet_structure_and_constants.md`](docs/packet_structure_and_constants.md) | Packet header layout and the `protocol/codec.py` design |
-| [`docs/payload_profiles.md`](docs/payload_profiles.md) | Per-camera profile JSONs, schema validation, provenance |
-| [`docs/session_and_verification.md`](docs/session_and_verification.md) | `CameraSession`, echo-based write verification |
-| [`docs/recording.md`](docs/recording.md) | The record start/stop command family |
-| [`docs/settings.md`](docs/settings.md) | Codec/quality/resolution/FPS families, the BRAW↔ProRes switch, and their verification runbook |
-| [`docs/winrt_ble_connection_hardening.md`](docs/winrt_ble_connection_hardening.md) | Connection management on Windows/WinRT: reconnect loop, liveness detection, known limitations |
-| [`docs/event_subscription_and_logging.md`](docs/event_subscription_and_logging.md) | Notification subscriptions and per-session file logging |
-| [`docs/sniffer_capture_engine.md`](docs/sniffer_capture_engine.md) | Reusable BLE capture engine behind the reverse-engineering tools |
-| [`docs/active_camera_control.md`](docs/active_camera_control.md) | Active send-and-capture tooling (`tools/control/`) |
-| [`docs/command_discovery.md`](docs/command_discovery.md) | Guided discovery of new commands on real hardware |
+| [`docs/ble/protocol.md`](docs/ble/protocol.md) | Full protocol reference — SDI categories/parameters, data types, operations, BLE GATT layer, spec-vs-sniffer divergences |
+| [`docs/ble/packet_structure_and_constants.md`](docs/ble/packet_structure_and_constants.md) | Packet header layout and the `protocol/codec.py` design |
+| [`docs/ble/payload_profiles.md`](docs/ble/payload_profiles.md) | Per-camera profile JSONs, schema validation, provenance |
+| [`docs/ble/session_and_verification.md`](docs/ble/session_and_verification.md) | `CameraSession`, echo-based write verification |
+| [`docs/ble/recording.md`](docs/ble/recording.md) | The record start/stop command family |
+| [`docs/ble/settings.md`](docs/ble/settings.md) | Codec/quality/resolution/FPS families, the BRAW↔ProRes switch, and their verification runbook |
+| [`docs/ble/winrt_ble_connection_hardening.md`](docs/ble/winrt_ble_connection_hardening.md) | Connection management on Windows/WinRT: reconnect loop, liveness detection, known limitations |
+| [`docs/ble/event_subscription_and_logging.md`](docs/ble/event_subscription_and_logging.md) | Notification subscriptions and per-session file logging |
+| [`docs/ble/sniffer_capture_engine.md`](docs/ble/sniffer_capture_engine.md) | Reusable BLE capture engine behind the reverse-engineering tools |
+| [`docs/ble/active_camera_control.md`](docs/ble/active_camera_control.md) | Active send-and-capture tooling (`tools/control/`) |
+| [`docs/ble/command_discovery.md`](docs/ble/command_discovery.md) | Guided discovery of new commands on real hardware |
 
 ## Development
 

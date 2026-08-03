@@ -1,9 +1,9 @@
 import asyncio
 import logging
 
-from bmd_ble import CameraProfile
-from bmd_ble.camera_controller import BMDCameraController
-from bmd_ble.scanner import scan_for_camera
+from bmd_camera import CameraProfile
+from bmd_camera.ble.camera_controller import BMDCameraController
+from bmd_camera.ble.scanner import scan_for_camera
 
 MODEL_KEY = "POCKET_6K_G2"
 FIRMWARE = "v8.6"

@@ -1,4 +1,4 @@
-"""Unit tests for :mod:`bmd_ble.session`.
+"""Unit tests for :mod:`bmd_camera.ble.session`.
 
 Mocks BMDCameraController and NotificationRouter — no real BLE. The profile
 is a real CameraProfile built via the lenient `_from_raw` (see
@@ -12,13 +12,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-import bmd_ble.session as session_module
-from bmd_ble.camera_profile import CameraProfile
-from bmd_ble.exceptions import BMDUnsupportedError, BMDVerificationError
-from bmd_ble.protocol.codec import CommandHeader, Operation, encode_packet
-from bmd_ble.protocol.types import DataType
-from bmd_ble.session import CameraSession
-from bmd_ble.timecode import TIMECODE_CATEGORY, TIMECODE_PARAMETER, Timecode
+import bmd_camera.ble.session as session_module
+from bmd_camera.ble.protocol.codec import CommandHeader, Operation, encode_packet
+from bmd_camera.ble.protocol.types import DataType
+from bmd_camera.ble.session import CameraSession
+from bmd_camera.ble.timecode import TIMECODE_CATEGORY, TIMECODE_PARAMETER, Timecode
+from bmd_camera.camera_profile import CameraProfile
+from bmd_camera.exceptions import BMDUnsupportedError, BMDVerificationError
 
 MODEL_KEY = "POCKET_6K_G2"
 FIRMWARE = "v8.6"
@@ -333,7 +333,7 @@ class TestAenter:
         """A just-connected camera floods the link with an initial info dump;
         __aenter__ must wait connect_settle_s (after subscribing, before
         returning) so the first command isn't sent into that backlog — see
-        real-hardware evidence in docs/session_and_verification.md."""
+        real-hardware evidence in docs/ble/session_and_verification.md."""
         fake_controller = AsyncMock()
         with (
             patch.object(
@@ -357,7 +357,7 @@ class TestObserveRecordingState:
     autonomously stop recording without us ever sending a stop command.
     `_observe_recording_state` is what lets CameraSession notice this from
     the notification stream instead of only finding out the next time
-    record_stop() is called. See docs/recording.md."""
+    record_stop() is called. See docs/ble/recording.md."""
 
     def test_updates_is_recording_from_any_recording_notification(self):
         session = make_session(make_profile())
@@ -490,7 +490,7 @@ class TestRecordStopNoOp:
 
 
 class TestObserveWriteMargin:
-    """CANDIDATE signal (see docs/recording.md): a storage notification
+    """CANDIDATE signal (see docs/ble/recording.md): a storage notification
     observed to precede a camera-initiated stop on a known-slow SD card.
     `_observe_write_margin` tracks it; `_observe_recording_state` only
     attaches it to an unexpected stop when it fired recently enough, and
@@ -583,7 +583,7 @@ class TestObserveWriteMargin:
 def make_settings_profile(**overrides) -> CameraProfile:
     """A real CameraProfile carrying the three CANDIDATE settings command
     blocks plus the codecs/resolutions/fps_modes lookup tables they consume
-    (mirroring POCKET_6K_G2_v7.9.json — see docs/settings.md)."""
+    (mirroring POCKET_6K_G2_v7.9.json — see docs/ble/settings.md)."""
     raw = {
         "_meta": {"model": "Pocket 6K G2", "ble_name": "A:TEST"},
         "commands": {
@@ -806,7 +806,7 @@ class TestSetCodecQuality:
 
     @pytest.mark.asyncio
     async def test_is_a_noop_when_already_at_the_target(self):
-        """Real-hardware regression (docs/settings.md §11): a video_format
+        """Real-hardware regression (docs/ble/settings.md §11): a video_format
         switch resets the family's quality to a remembered value, and
         requesting that same value again used to raise a spurious
         BMDVerificationError. last_known_codec_variant (notification-
@@ -899,7 +899,7 @@ class TestSetVideoFormat:
 
     @pytest.mark.asyncio
     async def test_succeeds_on_codec_quality_channel_echo(self):
-        """Real-hardware regression (docs/settings.md §10): a codec-only
+        """Real-hardware regression (docs/ble/settings.md §10): a codec-only
         switch (same resolution/fps, different family) leaves the
         mode-notify payload byte-identical to what NotificationRouter
         already saw, so it gets filtered as a stale duplicate — the
@@ -978,7 +978,7 @@ class TestSetVideoFormat:
 
     @pytest.mark.asyncio
     async def test_raises_unsupported_before_writing(self):
-        from bmd_ble.exceptions import BMDUnsupportedError
+        from bmd_camera.exceptions import BMDUnsupportedError
 
         session = make_session(make_settings_profile())
 
@@ -990,7 +990,7 @@ class TestSetVideoFormat:
     @pytest.mark.asyncio
     async def test_raises_unsupported_fps_before_writing(self):
         """resolutions.<name>.max_fps_int is a real hardware ceiling (e.g.
-        POCKET_6K_PRO v8.6's 6K topping out at 50, docs/settings.md) — a
+        POCKET_6K_PRO v8.6's 6K topping out at 50, docs/ble/settings.md) — a
         different flavor of capability check than known_unreachable, but
         the same fail-fast-before-any-write contract."""
         profile = make_settings_profile(
@@ -1058,7 +1058,7 @@ class TestSetVideoFormat:
 
     @pytest.mark.asyncio
     async def test_is_a_noop_when_family_and_format_already_known(self):
-        """Real-hardware regression (docs/settings.md §14, 7/7 --repeat 2
+        """Real-hardware regression (docs/ble/settings.md §14, 7/7 --repeat 2
         runs): requesting the (resolution, codec, fps) the camera is
         already in produces no echo on any channel, mirroring
         set_codec_quality's §11 finding. The guard reuses
@@ -1130,7 +1130,7 @@ class TestSetRecordingFormat:
     @pytest.mark.asyncio
     async def test_raises_unsupported_fps_before_writing(self):
         """Same max_fps_int hardware-ceiling check as set_video_format's
-        (docs/settings.md's 6K finding) — recording_format also takes
+        (docs/ble/settings.md's 6K finding) — recording_format also takes
         (resolution, fps) directly and can be called independently."""
         profile = make_settings_profile(
             resolutions={
@@ -1222,7 +1222,7 @@ class TestSetRecordingFormat:
 
     @pytest.mark.asyncio
     async def test_is_a_noop_when_already_at_the_target(self):
-        """Real-hardware regression (docs/settings.md §14, 5/5 --repeat 2
+        """Real-hardware regression (docs/ble/settings.md §14, 5/5 --repeat 2
         runs): requesting the (resolution, fps) the camera is already at
         produces no echo at all, mirroring set_codec_quality's §11 finding.
         last_known_recording_format (notification-derived) lets this be
@@ -1395,7 +1395,7 @@ class TestSetCameraFormat:
 class TestSetCameraFormatKnownUnreachable:
     """A profile's resolutions.<name>.known_unreachable map (populated only
     after real-hardware evidence exhausts every write-value hypothesis, e.g.
-    POCKET_6K_PRO v8.6's ProRes/4K DCI gap, docs/settings.md §16) must stop
+    POCKET_6K_PRO v8.6's ProRes/4K DCI gap, docs/ble/settings.md §16) must stop
     set_camera_format before any write — not surface as a confusing
     BMDVerificationError after burning a full echo-timeout sequence."""
 

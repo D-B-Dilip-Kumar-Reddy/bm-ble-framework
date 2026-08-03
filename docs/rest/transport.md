@@ -632,7 +632,7 @@ at `50` while `6K 2.4:1` reaches `60`. Independently confirmed on this camera's 
 connection, not copied from the G2 run — and itself informative: it suggests the 6K G2
 and 6K Pro share the same sensor and recording pipeline, differing in body features
 (ND filter, physical controls) rather than recording capability. Two BLE findings
-originally established *on this camera* (`docs/settings.md` §16, §17.1) now have a third
+originally established *on this camera* (`docs/ble/settings.md` §16, §17.1) now have a third
 independent confirmation from a channel the original BLE work never had — see the
 addenda in those sections and in `payloads/models/POCKET_6K_PRO_v8.6.json`.
 

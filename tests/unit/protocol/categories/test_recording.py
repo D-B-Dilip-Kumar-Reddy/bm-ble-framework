@@ -1,22 +1,22 @@
-"""Unit tests for :mod:`bmd_ble.protocol.categories.recording`.
+"""Unit tests for :mod:`bmd_camera.ble.protocol.categories.recording`.
 
 These tests exercise generic encode/decode mechanics, not model-specific
 truth. ``CATEGORY``/``PARAMETER`` happen to coincide with the real,
 reverse-engineered POCKET_6K_G2 v7.9 values (see
-payloads/models/POCKET_6K_G2_v7.9.json and docs/recording.md) but that's
+payloads/models/POCKET_6K_G2_v7.9.json and docs/ble/recording.md) but that's
 incidental to what's tested here.
 """
 
 import pytest
 
-from bmd_ble.protocol.categories.recording import (
+from bmd_camera.ble.protocol.categories.recording import (
     decode_recording_state,
     encode_record_start,
     encode_record_stop,
     is_recording_state_echo,
 )
-from bmd_ble.protocol.codec import Operation, decode_packet
-from bmd_ble.protocol.types import DataType
+from bmd_camera.ble.protocol.codec import Operation, decode_packet
+from bmd_camera.ble.protocol.types import DataType
 
 CATEGORY = 0x0A
 PARAMETER = 0x01

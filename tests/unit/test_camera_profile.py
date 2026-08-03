@@ -5,7 +5,7 @@ Unit tests for CameraProfile dataclass, schema validation, and model JSON
 loading.
 
 Tests run without hardware — they verify that the real profile JSONs conform
-to payloads/schema.json, that CameraProfile resolves command blocks into
+to payloads/ble_schema.json, that CameraProfile resolves command blocks into
 CommandSpec accurately, and that malformed profiles raise clear errors at
 load time rather than silently using defaults.
 
@@ -24,14 +24,14 @@ import logging
 
 import pytest
 
-from bmd_ble.camera_profile import (
+from bmd_camera.ble.protocol.types import DataType
+from bmd_camera.camera_profile import (
     KNOWN_PROFILES,
     CameraProfile,
     CommandSpec,
     StorageSignalSpec,
     validate_profile,
 )
-from bmd_ble.protocol.types import DataType
 
 
 def make_valid_raw(**overrides) -> dict:
@@ -102,12 +102,11 @@ class TestKnownProfiles:
 class TestProfileLoading:
     def test_loads_valid_profile(self, tmp_path, monkeypatch):
         models_dir = tmp_path / "models"
-        models_dir.mkdir(parents=True)
+        ble_dir = models_dir / "POCKET_6K_G2" / "ble"
+        ble_dir.mkdir(parents=True)
         profile_data = make_valid_raw()
-        (models_dir / "POCKET_6K_G2_v7.9.json").write_text(
-            json.dumps(profile_data), encoding="utf-8"
-        )
-        monkeypatch.setattr("bmd_ble.camera_profile.MODELS_DIR", models_dir)
+        (ble_dir / "v7.9.json").write_text(json.dumps(profile_data), encoding="utf-8")
+        monkeypatch.setattr("bmd_camera.camera_profile.MODELS_DIR", models_dir)
 
         profile = CameraProfile.for_model("POCKET_6K_G2", "v7.9")
 
@@ -121,31 +120,31 @@ class TestProfileLoading:
     def test_missing_file_raises_file_not_found_error(self, tmp_path, monkeypatch):
         models_dir = tmp_path / "models"
         models_dir.mkdir(parents=True)
-        monkeypatch.setattr("bmd_ble.camera_profile.MODELS_DIR", models_dir)
+        monkeypatch.setattr("bmd_camera.camera_profile.MODELS_DIR", models_dir)
 
         with pytest.raises(FileNotFoundError, match="No model JSON found"):
             CameraProfile.for_model("UNKNOWN_CAMERA", "v1.0")
 
     def test_meta_identity_mismatch_raises(self, tmp_path, monkeypatch):
         models_dir = tmp_path / "models"
-        models_dir.mkdir(parents=True)
+        ble_dir = models_dir / "POCKET_6K_PRO" / "ble"
+        ble_dir.mkdir(parents=True)
         raw = make_valid_raw()
-        # File named as PRO v8.6, but _meta declares the G2 v7.9.
-        (models_dir / "POCKET_6K_PRO_v8.6.json").write_text(json.dumps(raw), encoding="utf-8")
-        monkeypatch.setattr("bmd_ble.camera_profile.MODELS_DIR", models_dir)
+        # File located as PRO v8.6, but _meta declares the G2 v7.9.
+        (ble_dir / "v8.6.json").write_text(json.dumps(raw), encoding="utf-8")
+        monkeypatch.setattr("bmd_camera.camera_profile.MODELS_DIR", models_dir)
 
         with pytest.raises(ValueError, match="_meta.model_key"):
             CameraProfile.for_model("POCKET_6K_PRO", "v8.6")
 
     def test_unverified_profile_logs_warning(self, tmp_path, monkeypatch, caplog):
         models_dir = tmp_path / "models"
-        models_dir.mkdir(parents=True)
-        (models_dir / "POCKET_6K_G2_v7.9.json").write_text(
-            json.dumps(make_valid_raw()), encoding="utf-8"
-        )
-        monkeypatch.setattr("bmd_ble.camera_profile.MODELS_DIR", models_dir)
+        ble_dir = models_dir / "POCKET_6K_G2" / "ble"
+        ble_dir.mkdir(parents=True)
+        (ble_dir / "v7.9.json").write_text(json.dumps(make_valid_raw()), encoding="utf-8")
+        monkeypatch.setattr("bmd_camera.camera_profile.MODELS_DIR", models_dir)
 
-        with caplog.at_level(logging.WARNING, logger="bmd_ble.camera_profile"):
+        with caplog.at_level(logging.WARNING, logger="bmd_camera.camera_profile"):
             CameraProfile.for_model("POCKET_6K_G2", "v7.9")
 
         assert any("UNVERIFIED" in record.message for record in caplog.records)
@@ -155,13 +154,14 @@ class TestProfileLoading:
         log every non-VERIFIED commands block already gets — the logging
         loop must walk storage too, not just commands."""
         models_dir = tmp_path / "models"
-        models_dir.mkdir(parents=True)
-        (models_dir / "POCKET_6K_G2_v7.9.json").write_text(
+        ble_dir = models_dir / "POCKET_6K_G2" / "ble"
+        ble_dir.mkdir(parents=True)
+        (ble_dir / "v7.9.json").write_text(
             json.dumps(make_valid_raw_with_storage()), encoding="utf-8"
         )
-        monkeypatch.setattr("bmd_ble.camera_profile.MODELS_DIR", models_dir)
+        monkeypatch.setattr("bmd_camera.camera_profile.MODELS_DIR", models_dir)
 
-        with caplog.at_level(logging.INFO, logger="bmd_ble.camera_profile"):
+        with caplog.at_level(logging.INFO, logger="bmd_camera.camera_profile"):
             CameraProfile.for_model("POCKET_6K_G2", "v7.9")
 
         assert any(
@@ -580,9 +580,9 @@ class TestSettingsSections:
 
 def test_pocket_6k_g2_profile_resolves_settings_blocks():
     """POCKET_6K_G2_v7.9.json's settings families, originally transcribed
-    from an external reverse-engineering doc — see docs/settings.md. Spot-
+    from an external reverse-engineering doc — see docs/ble/settings.md. Spot-
     check the load path end to end; all three are now VERIFIED on real
-    hardware (docs/settings.md §8/§10)."""
+    hardware (docs/ble/settings.md §8/§10)."""
     profile = CameraProfile.for_model("POCKET_6K_G2", "v7.9")
 
     codec_quality = profile.require_command("codec_quality")
@@ -631,7 +631,7 @@ def test_pocket_6k_pro_profile_resolves_settings_blocks():
     principle 6 requires that, never copied from the G2. All three command
     blocks and the codecs/resolutions tables stay CANDIDATE (not VERIFIED)
     until a full CameraSession write+echo round trip is attempted — see
-    docs/settings.md's PRO section."""
+    docs/ble/settings.md's PRO section."""
     profile = CameraProfile.for_model("POCKET_6K_PRO", "v8.6")
 
     for name in ("video_format", "codec_quality", "recording_format"):
@@ -675,7 +675,7 @@ def test_pocket_6k_g2_v86_profile_resolves_recording_command():
     """POCKET_6K_G2_v8.6.json's recording block, discovered on real hardware
     2026-07-29. Same coordinates and values as v7.9, but ``reserved`` is 0
     where v7.9 uses 1 — the camera accepted both, and 0 is the one with a
-    clean wire echo for both outcomes (see docs/recording.md). The assertion
+    clean wire echo for both outcomes (see docs/ble/recording.md). The assertion
     below is the regression net for that difference: it must not silently
     drift back to the v7.9 value."""
     profile = CameraProfile.for_model("POCKET_6K_G2", "v8.6")
@@ -695,7 +695,7 @@ def test_pocket_6k_g2_v86_profile_resolves_recording_command():
 def test_pocket_6k_g2_v86_profile_resolves_fps_modes():
     """POCKET_6K_G2_v8.6.json's fps_modes, sniffed 2026-07-30 across step 9's
     combined sweep, a dedicated follow-up fps sweep, and three standalone
-    fps_60 retries (docs/settings.md §18/§18.7/§18.8). All 8 standard rates.
+    fps_60 retries (docs/ble/settings.md §18/§18.7/§18.8). All 8 standard rates.
 
     ``60`` initially looked like a candidate hardware ceiling — two separate
     sweeps produced no 0x01/0x09 report for it — but that finding was
@@ -740,7 +740,7 @@ def test_pocket_6k_g2_v86_profile_resolves_fps_modes():
 
 def test_pocket_6k_g2_v86_profile_resolves_dimension_enums():
     """POCKET_6K_G2_v8.6.json's dimension_enums, from a full 0x00-0x1F active
-    sweep via tools/control/sweep_dimension_enum.py (2026-07-30, docs/settings.md
+    sweep via tools/control/sweep_dimension_enum.py (2026-07-30, docs/ble/settings.md
     §18.9). All 8 confirmed enums independently match both POCKET_6K_G2_v7.9's
     and POCKET_6K_PRO_v8.6's numbers exactly — sniffed fresh on this firmware
     per design principle 6, not copied; the cross-profile agreement is the
@@ -750,7 +750,7 @@ def test_pocket_6k_g2_v86_profile_resolves_dimension_enums():
     separate passive re-capture — step 9's own HD window had caught the
     connect burst instead. commands.video_format is now VERIFIED: a
     480-combination CameraSession.set_camera_format() sweep (step 13,
-    docs/settings.md §18.10) confirmed 432 combinations end to end, on top
+    docs/ble/settings.md §18.10) confirmed 432 combinations end to end, on top
     of two manual send_settings_command.py round trips."""
     profile = CameraProfile.for_model("POCKET_6K_G2", "v8.6")
 
@@ -777,7 +777,7 @@ def test_pocket_6k_g2_v86_profile_resolves_dimension_enums():
     # probed, and confirmed on the camera's own on-screen display.
     assert profile.require_resolution("2.8K 17:9").width == 2880
 
-    # 4K DCI/ProRes is known_unreachable here (2026-07-31, docs/settings.md
+    # 4K DCI/ProRes is known_unreachable here (2026-07-31, docs/ble/settings.md
     # §18.12) — the enum-sweep gap alone wasn't sufficient on its own, but
     # v7.9's and the PRO's fuller write-value investigations have since been
     # repeated on this firmware and produced the same negative result.
@@ -789,7 +789,7 @@ def test_pocket_6k_g2_v86_profile_resolves_dimension_enums():
 
 
 def test_pocket_6k_g2_v86_settings_families_promoted_to_verified():
-    """Phase 3 steps 12/13 (2026-07-30, docs/settings.md §18.10): nine manual
+    """Phase 3 steps 12/13 (2026-07-30, docs/ble/settings.md §18.10): nine manual
     send_settings_command.py confirming writes plus a 480-combination
     sweep_camera_format.py sweep (432 confirmed) promoted all three settings
     families to VERIFIED — exceeding the single-round-trip bar
@@ -797,11 +797,11 @@ def test_pocket_6k_g2_v86_settings_families_promoted_to_verified():
 
     The sweep also surfaced two systematic gaps that mirror precedents already
     recorded on other profiles (POCKET_6K_PRO v8.6's ProRes/4K DCI
-    known_unreachable and 6K max_fps_int=50, docs/settings.md §16/§17).
+    known_unreachable and 6K max_fps_int=50, docs/ble/settings.md §16/§17).
     resolutions.6K.max_fps_int was promoted the same day (2026-07-30): the
     operator confirmed on the camera's own UI that 6K doesn't offer
     59.94/60fps, meeting design principle 7's evidence bar. The ProRes/4K DCI
-    known_unreachable entry was promoted 2026-07-31 (docs/settings.md §18.12):
+    known_unreachable entry was promoted 2026-07-31 (docs/ble/settings.md §18.12):
     the operator ran the same three falsification hypotheses that closed the
     PRO's identical gap (data-type byte, Operation.OFFSET, exact fps/variant),
     three times each from three different starting states and Sensor Area
@@ -840,7 +840,7 @@ def test_pocket_6k_g2_reserved_byte_differs_between_firmwares():
 def test_every_known_profile_resolves_write_margin_warning_storage_signal(model_key, firmware):
     """Every profile that has reached the sniffing phases carries an identical
     CANDIDATE write_margin_warning block — passive real-hardware evidence, not
-    sent by this repo's code, see docs/recording.md's Camera-initiated stop
+    sent by this repo's code, see docs/ble/recording.md's Camera-initiated stop
     detection section.
 
     A profile still at the Phase 1 scaffold stage (``_meta``/``ble`` only, no

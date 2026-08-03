@@ -13,14 +13,14 @@ out of the total, plus a per-cycle breakdown.
 Each cycle also captures the camera's TIMECODE reading at the moment
 record_start and record_stop are each confirmed, and prints the resulting
 clip duration via CameraSession.last_clip_duration_seconds() — see
-docs/timecode.md for why this is hours/minutes/seconds precision only today
+docs/ble/timecode.md for why this is hours/minutes/seconds precision only today
 (the TIMECODE value's 4th field isn't decoded into the duration yet, pending
 real-hardware confirmation of what it means).
 
 Instead of a blind `asyncio.sleep(RECORD_SECONDS)`, the recording-hold step
 uses `CameraSession.wait_while_recording()`, which returns early if the
 camera stops recording on its own — observed on real hardware when the SD
-card's write speed can't keep up (see docs/recording.md). A cycle that stops
+card's write speed can't keep up (see docs/ble/recording.md). A cycle that stops
 early is reported as such rather than silently waiting out the rest of the
 planned duration.
 
@@ -36,7 +36,7 @@ import asyncio
 import logging
 import sys
 
-from bmd_ble import BMDVerificationError, CameraSession
+from bmd_camera import BMDVerificationError, CameraSession
 
 MODEL_KEY = "POCKET_6K_G2"
 FIRMWARE = "v8.6"

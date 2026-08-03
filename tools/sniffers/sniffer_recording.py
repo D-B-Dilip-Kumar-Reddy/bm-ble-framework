@@ -10,7 +10,7 @@ Connects to the camera, then runs two interactive capture windows:
 For each window, prints every (characteristic, category, parameter) triple
 observed on INCOMING_CONTROL / CAMERA_STATUS, and saves the full decoded
 capture to tools/captures/ for later use populating
-payloads/models/<MODEL_KEY>_<FIRMWARE>.json — see docs/recording.md,
+payloads/models/<MODEL_KEY>/ble/<FIRMWARE>.json — see docs/ble/recording.md,
 "Remaining work".
 
 This tool only listens — it never writes to OUTGOING_CONTROL. The operator
@@ -39,9 +39,9 @@ from capture import (  # noqa: E402
     save_capture,
 )
 
-from bmd_ble.camera_controller import BMDCameraController  # noqa: E402
-from bmd_ble.camera_profile import CameraProfile  # noqa: E402
-from bmd_ble.scanner import scan_for_camera  # noqa: E402
+from bmd_camera.ble.camera_controller import BMDCameraController  # noqa: E402
+from bmd_camera.ble.scanner import scan_for_camera  # noqa: E402
+from bmd_camera.camera_profile import CameraProfile  # noqa: E402
 
 DEFAULT_MODEL_KEY = "POCKET_6K_G2"
 DEFAULT_FIRMWARE = "v8.6"

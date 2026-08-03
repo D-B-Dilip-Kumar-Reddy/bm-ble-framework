@@ -2,16 +2,16 @@
 tools/sniffers/sniffer_sensor_area.py
 ======================================
 Passive sniffer for the ProRes "Sensor Area" setting — see
-docs/photo_capture.md §8 and §10.
+docs/ble/photo_capture.md §8 and §10.
 
 It is not the same thing as commands.video_format's dimension_enum: that
 table only offers ProRes at "UHD" and "HD" (the *video recording*
-resolutions), while the operator has reported (docs/photo_capture.md §8)
+resolutions), while the operator has reported (docs/ble/photo_capture.md §8)
 that a ProRes *still photo*'s pixel dimensions are instead decided by one
 of three sensor-area readouts, unrelated to whichever UHD/HD video
 resolution is active at the time.
 
-First runs completed 2026-07-27 on both cameras (docs/photo_capture.md
+First runs completed 2026-07-27 on both cameras (docs/ble/photo_capture.md
 §10.1, §10.3): changing Sensor Area DOES trigger real report activity
 (recording_format and codec_quality both fire), unlike the still-capture
 trigger's total silence — but on both cameras, neither channel's payload
@@ -22,14 +22,14 @@ reconfirmed signal is binary, not a 3-way selector: recording_format's
 for every smaller crop, on both cameras independently. No write
 coordinates for Sensor Area have been found — this sniffer remains
 useful for re-checking that on other models/firmware or after further
-hypotheses (e.g. Operation.OFFSET probing, per docs/settings.md §16's
+hypotheses (e.g. Operation.OFFSET probing, per docs/ble/settings.md §16's
 precedent) are tried.
 
 Precondition: the camera must already be set to ProRes before running this
 sniffer (set via CameraSession.set_camera_format or the body menu) — the
 operator-reported finding this investigates is explicitly ProRes-only; in
 BRAW, still dimensions instead follow the ordinary recording resolution
-(docs/photo_capture.md §8.1), which is already fully modeled by the
+(docs/ble/photo_capture.md §8.1), which is already fully modeled by the
 existing resolutions/dimension_enum tables and needs no new sniffing.
 
 Connects to the camera, then runs one interactive capture window per action
@@ -53,7 +53,7 @@ Default windows and why:
                       codec/quality/fps.
 
 Operational note (carried over from sniffer_photo.py's real-hardware
-findings, docs/photo_capture.md §5.2): both cameras drain a large
+findings, docs/ble/photo_capture.md §5.2): both cameras drain a large
 post-connect state-report burst over the indication channel at a
 throttled ~180ms cadence lasting 10s or more. Open the idle_baseline
 window only AFTER that burst has finished — wait until notifications slow
@@ -64,17 +64,17 @@ first G2 run).
 If this capture shows a reporting (category, parameter) for a sensor-area
 change, seed tools/control/discover_command.py --from-capture with it to
 find the write coordinates, the same workflow used for recording
-(docs/command_discovery.md). If it shows nothing — matching the
-still-capture trigger's own null result (docs/photo_capture.md §5) — that
+(docs/ble/command_discovery.md). If it shows nothing — matching the
+still-capture trigger's own null result (docs/ble/photo_capture.md §5) — that
 is itself a finding worth recording, not a failure.
 
 MODEL-SPECIFIC OPTION NAMES — pass --actions explicitly per camera. The
 default labels (sensor_area_2_8k/5_7k/6k) match the G2's own reported
-sensor-area names (docs/photo_capture.md §8, §10.2), but the PRO's real
+sensor-area names (docs/ble/photo_capture.md §8, §10.2), but the PRO's real
 middle option is 5.3K, not 5.7K (confirmed 2026-07-27: a PRO run left on
 the G2-shaped defaults produced a window mislabeled "sensor_area_5_7k"
 when the operator necessarily selected 5.3K, since 5.7K isn't offered on
-that camera — docs/photo_capture.md §10.3). On the PRO, use e.g.:
+that camera — docs/ble/photo_capture.md §10.3). On the PRO, use e.g.:
 
     python tools/sniffers/sniffer_sensor_area.py \\
         --model-key POCKET_6K_PRO --firmware v8.6 \\
@@ -106,9 +106,9 @@ from capture import (  # noqa: E402
     save_capture,
 )
 
-from bmd_ble.camera_controller import BMDCameraController  # noqa: E402
-from bmd_ble.camera_profile import CameraProfile  # noqa: E402
-from bmd_ble.scanner import scan_for_camera  # noqa: E402
+from bmd_camera.ble.camera_controller import BMDCameraController  # noqa: E402
+from bmd_camera.ble.scanner import scan_for_camera  # noqa: E402
+from bmd_camera.camera_profile import CameraProfile  # noqa: E402
 
 DEFAULT_MODEL_KEY = "POCKET_6K_G2"
 DEFAULT_FIRMWARE = "v8.6"

@@ -1,17 +1,17 @@
-"""Unit tests for :mod:`bmd_ble.protocol.categories.storage`.
+"""Unit tests for :mod:`bmd_camera.ble.protocol.categories.storage`.
 
 These tests exercise generic decode mechanics, not model-specific truth.
 ``CATEGORY``/``PARAMETER``/``BYTE_OFFSET`` happen to coincide with the real,
 sniffer-observed CANDIDATE write-margin-warning signal (see
 payloads/models/POCKET_6K_G2_v7.9.json's ``storage.write_margin_warning``
-and docs/recording.md) but that's incidental to what's tested here.
+and docs/ble/recording.md) but that's incidental to what's tested here.
 """
 
 import pytest
 
-from bmd_ble.protocol.categories.storage import decode_write_margin, is_storage_notification
-from bmd_ble.protocol.codec import CommandHeader, Operation, decode_packet, encode_packet
-from bmd_ble.protocol.types import DataType
+from bmd_camera.ble.protocol.categories.storage import decode_write_margin, is_storage_notification
+from bmd_camera.ble.protocol.codec import CommandHeader, Operation, decode_packet, encode_packet
+from bmd_camera.ble.protocol.types import DataType
 
 CATEGORY = 0x09
 PARAMETER = 0x01

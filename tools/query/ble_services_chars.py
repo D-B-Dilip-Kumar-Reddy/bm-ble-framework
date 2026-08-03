@@ -3,7 +3,7 @@ examples/ble_services_chars.py
 ==============================
 
 Query BLE GATT services/characteristics from a Blackmagic camera and compare
-what the camera exposes against the UUIDs defined in bmd_ble.constants.
+what the camera exposes against the UUIDs defined in bmd_camera.ble.constants.
 
 Usage:
     python tools/query/ble_services_chars.py
@@ -27,12 +27,12 @@ from bleak import BleakClient
 
 
 # Allow running this file directly from either repo root or examples/ without
-# installing the package. Walk upward until we find src/bmd_ble.
+# installing the package. Walk upward until we find src/bmd_camera.
 def find_repo_root(start: Path) -> Path:
     for candidate in [start, *start.parents]:
-        if (candidate / "src" / "bmd_ble").exists():
+        if (candidate / "src" / "bmd_camera").exists():
             return candidate
-    raise RuntimeError("Could not locate repository root containing src/bmd_ble")
+    raise RuntimeError("Could not locate repository root containing src/bmd_camera")
 
 
 REPO_ROOT = find_repo_root(Path(__file__).resolve().parent)
@@ -40,9 +40,9 @@ SRC_DIR = REPO_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from bmd_ble import constants  # noqa: E402
-from bmd_ble.camera_profile import CameraProfile  # noqa: E402
-from bmd_ble.scanner import DiscoveredCamera, scan_for_camera  # noqa: E402
+from bmd_camera.ble import constants  # noqa: E402
+from bmd_camera.ble.scanner import DiscoveredCamera, scan_for_camera  # noqa: E402
+from bmd_camera.camera_profile import CameraProfile  # noqa: E402
 
 DEFAULT_MODEL_KEY = "POCKET_6K_G2"
 DEFAULT_FIRMWARE = "v8.6"
@@ -102,7 +102,7 @@ def characteristic_names() -> dict[str, str]:
 
 def collect_expected_uuids() -> dict[str, ExpectedUuid]:
     """
-    Collect service and characteristic UUID constants from bmd_ble.constants.
+    Collect service and characteristic UUID constants from bmd_camera.ble.constants.
     Included:
         *_SERVICE_UUID
         CHARACTERISTIC_*
@@ -356,7 +356,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Query BLE GATT services/characteristics and compare them against "
-            "UUID constants defined in bmd_ble.constants."
+            "UUID constants defined in bmd_camera.ble.constants."
         )
     )
 

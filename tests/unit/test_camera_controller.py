@@ -1,4 +1,4 @@
-"""Class-based unit tests for :mod:`bmd_ble.camera_controller`.
+"""Class-based unit tests for :mod:`bmd_camera.ble.camera_controller`.
 
 The tests in this module validate ``BMDCameraController`` without requiring real
 Bluetooth hardware. Fake BLE clients are used to exercise connection handling,
@@ -16,8 +16,8 @@ from types import SimpleNamespace
 import pytest
 from bleak import BleakError
 
-from bmd_ble.camera_controller import BMDCameraController
-from bmd_ble.constants import (
+from bmd_camera.ble.camera_controller import BMDCameraController
+from bmd_camera.ble.constants import (
     BLE_CONNECT_TIMEOUT_S,
     CHARACTERISTIC_CAM_STATUS,
     CHARACTERISTIC_INCOMING,
@@ -30,7 +30,7 @@ from bmd_ble.constants import (
     GAP_CHARACTERISTIC_APPEARANCE,
     GAP_CHARACTERISTIC_DEVICE_NAME,
 )
-from bmd_ble.scanner import DiscoveredCamera
+from bmd_camera.ble.scanner import DiscoveredCamera
 
 MODEL_KEY = "POCKET_6K_G2"
 FIRMWARE = "v8.6"
@@ -245,8 +245,10 @@ class TestBMDCameraControllerConnect:
         async def fake_scan_for_camera(_ble_name: str) -> DiscoveredCamera:
             raise AssertionError("scan_for_camera should not be called")
 
-        monkeypatch.setattr("bmd_ble.camera_controller.scan_for_camera", fake_scan_for_camera)
-        monkeypatch.setattr("bmd_ble.camera_controller.BleakClient", FakeBleakClient)
+        monkeypatch.setattr(
+            "bmd_camera.ble.camera_controller.scan_for_camera", fake_scan_for_camera
+        )
+        monkeypatch.setattr("bmd_camera.ble.camera_controller.BleakClient", FakeBleakClient)
 
         await controller.connect()
 
@@ -269,8 +271,10 @@ class TestBMDCameraControllerConnect:
             assert ble_name == BLE_NAME
             return scanned
 
-        monkeypatch.setattr("bmd_ble.camera_controller.scan_for_camera", fake_scan_for_camera)
-        monkeypatch.setattr("bmd_ble.camera_controller.BleakClient", FakeBleakClient)
+        monkeypatch.setattr(
+            "bmd_camera.ble.camera_controller.scan_for_camera", fake_scan_for_camera
+        )
+        monkeypatch.setattr("bmd_camera.ble.camera_controller.BleakClient", FakeBleakClient)
 
         await controller.connect()
 
@@ -290,8 +294,8 @@ class TestBMDCameraControllerConnect:
             captured_timeout = timeout
             return await coro
 
-        monkeypatch.setattr("bmd_ble.camera_controller.BleakClient", FakeBleakClient)
-        monkeypatch.setattr("bmd_ble.camera_controller.asyncio.wait_for", fake_wait_for)
+        monkeypatch.setattr("bmd_camera.ble.camera_controller.BleakClient", FakeBleakClient)
+        monkeypatch.setattr("bmd_camera.ble.camera_controller.asyncio.wait_for", fake_wait_for)
 
         await controller.connect()
 
@@ -307,8 +311,8 @@ class TestBMDCameraControllerConnect:
             coro.close()
             raise TimeoutError("timed out")
 
-        monkeypatch.setattr("bmd_ble.camera_controller.BleakClient", FakeBleakClient)
-        monkeypatch.setattr("bmd_ble.camera_controller.asyncio.wait_for", fake_wait_for)
+        monkeypatch.setattr("bmd_camera.ble.camera_controller.BleakClient", FakeBleakClient)
+        monkeypatch.setattr("bmd_camera.ble.camera_controller.asyncio.wait_for", fake_wait_for)
 
         with pytest.raises(RuntimeError, match=rf"\[{BLE_NAME}\] Connect failed"):
             await controller.connect()
@@ -323,8 +327,8 @@ class TestBMDCameraControllerConnect:
             coro.close()
             raise BleakError("adapter failed")
 
-        monkeypatch.setattr("bmd_ble.camera_controller.BleakClient", FakeBleakClient)
-        monkeypatch.setattr("bmd_ble.camera_controller.asyncio.wait_for", fake_wait_for)
+        monkeypatch.setattr("bmd_camera.ble.camera_controller.BleakClient", FakeBleakClient)
+        monkeypatch.setattr("bmd_camera.ble.camera_controller.asyncio.wait_for", fake_wait_for)
 
         with pytest.raises(RuntimeError, match=rf"\[{BLE_NAME}\] Connect failed"):
             await controller.connect()
@@ -333,7 +337,7 @@ class TestBMDCameraControllerConnect:
     async def test_connect_passes_disconnect_callback_to_bleak_client(self, monkeypatch) -> None:
         """``connect()`` must pass a ``disconnected_callback`` to ``BleakClient``."""
         controller = BMDCameraController(make_discovered(), make_profile())
-        monkeypatch.setattr("bmd_ble.camera_controller.BleakClient", FakeBleakClient)
+        monkeypatch.setattr("bmd_camera.ble.camera_controller.BleakClient", FakeBleakClient)
 
         await controller.connect()
 
@@ -343,7 +347,7 @@ class TestBMDCameraControllerConnect:
     async def test_connect_sets_connected_event_on_success(self, monkeypatch) -> None:
         """After a successful ``connect()``, the ``_connected`` event must be set."""
         controller = BMDCameraController(make_discovered(), make_profile())
-        monkeypatch.setattr("bmd_ble.camera_controller.BleakClient", FakeBleakClient)
+        monkeypatch.setattr("bmd_camera.ble.camera_controller.BleakClient", FakeBleakClient)
 
         await controller.connect()
 
@@ -354,7 +358,7 @@ class TestBMDCameraControllerConnect:
         """``connect()`` must reset ``_intentional_disconnect`` so future drops trigger reconnect."""  # noqa: E501
         controller = BMDCameraController(make_discovered(), make_profile())
         controller._intentional_disconnect = True
-        monkeypatch.setattr("bmd_ble.camera_controller.BleakClient", FakeBleakClient)
+        monkeypatch.setattr("bmd_camera.ble.camera_controller.BleakClient", FakeBleakClient)
 
         await controller.connect()
 
@@ -364,7 +368,7 @@ class TestBMDCameraControllerConnect:
     async def test_connect_increments_conn_gen(self, monkeypatch) -> None:
         """``_conn_gen`` must increase by 1 on every successful ``connect()``."""
         controller = BMDCameraController(make_discovered(), make_profile())
-        monkeypatch.setattr("bmd_ble.camera_controller.BleakClient", FakeBleakClient)
+        monkeypatch.setattr("bmd_camera.ble.camera_controller.BleakClient", FakeBleakClient)
 
         assert controller._conn_gen == 0
         await controller.connect()
@@ -380,7 +384,7 @@ class TestBMDCameraControllerConnect:
                 raise BleakError("device not found")
 
         controller = BMDCameraController(make_discovered(), make_profile())
-        monkeypatch.setattr("bmd_ble.camera_controller.BleakClient", FailingBleakClient)
+        monkeypatch.setattr("bmd_camera.ble.camera_controller.BleakClient", FailingBleakClient)
 
         with pytest.raises(RuntimeError):
             await controller.connect()
@@ -414,8 +418,8 @@ class TestBMDCameraControllerConnect:
         async def fake_sleep(delay):
             slept.append(delay)
 
-        monkeypatch.setattr("bmd_ble.camera_controller.BleakClient", client_factory)
-        monkeypatch.setattr("bmd_ble.camera_controller.asyncio.sleep", fake_sleep)
+        monkeypatch.setattr("bmd_camera.ble.camera_controller.BleakClient", client_factory)
+        monkeypatch.setattr("bmd_camera.ble.camera_controller.asyncio.sleep", fake_sleep)
 
         await controller.connect()
 
@@ -444,8 +448,8 @@ class TestBMDCameraControllerConnect:
         async def fake_sleep(_delay):
             pass
 
-        monkeypatch.setattr("bmd_ble.camera_controller.BleakClient", client_factory)
-        monkeypatch.setattr("bmd_ble.camera_controller.asyncio.sleep", fake_sleep)
+        monkeypatch.setattr("bmd_camera.ble.camera_controller.BleakClient", client_factory)
+        monkeypatch.setattr("bmd_camera.ble.camera_controller.asyncio.sleep", fake_sleep)
 
         with pytest.raises(RuntimeError, match="connection lost mid-subscribe"):
             await controller.connect()
@@ -474,8 +478,8 @@ class TestBMDCameraControllerConnect:
         async def fake_sleep(_delay):
             pass
 
-        monkeypatch.setattr("bmd_ble.camera_controller.BleakClient", client_factory)
-        monkeypatch.setattr("bmd_ble.camera_controller.asyncio.sleep", fake_sleep)
+        monkeypatch.setattr("bmd_camera.ble.camera_controller.BleakClient", client_factory)
+        monkeypatch.setattr("bmd_camera.ble.camera_controller.asyncio.sleep", fake_sleep)
 
         with pytest.raises(RuntimeError, match="Could not subscribe to INCOMING_CONTROL"):
             await controller.connect()
@@ -505,8 +509,10 @@ class TestBMDCameraControllerConnect:
         async def fake_sleep(_delay):
             pass
 
-        monkeypatch.setattr("bmd_ble.camera_controller.BleakClient", DropsAndFiresCallbackClient)
-        monkeypatch.setattr("bmd_ble.camera_controller.asyncio.sleep", fake_sleep)
+        monkeypatch.setattr(
+            "bmd_camera.ble.camera_controller.BleakClient", DropsAndFiresCallbackClient
+        )
+        monkeypatch.setattr("bmd_camera.ble.camera_controller.asyncio.sleep", fake_sleep)
         monkeypatch.setattr(controller, "_reconnect_loop", fake_reconnect_loop)
 
         with pytest.raises(RuntimeError, match="connection lost mid-subscribe"):
@@ -518,7 +524,7 @@ class TestBMDCameraControllerConnect:
     async def test_connect_is_idempotent_if_already_connected(self, monkeypatch) -> None:
         """A second ``connect()`` call must be a no-op when the camera is already connected."""
         controller = BMDCameraController(make_discovered(), make_profile())
-        monkeypatch.setattr("bmd_ble.camera_controller.BleakClient", FakeBleakClient)
+        monkeypatch.setattr("bmd_camera.ble.camera_controller.BleakClient", FakeBleakClient)
 
         await controller.connect()
         assert controller._conn_gen == 1
@@ -638,7 +644,7 @@ class TestBMDCameraControllerReconnectLoop:
             pass
 
         monkeypatch.setattr(controller, "connect", fake_connect)
-        monkeypatch.setattr("bmd_ble.camera_controller.asyncio.sleep", fake_sleep)
+        monkeypatch.setattr("bmd_camera.ble.camera_controller.asyncio.sleep", fake_sleep)
 
         await controller._reconnect_loop()
 
@@ -658,7 +664,7 @@ class TestBMDCameraControllerReconnectLoop:
         async def fake_sleep(_):
             pass
 
-        monkeypatch.setattr("bmd_ble.camera_controller.asyncio.sleep", fake_sleep)
+        monkeypatch.setattr("bmd_camera.ble.camera_controller.asyncio.sleep", fake_sleep)
 
         await controller._reconnect_loop()
 
@@ -683,9 +689,9 @@ class TestBMDCameraControllerReconnectLoop:
             pass
 
         monkeypatch.setattr(controller, "connect", failing_connect)
-        monkeypatch.setattr("bmd_ble.camera_controller.asyncio.sleep", fake_sleep)
+        monkeypatch.setattr("bmd_camera.ble.camera_controller.asyncio.sleep", fake_sleep)
 
-        with caplog.at_level(logging.CRITICAL, logger="bmd_ble.camera_controller"):
+        with caplog.at_level(logging.CRITICAL, logger="bmd_camera.ble.camera_controller"):
             await controller._reconnect_loop()
 
         assert controller._reconnecting is False
@@ -716,9 +722,9 @@ class TestBMDCameraControllerReconnectLoop:
         async def fake_sleep(_):
             pass
 
-        monkeypatch.setattr("bmd_ble.camera_controller.BleakClient", FakeBleakClient)
+        monkeypatch.setattr("bmd_camera.ble.camera_controller.BleakClient", FakeBleakClient)
         monkeypatch.setattr(controller, "subscribe_incoming", fake_subscribe_incoming)
-        monkeypatch.setattr("bmd_ble.camera_controller.asyncio.sleep", fake_sleep)
+        monkeypatch.setattr("bmd_camera.ble.camera_controller.asyncio.sleep", fake_sleep)
 
         await controller._reconnect_loop()
 
@@ -728,7 +734,7 @@ class TestBMDCameraControllerReconnectLoop:
     async def test_on_disconnect_ignores_duplicate_when_reconnecting(self, monkeypatch) -> None:
         """``on_disconnect`` must not schedule a second loop if one is already running."""
         controller = BMDCameraController(make_discovered(), make_profile())
-        monkeypatch.setattr("bmd_ble.camera_controller.BleakClient", FakeBleakClient)
+        monkeypatch.setattr("bmd_camera.ble.camera_controller.BleakClient", FakeBleakClient)
         await controller.connect()
 
         task_count = 0
@@ -763,7 +769,7 @@ class TestBMDCameraControllerReconnectLoop:
             nonlocal sleep_called
             sleep_called = True
 
-        monkeypatch.setattr("bmd_ble.camera_controller.asyncio.sleep", fake_sleep)
+        monkeypatch.setattr("bmd_camera.ble.camera_controller.asyncio.sleep", fake_sleep)
 
         await controller._reconnect_loop()
 
@@ -790,7 +796,7 @@ class TestBMDCameraControllerReconnectLoop:
         async def fake_subscribe_all():
             pass
 
-        monkeypatch.setattr("bmd_ble.camera_controller.asyncio.sleep", fake_sleep)
+        monkeypatch.setattr("bmd_camera.ble.camera_controller.asyncio.sleep", fake_sleep)
         monkeypatch.setattr(controller, "connect", fake_connect)
         monkeypatch.setattr(controller, "subscribe_all", fake_subscribe_all)
 
@@ -819,7 +825,7 @@ class TestBMDCameraControllerReconnectLoop:
             nonlocal connect_called
             connect_called = True
 
-        monkeypatch.setattr("bmd_ble.camera_controller.asyncio.sleep", fake_sleep)
+        monkeypatch.setattr("bmd_camera.ble.camera_controller.asyncio.sleep", fake_sleep)
         monkeypatch.setattr(controller, "connect", fake_connect)
 
         await controller._reconnect_loop()
@@ -847,7 +853,7 @@ class TestBMDCameraControllerReconnectLoop:
             nonlocal connect_called
             connect_called = True
 
-        monkeypatch.setattr("bmd_ble.camera_controller.asyncio.sleep", fake_sleep)
+        monkeypatch.setattr("bmd_camera.ble.camera_controller.asyncio.sleep", fake_sleep)
         monkeypatch.setattr(controller, "connect", fake_connect)
 
         await controller._reconnect_loop()
@@ -1514,7 +1520,7 @@ def test_log_incoming_formats_bytes_as_uppercase_hex(caplog):
     import logging
 
     controller = BMDCameraController(make_discovered(), make_profile())
-    with caplog.at_level(logging.DEBUG, logger="bmd_ble.camera_controller"):
+    with caplog.at_level(logging.DEBUG, logger="bmd_camera.ble.camera_controller"):
         controller._log_incoming(None, bytearray([0x00, 0x06, 0x0A, 0xFF]))
 
     assert "00 06 0A FF" in caplog.text
@@ -1524,7 +1530,7 @@ def test_log_incoming_includes_camera_identity_prefix(caplog):
     import logging
 
     controller = BMDCameraController(make_discovered(), make_profile())
-    with caplog.at_level(logging.DEBUG, logger="bmd_ble.camera_controller"):
+    with caplog.at_level(logging.DEBUG, logger="bmd_camera.ble.camera_controller"):
         controller._log_incoming(None, bytearray([0xAB]))
 
     assert BLE_NAME in caplog.text
@@ -1556,7 +1562,7 @@ async def test_subscribe_incoming_retries_on_transient_bleak_error(monkeypatch):
         pass
 
     controller._client = FlakyClient(ADDRESS)
-    monkeypatch.setattr("bmd_ble.camera_controller.asyncio.sleep", fake_sleep)
+    monkeypatch.setattr("bmd_camera.ble.camera_controller.asyncio.sleep", fake_sleep)
 
     await controller.subscribe_incoming()
 
@@ -1581,7 +1587,7 @@ async def test_subscribe_incoming_raises_after_all_retries_exhausted(monkeypatch
         pass
 
     controller._client = AlwaysFailClient(ADDRESS)
-    monkeypatch.setattr("bmd_ble.camera_controller.asyncio.sleep", fake_sleep)
+    monkeypatch.setattr("bmd_camera.ble.camera_controller.asyncio.sleep", fake_sleep)
 
     with pytest.raises(RuntimeError) as exc_info:
         await controller.subscribe_incoming(retries=2)
@@ -1611,7 +1617,7 @@ async def test_subscribe_incoming_fast_fails_on_not_connected_error(monkeypatch)
         pass
 
     controller._client = NotConnectedClient(ADDRESS)
-    monkeypatch.setattr("bmd_ble.camera_controller.asyncio.sleep", fake_sleep)
+    monkeypatch.setattr("bmd_camera.ble.camera_controller.asyncio.sleep", fake_sleep)
 
     with pytest.raises(RuntimeError) as exc_info:
         await controller.subscribe_incoming(retries=3)
@@ -1646,7 +1652,7 @@ async def test_subscribe_incoming_aborts_retry_when_link_already_dropped(monkeyp
         slept.append(delay)
 
     controller._client = DropsMidSubscribeClient(ADDRESS)
-    monkeypatch.setattr("bmd_ble.camera_controller.asyncio.sleep", fake_sleep)
+    monkeypatch.setattr("bmd_camera.ble.camera_controller.asyncio.sleep", fake_sleep)
 
     with pytest.raises(RuntimeError) as exc_info:
         await controller.subscribe_incoming(retries=3, retry_delay_s=10.0)
@@ -1677,7 +1683,7 @@ async def test_subscribe_incoming_aborts_retry_when_generation_superseded(monkey
         slept.append(delay)
 
     controller._client = SupersedingClient(ADDRESS)
-    monkeypatch.setattr("bmd_ble.camera_controller.asyncio.sleep", fake_sleep)
+    monkeypatch.setattr("bmd_camera.ble.camera_controller.asyncio.sleep", fake_sleep)
 
     with pytest.raises(RuntimeError) as exc_info:
         await controller.subscribe_incoming(retries=3)
@@ -1710,7 +1716,7 @@ async def test_subscribe_incoming_retries_on_os_error(monkeypatch):
         pass
 
     controller._client = OSErrorClient(ADDRESS)
-    monkeypatch.setattr("bmd_ble.camera_controller.asyncio.sleep", fake_sleep)
+    monkeypatch.setattr("bmd_camera.ble.camera_controller.asyncio.sleep", fake_sleep)
 
     await controller.subscribe_incoming()
 

@@ -2,7 +2,7 @@
 tools/sniffers/sniffer_settings.py
 ===================================
 Passive sniffer for the settings families — codec, quality variant,
-resolution, and FPS changes (see docs/settings.md).
+resolution, and FPS changes (see docs/ble/settings.md).
 
 Connects to the camera, then runs one interactive capture window per action
 label. The operator triggers each change on the physical camera (menu /
@@ -16,7 +16,7 @@ Two ways to use it:
 1. Verify the CANDIDATE POCKET_6K_G2 v7.9 families (default labels): change
    codec BRAW <-> ProRes, a quality variant, a resolution, and the frame
    rate on the body, then check the captured packets against the byte
-   layouts in docs/settings.md (codec_quality 0x0A/0x00, video_format
+   layouts in docs/ble/settings.md (codec_quality 0x0A/0x00, video_format
    0x01/0x00, recording_format 0x01/0x09).
 
 2. Reverse-engineer another model's value tables with custom labels — one
@@ -29,7 +29,7 @@ Two ways to use it:
 
    The saved capture then seeds tools/control/discover_command.py
    (--from-capture) or is transcribed directly into the profile's
-   commands/codecs/resolutions/fps_modes sections — see docs/settings.md's
+   commands/codecs/resolutions/fps_modes sections — see docs/ble/settings.md's
    runbook.
 
    Passive limits (confirmed on the 2026-07-20 G2 capture): the camera
@@ -65,13 +65,13 @@ from capture import (  # noqa: E402
     save_capture,
 )
 
-from bmd_ble.camera_controller import BMDCameraController  # noqa: E402
-from bmd_ble.camera_profile import CameraProfile  # noqa: E402
-from bmd_ble.scanner import scan_for_camera  # noqa: E402
+from bmd_camera.ble.camera_controller import BMDCameraController  # noqa: E402
+from bmd_camera.ble.scanner import scan_for_camera  # noqa: E402
+from bmd_camera.camera_profile import CameraProfile  # noqa: E402
 
 DEFAULT_MODEL_KEY = "POCKET_6K_G2"
 DEFAULT_FIRMWARE = "v8.6"
-# One window per settings change the docs/settings.md families cover. The
+# One window per settings change the docs/ble/settings.md families cover. The
 # two codec windows come first deliberately: a BRAW -> ProRes -> BRAW round
 # trip leaves the camera in its starting family before the smaller changes.
 DEFAULT_ACTION_LABELS = [

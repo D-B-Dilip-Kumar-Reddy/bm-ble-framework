@@ -10,7 +10,7 @@ recording on the connected camera.
 
 Command bytes are built from the profile's `commands.recording` block
 (never hardcoded) — see payloads/models/POCKET_6K_G2_v7.9.json and
-docs/recording.md.
+docs/ble/recording.md.
 
 Usage:
     python tools/control/send_record_command.py
@@ -28,13 +28,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "common"))
 
 from capture import configure_console_logging, run_send_and_capture, save_capture  # noqa: E402
 
-from bmd_ble.camera_controller import BMDCameraController  # noqa: E402
-from bmd_ble.camera_profile import CameraProfile  # noqa: E402
-from bmd_ble.protocol.categories.recording import (  # noqa: E402
+from bmd_camera.ble.camera_controller import BMDCameraController  # noqa: E402
+from bmd_camera.ble.protocol.categories.recording import (  # noqa: E402
     encode_record_start,
     encode_record_stop,
 )
-from bmd_ble.scanner import scan_for_camera  # noqa: E402
+from bmd_camera.ble.scanner import scan_for_camera  # noqa: E402
+from bmd_camera.camera_profile import CameraProfile  # noqa: E402
 
 DEFAULT_MODEL_KEY = "POCKET_6K_G2"
 DEFAULT_FIRMWARE = "v8.6"

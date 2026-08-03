@@ -2,7 +2,7 @@
 tools/control/send_settings_command.py
 =======================================
 Actively sends one of the settings-family commands (codec_quality,
-video_format, recording_format — see docs/settings.md) to a real camera and
+video_format, recording_format — see docs/ble/settings.md) to a real camera and
 captures the response. This WILL change the camera's codec / quality /
 resolution / FPS settings — note the camera's current settings first so you
 can restore them.
@@ -30,13 +30,13 @@ provenance) or falsifies it. Two runs make the doc's central claim testable:
       --packet video_format --resolution UHD --codec ProRes --fps 25
 
 Watch the camera body after each send — the operator's eyes, not the echo,
-are ground truth for what changed (same stance as docs/command_discovery.md).
+are ground truth for what changed (same stance as docs/ble/command_discovery.md).
 
-CONNECT SETTLE (added 2026-07-20, see docs/settings.md §6): a just-connected
+CONNECT SETTLE (added 2026-07-20, see docs/ble/settings.md §6): a just-connected
 camera floods INCOMING_CONTROL with an initial info dump (recording state,
 media/scene metadata, lens data, ISO, ...) that can take several seconds to
 drain — the exact hazard `CameraSession.__aenter__` waits `connect_settle_s`
-for (docs/session_and_verification.md). This tool did not wait, so its
+for (docs/ble/session_and_verification.md). This tool did not wait, so its
 first three real-hardware runs (2026-07-20) captured that burst instead of
 a response to the write: none of the three showed the target
 category/parameter, only unrelated initial-payload packets. Fixed by
@@ -44,10 +44,10 @@ waiting `--connect-settle-seconds` (default 6.0s, matching
 `CameraSession`'s default) after connecting and before the send-and-capture
 window opens.
 
-REDUNDANT-WRITE PROBE (`--repeat`, added 2026-07-21, see docs/settings.md
+REDUNDANT-WRITE PROBE (`--repeat`, added 2026-07-21, see docs/ble/settings.md
 §13): real-hardware evidence proved that `codec_quality`'s report only
 fires on an *applied* change — requesting the (codec, variant) the camera
-is already at produces no echo at all, not a slow one (docs/settings.md
+is already at produces no echo at all, not a slow one (docs/ble/settings.md
 §11; `CameraSession.set_codec_quality` now guards against it via
 `last_known_codec_variant`). Whether `video_format` and `recording_format`
 share that same silent-no-op behavior is still an open question — nobody
@@ -67,7 +67,7 @@ no-op guard needed); `(none observed)` on the second window only
 reproduces the `codec_quality` finding for this family too (a no-op guard
 belongs there, mirroring `last_known_codec_variant`).
 
-DATA_TYPE OVERRIDE (`--data-type`, added 2026-07-23, see docs/settings.md
+DATA_TYPE OVERRIDE (`--data-type`, added 2026-07-23, see docs/ble/settings.md
 §3/§4/§16): `recording_format` writes have always used wire data-type byte
 `0x82` (`DataType.INT16_ARRAY`) — a CANDIDATE value transcribed from an
 external reverse-engineering document, not part of the official BMD spec.
@@ -111,12 +111,12 @@ not itself change any profile.
 UPDATE (2026-07-23/24): real-hardware evidence ruled the `--data-type`
 hypothesis out for `POCKET_6K_PRO v8.6`'s ProRes/4K DCI gap — `--data-type
 INT16` with `--listen-seconds 8` produced zero fresh confirming reports,
-the same signature already established for `0x82` (see docs/settings.md
+the same signature already established for `0x82` (see docs/ble/settings.md
 §16). The write-byte axis is exhausted; see VIDEO_FORMAT TRAILING ELEMENTS
 below for what's left.
 
 VIDEO_FORMAT TRAILING ELEMENTS (`--video-format-extra`, added 2026-07-24,
-see docs/settings.md §16): `video_format`'s five-element payload is
+see docs/ble/settings.md §16): `video_format`'s five-element payload is
 `[fps_int, m_rate, dimension_enum, extra1, extra2]` — every capture on
 either camera so far shows `extra1`/`extra2` as `0, 0` (hypothesis: the
 official spec's `interlaced`/`colorspace` video-mode elements, both zero
@@ -151,13 +151,13 @@ hypothesis either. Four `(extra1, extra2)` pairs tried against
 `(UHD, ProRes, 25fps)`: `(1, 0)` confirmed 2/2 but still landed UHD, not
 4K DCI; `(2, 0)`, `(0, 1)`, and `(1, 1)` were each silently rejected — the
 same signature invalid `dimension_enum` candidates showed, not
-`recording_format`'s "accepted but unconfirmed" one (see docs/settings.md
+`recording_format`'s "accepted but unconfirmed" one (see docs/ble/settings.md
 §16). All three original candidate hypotheses (dimension_enum sweep,
 data_type retry, trailing elements) are now exhausted; a full-channel
 decode of the passive-capture evidence found no hidden correlate either.
 See OPERATION OVERRIDE below for what's left to try.
 
-OPERATION OVERRIDE (`--operation`, added 2026-07-24, see docs/settings.md
+OPERATION OVERRIDE (`--operation`, added 2026-07-24, see docs/ble/settings.md
 §16): every write attempted so far — across all three exhausted
 hypotheses above — used `Operation.ASSIGN` (packet header byte 7 = `0x00`,
 `protocol/codec.py`). The header format documents a second write-capable
@@ -189,21 +189,21 @@ write (`--operation OFFSET` with the same values `--resolution "4K DCI"
 --fps 25` would produce under ASSIGN) got zero response over a 10s
 listen window: no `0x01/0x09` report, no report on any channel besides
 the ambient `0x09/0x00` storage telemetry that free-runs regardless of
-any write (see docs/settings.md §16). That is not itself proof `OFFSET`
-is unsupported here — `docs/protocol.md` §4 documents `OFFSET`'s spec
+any write (see docs/ble/settings.md §16). That is not itself proof `OFFSET`
+is unsupported here — `docs/ble/protocol.md` §4 documents `OFFSET`'s spec
 meaning as "add the payload to the current value," so sending an
 *absolute* target as an `OFFSET` is a category error, not a faithful
 test of the hypothesis. See RAW PAYLOAD OVERRIDE below for the
 delta-payload test this motivates.
 
-RESERVED OVERRIDE (`--reserved`, added 2026-07-30, see docs/settings.md
+RESERVED OVERRIDE (`--reserved`, added 2026-07-30, see docs/ble/settings.md
 §18.6): header byte 3 was the one axis this tool could not vary without
 editing a profile, and it is the least-evidenced field in any block seeded
 from a passive capture — a camera's own REPORT packets need not carry the
 value a *write* requires. That is the same trap `recording_format`'s
 `0x02`-vs-`0x82` discrepancy (§3) already represents on the data-type axis,
 and it bit for real on `POCKET_6K_G2 v8.6`: its recording family turned out
-to accept both `0x00` and `0x01` (docs/recording.md), while every report on
+to accept both `0x00` and `0x01` (docs/ble/recording.md), while every report on
 that firmware carries `0x00` and v7.9's working writes used `0x01`. So when a
 CANDIDATE block's write draws no response, this byte is the first thing to
 vary — before doubting the payload values, and without editing the profile:
@@ -218,7 +218,7 @@ itself in the send's label (and so in the saved capture JSON), and defaults to
 unset so every invocation predating this flag is byte-for-byte unchanged.
 
 RAW PAYLOAD OVERRIDE (`--raw-payload`, added 2026-07-24, see
-docs/settings.md §16 and docs/protocol.md §4): every override above
+docs/ble/settings.md §16 and docs/ble/protocol.md §4): every override above
 changes one field of an otherwise profile-driven payload (a data-type
 byte, two trailing elements, the operation byte) while still building
 the rest of the payload from `--resolution`/`--codec`/`--fps` via the
@@ -261,7 +261,7 @@ UPDATE (2026-07-24): tried on real hardware — the delta payload
 header byte 7 = `0x01`, payload decodes to `(0, 0, 256, 0, 0)`) got the
 same zero-response signature as the absolute-payload test: no
 `0x01/0x09` report anywhere in a full 10s window, only ambient `0x09`
-telemetry and the usual connect-burst tail (see docs/settings.md §16).
+telemetry and the usual connect-burst tail (see docs/ble/settings.md §16).
 This is a stronger result than the absolute-payload test — a `+256`
 width delta from UHD (3840) lands exactly in-range at 4096, so the
 "out-of-range absolute value" explanation for that earlier silence
@@ -269,7 +269,7 @@ doesn't apply here. Every hypothesis raised in this investigation
 (`dimension_enum` sweep, `data_type` byte, `video_format` trailing
 elements, full-channel passive decode, `OFFSET` absolute payload,
 `OFFSET` delta payload) is now exhausted with no confirming echo for
-the ProRes/4K DCI retarget. See docs/settings.md §16 for the full
+the ProRes/4K DCI retarget. See docs/ble/settings.md §16 for the full
 write-up and the next diagnostic step under consideration (isolating
 whether `OFFSET` is silently rejected for every category/parameter on
 this camera, or specific to `recording_format`).
@@ -294,16 +294,16 @@ from capture import (  # noqa: E402
     save_capture,
 )
 
-from bmd_ble.camera_controller import BMDCameraController  # noqa: E402
-from bmd_ble.camera_profile import CameraProfile, CommandSpec  # noqa: E402
-from bmd_ble.protocol.categories.settings import (  # noqa: E402
+from bmd_camera.ble.camera_controller import BMDCameraController  # noqa: E402
+from bmd_camera.ble.protocol.categories.settings import (  # noqa: E402
     encode_codec_quality,
     encode_recording_format,
     encode_video_format,
 )
-from bmd_ble.protocol.codec import Operation, encode_assign_elements  # noqa: E402
-from bmd_ble.protocol.types import DataType  # noqa: E402
-from bmd_ble.scanner import scan_for_camera  # noqa: E402
+from bmd_camera.ble.protocol.codec import Operation, encode_assign_elements  # noqa: E402
+from bmd_camera.ble.protocol.types import DataType  # noqa: E402
+from bmd_camera.ble.scanner import scan_for_camera  # noqa: E402
+from bmd_camera.camera_profile import CameraProfile, CommandSpec  # noqa: E402
 
 PACKET_CHOICES = ("codec_quality", "video_format", "recording_format")
 
@@ -321,7 +321,7 @@ def resolve_data_type(spec: CommandSpec, args: argparse.Namespace) -> DataType:
     docstring's DATA_TYPE OVERRIDE section), else the profile's own
     `spec.data_type` unchanged. Generic across all three packet families
     because every CommandSpec carries this field identically — the
-    CANDIDATE-vs-spec wire-byte discrepancy this probes (docs/settings.md §3)
+    CANDIDATE-vs-spec wire-byte discrepancy this probes (docs/ble/settings.md §3)
     isn't specific to any one family."""
     if args.data_type is not None:
         return DataType[args.data_type]
@@ -395,7 +395,7 @@ def resolve_reserved(spec: CommandSpec, args: argparse.Namespace) -> int:
     least-evidenced field in a CANDIDATE block: it can only be read off
     camera-originated reports, which need not use the value a *write* requires.
     `POCKET_6K_G2 v8.6`'s recording family turned out to accept both `0x00` and
-    `0x01` (docs/recording.md), so a refused write is a reason to vary this
+    `0x01` (docs/ble/recording.md), so a refused write is a reason to vary this
     before doubting the payload values.
     """
     if args.reserved is not None:
@@ -491,7 +491,7 @@ def build_command(profile: CameraProfile, args: argparse.Namespace) -> tuple[str
                 raise SystemExit(
                     f"dimension_enum for '{args.resolution}' under '{args.codec}' is not in "
                     f"the profile — enums never appear in notifications, so probe candidates "
-                    f"actively with --dimension-enum (see docs/settings.md)."
+                    f"actively with --dimension-enum (see docs/ble/settings.md)."
                 )
             label = f"video_format {args.resolution} {args.codec} {args.fps}"
         extra1, extra2 = resolve_video_format_extra(args)
@@ -596,7 +596,7 @@ async def run(args: argparse.Namespace) -> int:
         print(
             "\nDid the camera physically change as requested? If yes AND the capture "
             "shows a matching report, update the profile block's provenance "
-            "(docs/settings.md's runbook); if the camera did nothing, that finding "
+            "(docs/ble/settings.md's runbook); if the camera did nothing, that finding "
             "belongs in the provenance notes too."
         )
     finally:
@@ -620,7 +620,7 @@ def parse_args() -> argparse.Namespace:
         "--packet",
         required=True,
         choices=PACKET_CHOICES,
-        help="Which settings packet family to send (see docs/settings.md).",
+        help="Which settings packet family to send (see docs/ble/settings.md).",
     )
     parser.add_argument("--codec", help="Codec name from the profile's codecs table, e.g. BRAW")
     parser.add_argument(
@@ -655,7 +655,7 @@ def parse_args() -> argparse.Namespace:
             "video_format only: override the two trailing payload elements (accepts 0x.. "
             "hex or decimal) instead of the default 0, 0. Discovery-grade: probes whether "
             "these unexplained elements (see the module docstring's VIDEO_FORMAT TRAILING "
-            "ELEMENTS section, docs/settings.md §16) are the missing piece for a gap a "
+            "ELEMENTS section, docs/ble/settings.md §16) are the missing piece for a gap a "
             "dimension_enum sweep can't close, e.g. --video-format-extra 1 0."
         ),
     )
@@ -668,7 +668,7 @@ def parse_args() -> argparse.Namespace:
             "profile's own value — generic across all three --packet families. "
             "Discovery-grade: use it to probe the CANDIDATE-vs-spec data-type-byte "
             "discrepancy (see the module docstring's DATA_TYPE OVERRIDE section, "
-            "docs/settings.md §3/§4/§16), e.g. --data-type INT16 to try 0x02 instead "
+            "docs/ble/settings.md §3/§4/§16), e.g. --data-type INT16 to try 0x02 instead "
             "of the claimed write byte 0x82. Default: unset, profile's value unchanged."
         ),
     )
@@ -692,7 +692,7 @@ def parse_args() -> argparse.Namespace:
             "Discovery-grade: every write this codebase has ever sent used ASSIGN "
             "(0x00); the header format documents OFFSET (0x01) as the other "
             "write-capable operation, never tried (see the module docstring's "
-            "OPERATION OVERRIDE section, docs/settings.md §16), e.g. --operation OFFSET. "
+            "OPERATION OVERRIDE section, docs/ble/settings.md §16), e.g. --operation OFFSET. "
             "Default: unset, ASSIGN unchanged."
         ),
     )
@@ -709,7 +709,7 @@ def parse_args() -> argparse.Namespace:
             "that packet's category/parameter/reserved from the profile. "
             "Discovery-grade: built for testing Operation.OFFSET's documented delta "
             "semantics (see the module docstring's RAW PAYLOAD OVERRIDE section, "
-            "docs/protocol.md §4), e.g. --raw-payload 0 0 256 0 0 --operation OFFSET "
+            "docs/ble/protocol.md §4), e.g. --raw-payload 0 0 256 0 0 --operation OFFSET "
             "to request a +256 width delta (UHD -> 4K DCI) instead of an absolute "
             "target. Composes with --data-type/--operation. Default: unset, normal "
             "per-packet resolution unchanged."

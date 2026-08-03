@@ -1,7 +1,7 @@
-"""Unit tests for :mod:`bmd_ble.protocol.categories.settings`.
+"""Unit tests for :mod:`bmd_camera.ble.protocol.categories.settings`.
 
 The byte-exact expectations mirror the reverse-engineered POCKET_6K_G2 v7.9
-packet layouts recorded in docs/settings.md (external RE doc, CANDIDATE):
+packet layouts recorded in docs/ble/settings.md (external RE doc, CANDIDATE):
 
 - codec_quality:      FF 06 00 00 0A 00 01 00 <codec_id> <variant_id>
 - video_format:       FF 09 00 01 01 00 01 00 <fps> <m_rate> <dim_enum> 00 00
@@ -10,7 +10,7 @@ packet layouts recorded in docs/settings.md (external RE doc, CANDIDATE):
 
 import pytest
 
-from bmd_ble.protocol.categories.settings import (
+from bmd_camera.ble.protocol.categories.settings import (
     RecordingFormat,
     VideoFormat,
     decode_codec_quality,
@@ -21,8 +21,8 @@ from bmd_ble.protocol.categories.settings import (
     encode_video_format,
     is_settings_notification,
 )
-from bmd_ble.protocol.codec import CommandHeader, Operation, decode_packet
-from bmd_ble.protocol.types import DataType
+from bmd_camera.ble.protocol.codec import CommandHeader, Operation, decode_packet
+from bmd_camera.ble.protocol.types import DataType
 
 
 def _hex(data: bytes) -> str:
@@ -281,7 +281,7 @@ class TestDecoders:
     def test_decodes_real_captured_full_sensor_flags(self):
         """Same capture, 6K 3:2 report — frame_flags 0x0000 at the same 50
         fps that reports 0x0010 elsewhere (the resolution-dependent
-        'windowed' bit finding, docs/settings.md §5)."""
+        'windowed' bit finding, docs/ble/settings.md §5)."""
         raw = bytes.fromhex("FF 0E 00 00 01 09 02 02 32 00 32 00 00 18 80 0D 00 00")
 
         _header, payload = decode_packet(raw)
@@ -303,7 +303,7 @@ class TestDecoders:
 
     def test_decodes_real_captured_dimension_enum_probe_reports(self):
         """Regression net against the 2026-07-20 --dimension-enum probe
-        sweep (docs/settings.md §7): each of these is the 0x01/0x09 report
+        sweep (docs/ble/settings.md §7): each of these is the 0x01/0x09 report
         following a video_format write with the given enum, decoding to
         exactly the width/height already in the resolutions table — byte-
         exact confirmation for every known dimension_enum, all at 25fps."""
@@ -345,7 +345,7 @@ class TestDecoders:
             assert decode_recording_format(payload, header.data_type) == expected, label
 
     def test_dimension_enum_0x10_report_is_indistinguishable_from_unchanged_state(self):
-        """0x10 was probed 2026-07-20 (docs/settings.md §7) and refuted the
+        """0x10 was probed 2026-07-20 (docs/ble/settings.md §7) and refuted the
         earlier '3.7K Anamorphic alt' hypothesis: the resulting 0x01/0x09
         report is byte-identical to the prior (unrelated) 6K 2.4:1 report
         — i.e. the camera left the resolution unchanged rather than
@@ -358,7 +358,7 @@ class TestDecoders:
 
     def test_decodes_real_captured_first_genuine_codec_quality_write_echo(self):
         """Regression net against the 2026-07-20 examples/change_codec.py
-        run (docs/settings.md section 10) — the first genuine (non-redundant)
+        run (docs/ble/settings.md section 10) — the first genuine (non-redundant)
         set_codec_quality() write+echo cycle: ProRes HQ -> 422, confirmed on
         the 0x0A/0x00 channel."""
         tx = bytes.fromhex("FF 06 00 00 0A 00 01 00 02 01")

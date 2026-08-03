@@ -33,7 +33,7 @@ INTERCONNECT_NOTE = (
 
 
 def _already_reminded(session_id: str, file_path: str) -> bool:
-    marker_dir = Path(tempfile.gettempdir()) / "bmd_ble_doc_reminders"
+    marker_dir = Path(tempfile.gettempdir()) / "bmd_camera_doc_reminders"
     marker_dir.mkdir(exist_ok=True)
     key = hashlib.sha256(f"{session_id}:{file_path}".encode()).hexdigest()
     marker = marker_dir / key

@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "tools" / "control"
 import discover_command as dc  # noqa: E402
 from discovery import CandidateCommand, ConfirmedOutcome, build_command_block  # noqa: E402
 
-from bmd_ble.protocol.types import DataType  # noqa: E402
+from bmd_camera.ble.protocol.types import DataType  # noqa: E402
 
 SAVED_PATH = Path("tools/captures/POCKET_6K_G2_v8.6/POCKET_6K_G2_v8.6_20260729T134321.json")
 
@@ -104,4 +104,4 @@ class TestPrintUnemittableSummary:
         assert "by hand" in out
         assert "echoed for EVERY outcome" in out
         assert "re-run" in out
-        assert "docs/command_discovery.md" in out
+        assert "docs/ble/command_discovery.md" in out

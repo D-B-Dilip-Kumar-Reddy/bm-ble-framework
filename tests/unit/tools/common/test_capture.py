@@ -14,7 +14,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "tools" / "common")
 
 from capture import DecodedNotification, decode_notification, dedupe_triples  # noqa: E402
 
-from bmd_ble.constants import CHARACTERISTIC_CAM_STATUS, CHARACTERISTIC_INCOMING  # noqa: E402
+from bmd_camera.ble.constants import (  # noqa: E402
+    CHARACTERISTIC_CAM_STATUS,
+    CHARACTERISTIC_INCOMING,
+)
 
 
 def _characteristic(uuid: str):
