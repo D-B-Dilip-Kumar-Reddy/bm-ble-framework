@@ -187,9 +187,9 @@ payloads/
     <MODEL_KEY>/
       ble/                  # <FIRMWARE>.json — one per firmware, validated against ble_schema.json
       rest/                 # <FIRMWARE>.json — one per firmware, validated against rest_schema.json.
-                            # Optional per camera — POCKET_6K_PRO/rest/v8.6.json is the first
-                            # real one, populated from tools/rest/probe_endpoints.py sweep output;
-                            # POCKET_6K_G2 has no rest/ file yet despite being the primary reference
+                            # Optional per camera — POCKET_6K_G2/rest/v8.6.json and
+                            # POCKET_6K_PRO/rest/v8.6.json are both populated, from
+                            # tools/rest/probe_endpoints.py sweep output
   ble_schema.json           # JSON Schema — validates all ble/ payload files at load time
   rest_schema.json          # JSON Schema — validates all rest/ payload files at load time
 

@@ -767,11 +767,18 @@ entirely for a camera with no sweep yet: `profile.rest` is then an all-defaults
 `RestProfile`, mirroring a Phase 1 BLE scaffold's `commands == {}`.
 
 `profile.rest_endpoint(path)` / `profile.require_rest_endpoint(path)` follow the
-existing `command()` / `require_command()` pair exactly. `payloads/models/POCKET_6K_PRO/rest/v8.6.json`
-is the first real profile, populated from the 2026-08-03 write-probe sweep above — 76
-endpoints, 48 subscribable WebSocket properties. `POCKET_6K_G2 v8.6` has no `rest/` file
-yet despite being the primary reference; its sweep results are recorded in prose above
-but not yet transcribed into a profile JSON.
+existing `command()` / `require_command()` pair exactly. Both real cameras now have a
+profile, transcribed from the write-probe sweeps above:
+
+| Profile | Endpoints | WS properties | Source |
+|---|---|---|---|
+| `payloads/models/POCKET_6K_G2/rest/v8.6.json` | 76 | 46 | The third (write-probe) sweep run, before the `/lens/focus` fix — its `put_status` is absent for `/video/ndFilter/displayMode` (no value to echo back, ND-less camera) and `/lens/focus` (the spec-key bug, fixed afterward but not re-swept) |
+| `payloads/models/POCKET_6K_PRO/rest/v8.6.json` | 76 | 48 | The fourth sweep run, after the `/lens/focus` fix — its `/lens/focus` entry carries a real `put_status`/`put_supported` the G2's profile lacks |
+
+Both are `_meta.status: "UNVERIFIED"` and `provenance.status: "CANDIDATE"` — a same-value
+`PUT` proves an endpoint exists, not that a changing write applies (Phase 5's job). A
+re-sweep of the G2 with the fixed catalog would fill in its `/lens/focus` write result;
+nothing currently depends on that gap.
 
 ### `tools/rest/watch_events.py`
 
