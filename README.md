@@ -35,8 +35,8 @@ the documentation map below.
 - Settings changes: codec, quality, resolution, FPS *(implemented — CANDIDATE values from an external reverse-engineering doc, pending re-verification on real hardware; see [`docs/ble/settings.md`](docs/ble/settings.md))*
 - Photo capture *(planned)*
 - Video playback / gallery browsing *(planned)*
-- Video and photo metadata capture *(planned)*
-- Storage media monitoring — SD card state, remaining space, slot status *(planned)*
+- Video and photo metadata capture — *(planned over BLE; implemented read-only over REST via `RestCameraSession.clips()`, see [`docs/rest/session.md`](docs/rest/session.md))*
+- Storage media monitoring — SD card state, remaining space, slot status — *(planned over BLE; implemented read-only over REST via `RestCameraSession.storage_state()`, see [`docs/rest/session.md`](docs/rest/session.md))*
 
 ---
 
