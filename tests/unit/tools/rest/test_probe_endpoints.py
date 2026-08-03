@@ -476,6 +476,53 @@ class TestWebsocketUrl:
             websocket_url("10.0.0.3")
 
 
+class TestRealServerRegressions:
+    """Fixtures taken verbatim from the second, corrected sweep run against
+    real POCKET_6K_G2 v8.6 hardware (2026-08-03) — the run that confirmed
+    both the WS off-by-one and the HTML-vs-JSON mounts bug were fixed.
+    Pinned here so a future refactor can't silently reintroduce either."""
+
+    def test_extract_links_reads_the_real_mount_root_listing(self):
+        """The real payload has three entries — two directories, one file
+        with size/mtime — and only the directories should be walked."""
+        body = [
+            {"name": "Stills", "type": "directory", "mtime": "Fri, 31 Jul 2026 12:54:20"},
+            {
+                "name": "A001_07311253_C001.mov",
+                "type": "file",
+                "mtime": "Fri, 31 Jul 2026 12:53:58",
+                "size": 49058872,
+            },
+            {
+                "name": "System Volume Information",
+                "type": "directory",
+                "mtime": "Sat, 25 Jul 2026 01:06:53",
+            },
+        ]
+        assert extract_links(body) == ["Stills", "System Volume Information"]
+
+    def test_real_websocket_opened_event_is_not_mistaken_for_a_response(self):
+        """The exact event shape the camera sends on connect, before any
+        response — this is what shifted every result by one prior to the fix."""
+        opened = {"data": {"action": "websocketOpened"}, "type": "event"}
+        assert is_response_to(opened, 0) is False
+
+    def test_real_subscribe_response_is_self_referential(self):
+        """After the fix, id=47 correctly names its own property
+        (/system/videoFormat) in the error — not id=46's, as the first run's
+        off-by-one produced."""
+        response = {
+            "type": "response",
+            "id": 47,
+            "data": {
+                "success": False,
+                "errorMessage": "Cannot subscribe to unknown property '/system/videoFormat'",
+            },
+        }
+        assert is_response_to(response, 47) is True
+        assert ws_response_ok(response) is False
+
+
 class TestRenderSummary:
     def test_lists_firmware_defects_before_working_endpoints(self):
         """A 500 buried under forty 200s is a 500 nobody reads."""

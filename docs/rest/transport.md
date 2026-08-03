@@ -1,9 +1,11 @@
 # REST / WebSocket Transport
 
-**Status:** Phase 0 — first successful sweep run on `POCKET_6K_G2 v8.6` over USB
-(2026-08-03): 52 endpoints working, 5 not implemented, no 5xx. Results and their known
-gaps are under "Sweep results". No write probe has been run, and no REST client, session,
-or profile exists yet.
+**Status:** Phase 0 — two sweep runs on `POCKET_6K_G2 v8.6` over USB (2026-08-03). The
+second run confirms the tool bugs the first run exposed are fixed, and reaches the
+mounts hierarchy the first run could not: 53 endpoints working, 5 not implemented, 2
+`5xx` (every subdirectory under a mount root, not Stills specifically). Full results
+under "Sweep results". No write probe has been run, and no REST client, session, or
+profile exists yet.
 
 ## Overview
 
@@ -25,7 +27,7 @@ Three defects were already found by hand on `POCKET_6K_G2 v8.6`, all by accident
 | `GET /system` | `204 No Content` | Documented as returning a `SystemResponse`; returns nothing |
 | `GET /system/videoFormat` | `501 Not Implemented` | Not available on this device |
 | `GET /system/codecFormat` | `501 Not Implemented` | Not available on this device |
-| `GET /mounts/<volume>/Stills/` | `500 Internal Server Error` | **Firmware defect** — the parent and the individual files both work |
+| `GET /mounts/<volume>/Stills/` | `500 Internal Server Error` | **Firmware defect** — the mount root and individual files both work; a second sweep later found this is not Stills-specific — every subdirectory under a mount root 500s |
 
 If three turned up by accident, more will turn up on purpose. So the first deliverable of
 the REST work is evidence, not architecture: sweep every endpoint, record what each one
@@ -474,15 +476,71 @@ identity or preset recall ever matters.
 `/system/codecFormat` and `/system/videoFormat` are rejected by the event feed too —
 `"Cannot subscribe to unknown property"` — consistent with their 501s.
 
-### Known gaps in this run
+### Known gaps in the first run, and their re-run outcome
 
-Three tool bugs, all fixed, all requiring a re-run before the results above are complete:
+Three tool bugs were found in the first run. All three are confirmed fixed by a
+second sweep run minutes later (`--mounts-depth 3`, otherwise identical), which is the
+run the results above are drawn from:
 
-| Bug | Effect on this run |
+| Bug | First run | Second run |
+|---|---|---|
+| WS responses matched positionally instead of by `id` | Every result shifted by one | **Fixed** — 46/49 succeeded; the 3 failures are exactly `/system/codecFormat`, `/system/videoFormat`, `/system/supportedFormats`, each self-referentially rejected as `"Cannot subscribe to unknown property '<its own path>'"` — consistent with their `501`s, and no longer attributed to the wrong property |
+| `/mounts/` listing assumed HTML, is JSON | Walk never descended past `/mounts/` | **Fixed** — descended 3 levels, reached both subdirectories |
+| Empty working-set slots expanded into requests | Two meaningless 404s | **Fixed** — `Media devices discovered: sd0` only |
+
+### The 500 is not Stills-specific — it is every subdirectory
+
+This is the one substantive change from re-running with a working mounts walk.
+`GET /mounts/A001-sd1/` — the **mount root** — works and returns full metadata:
+
+```json
+[
+  {"name": "Stills", "type": "directory", "mtime": "Fri, 31 Jul 2026 12:54:20"},
+  {"name": "A001_07311253_C001.mov", "type": "file",
+   "mtime": "Fri, 31 Jul 2026 12:53:58", "size": 49058872},
+  {"name": "System Volume Information", "type": "directory", "mtime": "..."}
+]
+```
+
+**Every directory one level below it returns 500** — `Stills/` and, newly discovered,
+`System Volume Information/` too:
+
+```
+GET /mounts/A001-sd1/Stills/                       -> 500
+GET /mounts/A001-sd1/System Volume Information/    -> 500
+```
+
+So the defect is not "Stills doesn't list" — it's **"no subdirectory under a mount root
+lists."** The mount root itself is fine and gives real metadata (name, type, mtime, and
+**size** for files); one level down, the listing endpoint breaks unconditionally.
+
+This matters directly for Phase 6. **Clips live in the mount root, not a subdirectory** —
+`A001_07311253_C001.mov` sits directly under `/mounts/A001-sd1/`, with a real `size`
+field. A clip could in principle be confirmed by watching the root listing's size or
+entry count change. **Stills apparently go into the one kind of location that never
+lists**, so the root-listing route does not extend to them; the filename-probing design
+in Phase 6 still stands as written.
+
+### The clip-path mapping — a pattern, not yet a rule
+
+`/clips/list` reports `filePath: /mnt/sd0/A001/A001_07311253_C001.mov`. The mount root
+that actually serves that file over HTTP is `/mounts/A001-sd1/`. Line up the pieces:
+
+| Internal `filePath` | HTTP mount |
 |---|---|
-| WebSocket responses matched positionally instead of by `id` | **Every subscription result shifted by one.** The camera sends a `websocketOpened` event on connect, which consumed request 0's slot. `/audio/channel/0/available` was recorded FAILED when it succeeded; `/system/codecFormat` was recorded OK when it was rejected; `/system/supportedFormats`'s real outcome was never read. Counts in the summary are not trustworthy |
-| The `/mounts/` listing was assumed to be HTML | It is **JSON** (`[{"name": "A001-sd1", "type": "directory", …}]`), so no links were extracted and the walk never descended. **The known Stills 500 was neither reproduced nor disproved** |
-| Empty working-set slots were expanded into requests | Produced two meaningless 404s (`/media/devices/`, `/media/devices//doformat`) that are facts about the tool, not the camera |
+| `/mnt/` prefix | dropped |
+| `sd0` (`deviceName`) | `sd1` in the mount name |
+| `A001` (reel folder) | folded into the mount name: `A001-sd1` |
+| `A001_07311253_C001.mov` | same, directly under the mount root |
+
+So `A001-sd1` is `<reel>-<slot-label>`, and the reel subdirectory the internal path shows
+does **not** reappear under `/mounts/` — the mount root **is** the reel folder. One
+plausible read of `sd0` → `sd1`: `deviceName` is 0-indexed while the physical slot label
+is 1-indexed (`workingsetIndex` was `1` for this same device) — a hypothesis, not
+confirmed, and not something to encode as a rule without a second reel or a second slot
+to test it against. The gate-table question stays open; what changed is that "not string
+manipulation" now has a concrete example to design against instead of being asserted in
+the abstract.
 
 ### Gate table status
 
@@ -490,10 +548,10 @@ Three tool bugs, all fixed, all requiring a re-run before the results above are 
 |---|---|
 | `GET /system/supportedFormats` works? | **Yes** — full capability matrix, above |
 | Plaintext HTTP listener live? | **Yes** — port 80, `Server: BlackmagicDesign` |
-| `/clips/list` exposes stills or sizes? | **No** — clips only, no size field |
+| `/clips/list` exposes stills or sizes? | **No size field on clips either** — but the mount root listing does (`size: 49058872` on the one `.mov` present), so a clip's own directory entry can confirm it, just not via `/clips/list` |
 | Timecode encoding? | **BCD, big-endian HH:MM:SS:FF**, reversed vs BLE |
-| Are the 5xx defects wider than Stills? | **No 5xx observed** — but Stills was not reached; re-run needed |
-| Which WS properties subscribe? | 46 offered, but results misattributed; re-run needed |
+| Are the 5xx defects wider than Stills? | **Yes — every subdirectory under a mount root 500s**, not Stills specifically |
+| Which WS properties subscribe? | **46/49** — every property except the three `501` `/system/*` endpoints, which the event feed also rejects as unknown |
 | `PUT /system/format` implemented? | **Open** — needs `--probe-writes` |
 | `PUT /transports/0/record` implemented? | **Open** — never probed, and never will be by this tool (`NEVER_WRITE`) |
 | `sensorResolution` writable? | **Open** — but confirmed readable and enumerable, which BLE never achieved |
