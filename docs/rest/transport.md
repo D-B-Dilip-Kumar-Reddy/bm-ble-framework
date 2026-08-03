@@ -598,8 +598,6 @@ value just read.
 
 ### `POCKET_6K_PRO v8.6`
 
-### `POCKET_6K_PRO v8.6`
-
 Not swept. Nothing above transfers.
 
 ---
