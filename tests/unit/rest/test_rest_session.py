@@ -616,6 +616,10 @@ EXPECTED_MERGED_BODY = {
     "codec": "BRaw:5_1",
     "frameRate": "23.98",
     "recordResolution": {"width": 4096, "height": 2160},
+    # BRaw's matched sensorResolution (4096x2160), NOT CURRENT_FORMAT_BODY's
+    # stale ProRes-era value (5744x3024, see CURRENT_FORMAT_BODY above) —
+    # the real-hardware defect TestSetCameraFormat's tests guard against.
+    "sensorResolution": {"width": 4096, "height": 2160},
 }
 
 
@@ -698,6 +702,7 @@ class TestSetCameraFormat:
                             "codec": "BRaw:5_1",
                             "frameRate": "23.98",
                             "recordResolution": {"width": 4096, "height": 2160},
+                            "sensorResolution": {"width": 4096, "height": 2160},
                         },
                     },
                 }
@@ -709,6 +714,85 @@ class TestSetCameraFormat:
         assert client.put_calls == [(FORMAT_PROPERTY, EXPECTED_MERGED_BODY)]
         # only one GET /system/format — the pre-write read; no readback needed
         assert client.calls.count(FORMAT_PROPERTY) == 1
+
+    @pytest.mark.asyncio
+    async def test_derives_sensor_resolution_from_matched_entry_not_current_format(self):
+        """Real-hardware-confirmed defect (POCKET_6K_G2 v8.6, 2026-08-03):
+        GET /system/supportedFormats pairs 4096x2160 recordResolution with
+        DIFFERENT sensorResolution per codec (ProRes -> 5744x3024, BRaw ->
+        4096x2160). A confirmed ProRes/4K DCI write followed by BRAW/4K DCI
+        — CURRENT_FORMAT_BODY here stands in for that post-ProRes current
+        format, sensorResolution 5744x3024 — must not carry that stale
+        value into the BRAW write; it must use BRaw's own matched
+        4096x2160, or the camera rejects the whole body with
+        400 {"error": "Format is not supported"}."""
+        client = FakeRestClient(
+            {
+                FORMAT_PROPERTY: CURRENT_FORMAT_BODY,
+                "/system/supportedFormats": SUPPORTED_FORMATS_BODY_BRAW_4K_DCI,
+            }
+        )
+        session = make_session(make_format_profile(), client=client)
+
+        async def deliver_event():
+            await asyncio.sleep(0.01)
+            session._router.handle_event(
+                {
+                    "type": "event",
+                    "data": {
+                        "action": "propertyValueChanged",
+                        "property": FORMAT_PROPERTY,
+                        "value": {
+                            "codec": "BRaw:5_1",
+                            "frameRate": "23.98",
+                            "recordResolution": {"width": 4096, "height": 2160},
+                            "sensorResolution": {"width": 4096, "height": 2160},
+                        },
+                    },
+                }
+            )
+
+        asyncio.create_task(deliver_event())
+        await session.set_camera_format("BRAW", "5:1", "4K DCI", "23.98")
+
+        _path, put_body = client.put_calls[0]
+        assert put_body["sensorResolution"] == {"width": 4096, "height": 2160}
+        assert put_body["sensorResolution"] != CURRENT_FORMAT_BODY["sensorResolution"]
+
+    @pytest.mark.asyncio
+    async def test_raises_bmd_unsupported_when_matches_disagree_on_sensor_resolution(self):
+        """If the camera's own capability matrix offers a (codec,
+        recordResolution, fps) combination at more than one sensorResolution
+        (e.g. ProRes at 1920x1080 — see docs/rest/transport.md), this method
+        has no evidence for which one the caller wants and must not guess —
+        guessing risks reproducing the exact "internally inconsistent body"
+        failure the sensorResolution derivation exists to prevent."""
+        client = FakeRestClient(
+            {
+                "/system/supportedFormats": {
+                    "supportedFormats": [
+                        {
+                            "codecs": ["ProRes:HQ"],
+                            "frameRates": ["24"],
+                            "recordResolution": {"width": 1920, "height": 1080},
+                            "sensorResolution": {"width": 2880, "height": 1512},
+                        },
+                        {
+                            "codecs": ["ProRes:HQ"],
+                            "frameRates": ["24"],
+                            "recordResolution": {"width": 1920, "height": 1080},
+                            "sensorResolution": {"width": 5376, "height": 3024},
+                        },
+                    ]
+                }
+            }
+        )
+        session = make_session(make_format_profile(), client=client)
+
+        with pytest.raises(BMDUnsupportedError, match="different"):
+            await session.set_camera_format("ProRes", "HQ", "HD", "24")
+
+        assert client.put_calls == []
 
     @pytest.mark.asyncio
     async def test_confirmed_by_get_readback_secondary_when_no_event_arrives(self):
@@ -780,6 +864,7 @@ class TestSetCameraFormat:
                             "codec": "ProRes:Original",
                             "frameRate": "23.98",
                             "recordResolution": {"width": 4096, "height": 2160},
+                            "sensorResolution": {"width": 4096, "height": 2160},
                         },
                     },
                 }

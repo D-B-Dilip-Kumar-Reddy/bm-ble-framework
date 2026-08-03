@@ -175,18 +175,28 @@ def _recording_flag(value: Any) -> bool | None:
 
 
 def _format_matches(
-    value: Any, *, codec: str, frame_rate: str, resolution: tuple[int, int]
+    value: Any,
+    *,
+    codec: str,
+    frame_rate: str,
+    resolution: tuple[int, int],
+    sensor_resolution: tuple[int, int],
 ) -> bool:
     """Whether `/system/format`'s event `value` or `GET` readback body
-    reports exactly the requested `codec`/`frameRate`/`recordResolution` —
-    the shape `Format`/`_parse_format` already parses. Returns False for
+    reports exactly the requested `codec`/`frameRate`/`recordResolution`/
+    `sensorResolution` — the shape `Format`/`_parse_format` already parses.
+    `sensor_resolution` is included because it's a real dependent field, not
+    an independent one — see `set_camera_format`'s docstring for the
+    real-hardware defect that assuming otherwise caused. Returns False for
     anything malformed, mirroring `_recording_flag`'s "not confirmed by
     this channel" treatment of a bad or missing value."""
     if not isinstance(value, dict):
         return False
     if value.get("codec") != codec or value.get("frameRate") != frame_rate:
         return False
-    return _resolution(value.get("recordResolution")) == resolution
+    if _resolution(value.get("recordResolution")) != resolution:
+        return False
+    return _resolution(value.get("sensorResolution")) == sensor_resolution
 
 
 def _resolution(body: dict | None) -> tuple[int, int]:
@@ -571,29 +581,49 @@ class RestCameraSession:
         BLE's `dimension_enums`, `m_rate`, `frame_flags`, `known_unreachable`,
         or `max_fps_int` are consulted here — those stay BLE-only (do not
         delete them; `CameraSession` still needs them). Instead, the
-        requested combination is checked against the camera's own **live**
+        requested combination is resolved against the camera's own **live**
         `supported_formats()` capability matrix (design principle 7's REST
-        sibling to BLE's static ceiling checks — see `_require_format_supported`),
-        raising `BMDUnsupportedError` when the camera doesn't report
-        offering it, before any write is attempted.
+        sibling to BLE's static ceiling checks — see
+        `_resolve_supported_format`), raising `BMDUnsupportedError` when the
+        camera doesn't report offering it, before any write is attempted.
 
-        **The write preserves every field this method doesn't touch.**
-        `GET /system/format` first, then only `codec`/`frameRate`/
-        `recordResolution` are overwritten in that same body before the
-        `PUT` — never a hand-built partial body — because a partial body
-        risks resetting `offSpeedEnabled`/`offSpeedFrameRate`/
-        `sensorResolution` to defaults (see the module-level `GET`-merge-
-        `PUT` pattern this mirrors from `record_start`/`record_stop`'s
-        simpler single-field case). `sensorResolution` in particular is
-        deliberately never set by this method — whether it's writable at
-        all is still an open question, see docs/ble/photo_capture.md §10
-        and docs/rest/transport.md's "Sensor Area" finding.
+        **`sensorResolution` is derived from that same matched entry, not
+        preserved from the current format.** Real-hardware-confirmed defect
+        this fixes (`POCKET_6K_G2 v8.6`, 2026-08-03): `GET
+        /system/supportedFormats` pairs `4096×2160` `recordResolution` with
+        **different** `sensorResolution` values depending on codec — `ProRes`
+        pairs it with `5744×3024`, `BRaw` with `4096×2160` (see
+        docs/rest/transport.md). The first version of this method preserved
+        whatever `sensorResolution` the *current* format happened to have,
+        which is only ever correct when a write doesn't cross that boundary.
+        A confirmed `ProRes/422/4K DCI` write followed immediately by
+        `BRAW/5:1/4K DCI` sent `BRaw`'s codec/resolution/fps fields together
+        with `ProRes`'s stale `5744×3024` sensorResolution — an internally
+        inconsistent combination the camera correctly rejected with
+        `400 {"error": "Format is not supported"}`, not a 501/`BMDUnsupportedError`,
+        since nothing about the *requested* combination was actually
+        unsupported. `sensorResolution` is now always set to
+        `_resolve_supported_format`'s matched entry — the exact pairing the
+        camera itself declared for this `(codec, recordResolution, fps)` —
+        rather than left untouched. If more than one `supported_formats()`
+        entry matches with *different* `sensorResolution` values (e.g.
+        `ProRes` at `1920×1080`, which pairs with three different sensor
+        resolutions — see docs/rest/transport.md), `_resolve_supported_format`
+        raises `BMDUnsupportedError` rather than guessing which one the
+        caller wants; disambiguating that is future work (a
+        `sensor_resolution` parameter), not something this method invents
+        an answer for today. Every other field this method doesn't touch
+        (`offSpeedEnabled`/`offSpeedFrameRate`/min/max off-speed) is still
+        preserved from a `GET /system/format` taken right before the write —
+        never a hand-built partial body, since a partial one risks resetting
+        those to defaults.
 
         Verified via the same dual-check as `record_start`/`record_stop`:
         a WS `propertyValueChanged` event on `/system/format` primary, a
         `GET /system/format` readback secondary — `BMDVerificationError` if
-        neither confirms the requested `codec`/`frameRate`/`recordResolution`
-        within `verify_timeout_s`.
+        neither confirms the requested
+        `codec`/`frameRate`/`recordResolution`/`sensorResolution` within
+        `verify_timeout_s`.
         """
         self.profile.require_codec(codec, variant)
         resolution_spec = self.profile.require_resolution(resolution)
@@ -609,7 +639,7 @@ class RestCameraSession:
 
         rest_codec = resolve_rest_codec_name(self.profile.rest.format_names, codec, variant)
         record_resolution = (resolution_spec.width, resolution_spec.height)
-        await self._require_format_supported(rest_codec, fps, record_resolution)
+        matched = await self._resolve_supported_format(rest_codec, fps, record_resolution)
 
         current = await self._rest_client.get(FORMAT_PROPERTY)
         body = dict(current)
@@ -619,46 +649,79 @@ class RestCameraSession:
             "width": resolution_spec.width,
             "height": resolution_spec.height,
         }
+        body["sensorResolution"] = {
+            "width": matched.sensor_resolution[0],
+            "height": matched.sensor_resolution[1],
+        }
 
         self._router.arm(FORMAT_PROPERTY)
         await self._rest_client.put(FORMAT_PROPERTY, body)
         event_value = await self._router.wait_for(FORMAT_PROPERTY, timeout=self.verify_timeout_s)
         confirmed = _format_matches(
-            event_value, codec=rest_codec, frame_rate=fps, resolution=record_resolution
+            event_value,
+            codec=rest_codec,
+            frame_rate=fps,
+            resolution=record_resolution,
+            sensor_resolution=matched.sensor_resolution,
         )
         if not confirmed:
             readback = await self._rest_client.get(FORMAT_PROPERTY)
             confirmed = _format_matches(
-                readback, codec=rest_codec, frame_rate=fps, resolution=record_resolution
+                readback,
+                codec=rest_codec,
+                frame_rate=fps,
+                resolution=record_resolution,
+                sensor_resolution=matched.sensor_resolution,
             )
         if not confirmed:
             raise BMDVerificationError(
                 f"set_camera_format({codec} {variant} {resolution} {fps}): neither a WS "
                 f"'{FORMAT_PROPERTY}' propertyValueChanged event nor a GET readback "
                 f"confirmed codec={rest_codec!r} frameRate={fps!r} "
-                f"recordResolution={record_resolution} within {self.verify_timeout_s}s"
+                f"recordResolution={record_resolution} "
+                f"sensorResolution={matched.sensor_resolution} within {self.verify_timeout_s}s"
             )
 
-    async def _require_format_supported(
+    async def _resolve_supported_format(
         self, rest_codec: str, fps: str, record_resolution: tuple[int, int]
-    ) -> None:
+    ) -> SupportedFormat:
         """Design principle 7's REST sibling to BLE's static
         `known_unreachable`/`max_fps_int` checks: instead of a hand-
         maintained profile ceiling, ask the camera's own live
         `GET /system/supportedFormats` capability matrix (`supported_formats()`)
-        whether it offers `rest_codec` at `record_resolution` and `fps`
-        together, raising `BMDUnsupportedError` immediately when it
-        doesn't — before any write is attempted."""
+        which entry offers `rest_codec` at `record_resolution` and `fps`
+        together, raising `BMDUnsupportedError` immediately when none does —
+        before any write is attempted.
+
+        Returns the matched entry (not just a bool) so its `sensor_resolution`
+        can be carried into the write body — see `set_camera_format`'s
+        docstring for the real-hardware defect this closes. Also raises
+        `BMDUnsupportedError` when more than one entry matches with
+        *different* `sensor_resolution` values: this method has no evidence
+        for which one the caller wants, and guessing risks reproducing the
+        exact "internally inconsistent body" failure this exists to prevent.
+        """
         formats = await self.supported_formats()
-        for entry in formats:
-            if (
-                entry.record_resolution == record_resolution
-                and rest_codec in entry.codecs
-                and fps in entry.frame_rates
-            ):
-                return
-        raise BMDUnsupportedError(
-            f"[{self.host}] {self.profile.model_key} {self.profile.firmware} does not "
-            f"report offering codec={rest_codec!r} at recordResolution={record_resolution} "
-            f"frameRate={fps!r} in GET /system/supportedFormats"
-        )
+        matches = [
+            entry
+            for entry in formats
+            if entry.record_resolution == record_resolution
+            and rest_codec in entry.codecs
+            and fps in entry.frame_rates
+        ]
+        if not matches:
+            raise BMDUnsupportedError(
+                f"[{self.host}] {self.profile.model_key} {self.profile.firmware} does not "
+                f"report offering codec={rest_codec!r} at recordResolution={record_resolution} "
+                f"frameRate={fps!r} in GET /system/supportedFormats"
+            )
+        sensor_resolutions = {entry.sensor_resolution for entry in matches}
+        if len(sensor_resolutions) > 1:
+            raise BMDUnsupportedError(
+                f"[{self.host}] {self.profile.model_key} {self.profile.firmware} reports "
+                f"{len(matches)} GET /system/supportedFormats entries for codec={rest_codec!r} "
+                f"recordResolution={record_resolution} frameRate={fps!r} with different "
+                f"sensorResolution values ({sorted(sensor_resolutions)}) — set_camera_format "
+                "has no way to choose between them yet"
+            )
+        return matches[0]

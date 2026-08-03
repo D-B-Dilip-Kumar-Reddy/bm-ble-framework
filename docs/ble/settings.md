@@ -2029,18 +2029,33 @@ capture and now REST both agree the camera does. The `known_unreachable` entry a
 `BMDUnsupportedError` guard it drives are unchanged — both still describe the BLE write
 path specifically, which this REST evidence says nothing about either way.
 
-### 16.2 A REST write path now exists to actually test this (2026-08-04, still unrun)
+### 16.2 REST reaches ProRes/4K DCI where BLE cannot (2026-08-03, confirmed)
 
 §16.1 was read-only evidence — `GET /system/supportedFormats` saying the camera offers the
 combination, not a write reaching it. `RestCameraSession.set_camera_format` (Phase 5,
 `docs/rest/session.md`) is the first thing in this codebase that can actually attempt a
-`PUT` at ProRes/4K DCI over any transport: `examples/rest_change_format.py`'s default
-combinations include it specifically for this reason. No run has been reported yet, so
-this remains exactly what §16.1 already was — corroborating evidence, not a resolution.
-A successful confirmed write there would be independent proof the camera-side combination
-works end to end, not just that the camera *reports* supporting it; this section's
-`known_unreachable` entry would still stand unchanged either way, since it describes only
-this codebase's BLE write path.
+`PUT` at ProRes/4K DCI over any transport, and `examples/rest_change_format.py`'s first
+run (`POCKET_6K_G2 v8.6`) did exactly that: **`PUT /system/format` to
+`ProRes:Original/4096×2160@23.98` was sent and confirmed** via the dual-check (a WS
+`propertyValueChanged` event on `/system/format`). This is independent proof the
+camera-side combination works end to end over a real write — not just that the camera
+*reports* supporting it (§16.1) — on the exact combination nine BLE falsification attempts
+across three sessions could never reach.
+
+**This section's `known_unreachable` entry stands unchanged, correctly.** It has always
+described only this codebase's BLE write path, never a camera capability — its own note
+already says so verbatim ("a software capability gap in this codebase's BLE write path,
+not evidence the camera-side combination is unsupported"). This REST confirmation is the
+third and strongest piece of evidence for that exact claim, not a reason to touch the
+entry: BLE's `dimension_enum` gap for this combination is unrelated to and unaffected by
+what REST can now do.
+
+The same run's very next step (switching to `BRAW/4K DCI` immediately after) failed with a
+real `400` from the camera — a genuine `set_camera_format` defect (`sensorResolution`
+carried over stale from the ProRes write rather than derived per-codec), now fixed. See
+`docs/rest/session.md`'s "Write verbs" section for the full write-up. The ProRes/4K DCI
+result above is unaffected by that defect or its fix — it was the first, and successful,
+step in the run.
 
 ---
 

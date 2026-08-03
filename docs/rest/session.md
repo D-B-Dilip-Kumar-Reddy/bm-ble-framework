@@ -5,8 +5,12 @@ implemented and **real-hardware-confirmed** — `POCKET_6K_G2` and `POCKET_6K_PR
 2026-08-03, `record_start`/`record_stop` each 6/6 via the dual-check
 (`examples/rest_record_start_stop.py`), the same run that also caught and fixed
 `wait_while_recording`'s return-value-inversion defect (see below). `set_camera_format`
-(Phase 5) is implemented and unit-tested but **real-hardware confirmation is still
-open** — no run of `examples/rest_change_format.py` has been reported yet.
+(Phase 5) is implemented, unit-tested, and **partially real-hardware-confirmed**: a
+`ProRes/4K DCI` write — the exact combination BLE's write path cannot reach
+(`known_unreachable`) — was confirmed on the first `examples/rest_change_format.py` run,
+`POCKET_6K_G2 v8.6`, 2026-08-03. The very next step in that same run (`BRAW/4K DCI`)
+exposed a real defect (`sensorResolution` derivation, see below) that has since been
+fixed; a full round-trip confirming the fix itself is still open.
 
 ## Overview
 
@@ -255,19 +259,36 @@ sibling to BLE's static ceiling checks — raising `BMDUnsupportedError` immedia
 camera doesn't report offering it.
 
 **Merge-before-write, not a partial body.** `GET /system/format` first, then only
-`codec`/`frameRate`/`recordResolution` are overwritten in that same body before the `PUT` —
-never a hand-built partial one — because a partial body risks resetting
-`offSpeedEnabled`/`offSpeedFrameRate`/`sensorResolution` to defaults. `sensorResolution` in
-particular is **deliberately never set** by this method: whether `PUT /system/format` can
-change it at all is still open (see docs/rest/transport.md's "Sensor Area" finding and
-docs/ble/photo_capture.md §10, which closed it as unwritable over BLE by any means tried).
-Settling that is a separate, not-yet-run investigation — nothing here assumes an answer
-either way.
+`codec`/`frameRate`/`recordResolution`/`sensorResolution` are overwritten in that same body
+before the `PUT` — never a hand-built partial one — because a partial body risks resetting
+`offSpeedEnabled`/`offSpeedFrameRate`/min/max off-speed to defaults, which are the only
+fields still genuinely preserved unchanged from the pre-write `GET`.
+
+**`sensorResolution` is derived from the matched `supported_formats()` entry, not
+preserved.** Real-hardware-confirmed defect, `POCKET_6K_G2 v8.6`, 2026-08-03 (see "Real
+hardware" below): `GET /system/supportedFormats` pairs the same `4096×2160`
+`recordResolution` with **different** `sensorResolution` per codec —
+`ProRes` → `5744×3024`, `BRaw` → `4096×2160`. The first version of this method preserved
+whatever `sensorResolution` the *current* format already had, which is only correct when a
+write doesn't cross that pairing — a `ProRes/4K DCI` write followed by `BRAW/4K DCI` sent
+`BRaw`'s codec/resolution/fps together with `ProRes`'s stale `sensorResolution`, an
+internally inconsistent body the camera correctly rejected with
+`400 {"error": "Format is not supported"}` (not a `501`/`BMDUnsupportedError`, since the
+requested combination itself was genuinely supported). Fixed by deriving
+`sensorResolution` from whichever `supported_formats()` entry matched the requested
+`(codec, recordResolution, fps)` — the exact pairing the camera itself declared — instead
+of leaving it untouched. If more than one entry matches with *different*
+`sensorResolution` values (a real case: `ProRes` at `1920×1080` pairs with three different
+sensor resolutions), the method raises `BMDUnsupportedError` naming the ambiguity rather
+than guessing — see `_resolve_supported_format`'s docstring. This is **not** the same thing
+as exposing arbitrary `sensorResolution` selection (still out of scope, see below) — it's
+making sure every write this method already attempts is internally consistent with what
+the camera itself reports pairing together.
 
 Verified via the same dual-check pattern as `record_start`/`record_stop`: a WS
 `propertyValueChanged` event on `/system/format` primary, a `GET /system/format` readback
 secondary, `BMDVerificationError` if neither confirms the requested
-`codec`/`frameRate`/`recordResolution` within `verify_timeout_s`.
+`codec`/`frameRate`/`recordResolution`/`sensorResolution` within `verify_timeout_s`.
 
 **Capability check is put_supported-gated, unlike `record_start`/`record_stop`.**
 `/system/format`'s `PUT` *was* write-probed (`tools/rest/probe_endpoints.py --probe-writes`
@@ -279,13 +300,14 @@ raises `BMDUnsupportedError` immediately unless that flag is confirmed — the m
 design principle 7 check `record_start`/`record_stop` couldn't use, since their endpoint
 was structurally never write-probed.
 
-**Real-hardware confirmation is still open.** Unlike `record_start`/`record_stop`, no run
-of `examples/rest_change_format.py` has been reported yet. The evidentiary interest is
-high: its default combinations include ProRes/4K DCI, exactly the pair BLE's `settings.md`
-records as `known_unreachable` after nine falsification attempts — `docs/rest/transport.md`
-already shows the camera holding that combination and `GET /system/supportedFormats`
-confirming it, so a successful `set_camera_format` write there would be the clearest
-evidence yet that REST reaches what BLE's write path structurally cannot.
+**Real hardware, `POCKET_6K_G2 v8.6`, 2026-08-03** (`examples/rest_change_format.py`'s
+first run): step 1, `ProRes/422/4K DCI @ 23.98`, **confirmed** — exactly the combination
+BLE's `settings.md` records as `known_unreachable` after nine falsification attempts,
+now reached over REST on the first attempt. Step 2, `BRAW/5:1/4K DCI @ 23.98`, run
+immediately after, **failed with a real `400`** — the `sensorResolution` defect described
+above, not a codec-name or capability-check problem (the capability check had already
+passed; the rejection came from the camera itself, on the `PUT`). Fixed as described above;
+a full round-trip confirming the fix itself on real hardware is still open.
 
 ---
 
@@ -353,21 +375,32 @@ GET-readback secondary path is exercised by never delivering an event and shorte
 `make_format_profile()` helper carrying both a `codecs`/`resolutions`/`fps_modes` BLE table
 (mirroring `tests/unit/test_session.py`'s `make_settings_profile`) and a `rest/` profile
 confirming `/system/format`'s `put_supported` and `/system/supportedFormats`'s `supported`.
-Coverage includes: the local-validation `ValueError`s; both capability-check
-`BMDUnsupportedError`s (endpoint not confirmed, and camera-reported combination mismatch);
-the merge-before-write body (asserting every untouched field from the canned `GET` survives
-into the `PUT`); both dual-check paths; and that a profile's confirmed `format_names` entry
-is what makes `"422"` resolve to `"ProRes:Original"` rather than the derivation rule's
-(wrong) `"ProRes:422"`.
+Coverage includes: the local-validation `ValueError`s; the capability-check
+`BMDUnsupportedError`s (endpoint not confirmed, camera-reported combination mismatch, and
+ambiguous `sensorResolution` across multiple matching entries); the merge-before-write body
+(asserting every untouched field from the canned `GET` survives into the `PUT`); both
+dual-check paths; that a profile's confirmed `format_names` entry is what makes `"422"`
+resolve to `"ProRes:Original"` rather than the derivation rule's (wrong) `"ProRes:422"`;
+and — pinning the real-hardware defect above directly — that a codec switch derives
+`sensorResolution` from the *matched* `supported_formats()` entry rather than carrying over
+whatever the canned pre-write `GET` (standing in for a stale current format) already had.
 
 ---
 
 ## What's deliberately out of scope
 
-- **No `sensorResolution` writes.** `set_camera_format` reads it via the pre-write `GET`
-  and always writes it back unchanged — whether `PUT /system/format` can actually *change*
-  it is a real open question (docs/rest/transport.md's "Sensor Area" finding), not
-  something this method attempts to answer or exposes a parameter for.
+- **No arbitrary `sensorResolution` selection.** `set_camera_format` *does* set
+  `sensorResolution` now (see "Write verbs" above) — but only to whichever value the
+  camera's own `supported_formats()` pairs with the requested `(codec, recordResolution,
+  fps)`, and only ever the one such value when it's unambiguous. A caller cannot ask for a
+  *specific* sensor resolution among several a camera offers for the same
+  `(codec, recordResolution, fps)` (real case: `ProRes` at `1920×1080`) — that raises
+  `BMDUnsupportedError` today rather than picking one. Exposing a `sensor_resolution`
+  parameter to disambiguate is future work, not something this method invents an answer
+  for. Whether `PUT /system/format` can set a sensor resolution *other than* one already
+  paired with the requested codec/resolution/fps (the "Sensor Area" selector question,
+  docs/rest/transport.md) remains a separate, still-open question this method doesn't
+  attempt to answer.
 - **No storage precondition on `record_stop()`.** Only `record_start()` checks
   `storage_state()` — matching CLAUDE.md design principle 10's wording ("before recording
   or photo capture"), which names starting an operation, not ending one.
