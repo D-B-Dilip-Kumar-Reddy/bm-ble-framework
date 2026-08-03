@@ -737,10 +737,26 @@ way:
   `response` message, or any other event type, is silently ignored rather than
   misattributed.
 
-**Honest caveat:** the exact `propertyValueChanged` body above is spec-derived, not yet
-cross-checked against a raw captured event — no sweep run to date has logged a full
-event body (only subscription success/failure). Confirm this shape against a real WS
-session before relying on it for a verification-critical write.
+**Confirmed against real hardware, 2026-08-04**: `tools/rest/watch_events.py` run against
+`POCKET_6K_PRO v8.6` over USB, subscribed to all 48 `websocket_properties` from its
+profile. The event shape above is exactly what arrived — no gap between spec and wire on
+this camera/firmware. Three things worth recording from that run:
+
+- `/transports/0/timecode`, `/timelines/0`, `/system/format`, and `/media/workingset` all
+  delivered `propertyValueChanged` events with `value` matching their `Notification.yaml`
+  schema (or, for `/media/workingset`, the same shape `GET /media/workingset` already
+  returns — see "Storage" above).
+- **`/system`'s event `value` is `None`**, not a dict — consistent with `GET /system`
+  returning `204`/empty on this camera. A caller cannot assume every event's `value` is a
+  mapping; `/system` is at minimum one property where it isn't.
+- `/media/workingset` is not in `Notification.yaml`'s documented `deviceProperty` enum
+  but subscribed and emitted real content anyway — the same "undocumented but real"
+  pattern already established for `/camera/id`/`/presets`/`/presets/active` from the
+  `/event/list` sweep.
+
+`/transports/0/timecode` fired roughly every 80ms during this run (an idle camera, not
+recording) — a caller subscribing to it should expect a high-frequency stream, not an
+occasional update.
 
 ### Profile plumbing (`payloads/rest_schema.json`, `camera_profile.py`)
 

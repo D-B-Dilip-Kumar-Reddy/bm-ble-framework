@@ -299,3 +299,110 @@ class TestConnectionLifecycle:
         await router._read_loop(stale_generation)
 
         assert router._latest == {}
+
+
+class TestRealServerRegressions:
+    """Fixtures taken verbatim from a real `tools/rest/watch_events.py` run
+    against `POCKET_6K_PRO v8.6` over USB (2026-08-04), subscribed to all 48
+    `websocket_properties` from its profile — the first time this repo
+    captured full `propertyValueChanged` event bodies rather than just
+    subscription success/failure. Confirms the shape documented in
+    docs/rest/transport.md's "Library surface (Phase 2)" section is real,
+    not just spec-derived. Pinned here so a future refactor can't silently
+    break parsing for any of these three shapes."""
+
+    def test_handles_real_system_format_event(self):
+        """/system/format's value matches the Notification.yaml Format
+        schema exactly, including nested recordResolution/sensorResolution."""
+        router = RestEventRouter()
+        message = {
+            "type": "event",
+            "data": {
+                "action": "propertyValueChanged",
+                "property": "/system/format",
+                "value": {
+                    "codec": "ProRes:Proxy",
+                    "frameRate": "23.98",
+                    "maxOffSpeedFrameRate": 60,
+                    "minOffSpeedFrameRate": 5,
+                    "offSpeedEnabled": False,
+                    "offSpeedFrameRate": 24,
+                    "recordResolution": {"height": 2160, "width": 4096},
+                    "sensorResolution": {"height": 3024, "width": 5744},
+                },
+            },
+        }
+
+        router.handle_event(message)
+
+        _seq, value = router._latest["/system/format"]
+        assert value["codec"] == "ProRes:Proxy"
+        assert value["recordResolution"] == {"height": 2160, "width": 4096}
+
+    def test_handles_real_system_event_with_none_value(self):
+        """/system's event value is None on real hardware, not a dict —
+        consistent with GET /system returning 204/empty. A caller cannot
+        assume every event's value is a mapping."""
+        router = RestEventRouter()
+        message = {
+            "type": "event",
+            "data": {"action": "propertyValueChanged", "property": "/system", "value": None},
+        }
+
+        router.handle_event(message)
+
+        _seq, value = router._latest["/system"]
+        assert value is None
+
+    def test_handles_real_media_workingset_event(self):
+        """/media/workingset is not in Notification.yaml's documented
+        deviceProperty enum but subscribed and emitted real content on real
+        hardware anyway — the same "undocumented but real" pattern already
+        established for /camera/id, /presets, /presets/active."""
+        router = RestEventRouter()
+        message = {
+            "type": "event",
+            "data": {
+                "action": "propertyValueChanged",
+                "property": "/media/workingset",
+                "value": {
+                    "size": 3,
+                    "workingset": [
+                        {
+                            "activeDisk": False,
+                            "clipCount": 0,
+                            "deviceName": "",
+                            "index": 0,
+                            "remainingRecordTime": 0,
+                            "remainingSpace": 0,
+                            "totalSpace": 0,
+                        },
+                        {
+                            "activeDisk": True,
+                            "clipCount": 1,
+                            "deviceName": "sd0",
+                            "index": 1,
+                            "remainingRecordTime": 52284,
+                            "remainingSpace": 1023925420032,
+                            "totalSpace": 1024060293120,
+                            "volume": "A001",
+                        },
+                        {
+                            "activeDisk": False,
+                            "clipCount": 0,
+                            "deviceName": "",
+                            "index": 2,
+                            "remainingRecordTime": 0,
+                            "remainingSpace": 0,
+                            "totalSpace": 0,
+                        },
+                    ],
+                },
+            },
+        }
+
+        router.handle_event(message)
+
+        _seq, value = router._latest["/media/workingset"]
+        assert value["size"] == 3
+        assert value["workingset"][1]["deviceName"] == "sd0"
