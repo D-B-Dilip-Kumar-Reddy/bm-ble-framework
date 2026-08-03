@@ -121,7 +121,8 @@ src/bmd_camera/
                             # reserved for the planned subsystems that will use them)
   camera_profile.py         # Load, validate, and cache model/firmware profiles —
                             # shared across transports; loads a model's ble/ profile
-                            # today, and its rest/ profile once one exists (planned)
+                            # always, and its rest/ profile too when one exists
+                            # (optional per camera — see rest/ below)
   ble/
     constants.py            # BLE UUIDs and timing constants (fixed by spec)
     scanner.py               # BLE discovery by advertisement name
@@ -148,8 +149,17 @@ src/bmd_camera/
                               # POCKET_6K_G2 v7.9 hardware, see docs/ble/settings.md
         media.py              # (planned) Photo capture, playback controls
         metadata.py           # (planned) Video / photo metadata reads
-  rest/                      # (planned) REST/WebSocket client, event router, RestCameraSession —
-                             # see docs/rest/transport.md
+  rest/
+    constants.py             # API base path, WS path, default timeouts (fixed by spec)
+    client.py                # RestClient — REST transport only, raw status-code handling
+                              # (204/501/2xx/other), no camera semantics — see docs/rest/transport.md
+    events.py                # RestEventRouter — buffers propertyValueChanged WS events,
+                              # mirrors ble/notification_router.py's arm()/wait_for() contract
+                              # exactly, keyed by property path instead of (category, parameter)
+    exceptions.py            # BMDRestError + re-exports of the shared exception types
+    session.py                # (planned) RestCameraSession — user-facing API, Phase 3+
+    media.py                  # (planned) Photo-capture confirmation, playback controls
+    mapping.py                 # (planned) Codec/resolution/fps name derivation rules
 
 tools/
   common/                   # Shared BLE capture/decode engine (tools/common/capture.py)
@@ -160,8 +170,11 @@ tools/
                             # (changes real camera state; use deliberately)
   query/                    # Read-only characteristic inspection
   rest/                     # 8.6 REST/WebSocket transport tooling — no BLE, no bmd_camera.ble
-                            # imports. Currently one endpoint-sweep tool; read-only by
-                            # default, opt-in idempotent write probes. See docs/rest/transport.md
+                            # imports. probe_endpoints.py (endpoint sweep — read-only by default,
+                            # opt-in idempotent write probes; standalone, no bmd_camera imports
+                            # at all) and watch_events.py (streams WS events via RestEventRouter,
+                            # the first consumer of the Phase 2 library outside its own tests).
+                            # See docs/rest/transport.md
   captures/                 # Runtime output of sniffers/, control/, and rest/ scripts (gitignored)
 
 Tools are grouped by folder according to what kind of thing they do — read-only
@@ -173,10 +186,12 @@ payloads/
   models/
     <MODEL_KEY>/
       ble/                  # <FIRMWARE>.json — one per firmware, validated against ble_schema.json
-      rest/                 # (planned) <FIRMWARE>.json — one per firmware, validated
-                            # against rest_schema.json
+      rest/                 # <FIRMWARE>.json — one per firmware, validated against rest_schema.json.
+                            # Optional per camera — POCKET_6K_PRO/rest/v8.6.json is the first
+                            # real one, populated from tools/rest/probe_endpoints.py sweep output;
+                            # POCKET_6K_G2 has no rest/ file yet despite being the primary reference
   ble_schema.json           # JSON Schema — validates all ble/ payload files at load time
-  rest_schema.json          # (planned) JSON Schema for rest/ payload files
+  rest_schema.json          # JSON Schema — validates all rest/ payload files at load time
 
 examples/
   scan_camera.py            # Discover cameras by BLE advertisement name

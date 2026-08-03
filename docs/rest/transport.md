@@ -676,6 +676,114 @@ timeline. All of it unverified until swept.
 
 ---
 
+## Library surface (Phase 2)
+
+Everything above was the evidence phase (Phase 0). Phase 2 turned it into the
+transport-only client layer `RestCameraSession` (Phase 3+) will sit on top of —
+`src/bmd_camera/rest/`: `constants.py`, `client.py`, `events.py`, `exceptions.py`. No
+camera semantics live here, mirroring the boundary `camera_controller.py` holds for BLE
+(design principle 5).
+
+### `RestClient` (`src/bmd_camera/rest/client.py`)
+
+Thin async wrapper over `aiohttp`. Its whole job is turning this camera's actual status
+codes into the right exception — a naive `raise_for_status()` gets two of them wrong,
+both confirmed by the Phase 0 sweep:
+
+| Status | Meaning here | `RestClient` behaviour |
+|---|---|---|
+| `204` | Accepted, empty body (`GET /system`, most successful `PUT`s) | Returns `None` |
+| `2xx` with a body | Success | Returns the parsed JSON |
+| `501` | Camera correctly declining — not implemented on this device | Raises `BMDUnsupportedError` (design principle 7) |
+| other non-2xx (`4xx`/`5xx`) | A real failure — includes the mounts `500` defect | Raises `BMDRestError` |
+| connection refused / timeout | Transport failure | Raises `BMDConnectionError` |
+
+`get`/`put`/`post`/`delete` all funnel through one `_request()`. A `session` can be
+injected (real or fake) for testing — `tests/unit/rest/test_client.py` never opens a
+real socket. Every log line is prefixed `[<host>]`, the REST sibling of CLAUDE.md's
+`[<ble_name> @ <address>]` convention.
+
+### `RestEventRouter` (`src/bmd_camera/rest/events.py`)
+
+Deliberately mirrors `NotificationRouter`'s `arm()`/`wait_for()` contract byte for byte
+— same staleness/duplicate-delivery discipline (see docs/ble/session_and_verification.md)
+— keyed by property path string instead of `(category, parameter)`, and buffering
+`propertyValueChanged` values instead of decoded BMD packets.
+
+Message shapes come from the uploaded `Notification.yaml` AsyncAPI spec, not a guess:
+
+```json
+{"type": "request",  "id": 0, "data": {"action": "subscribe", "properties": ["/transports/0/record"]}}
+{"type": "response", "id": 0, "data": {"success": true}}
+{"type": "event",    "data": {"action": "propertyValueChanged",
+                               "property": "/transports/0/record", "value": {"recording": true}}}
+```
+
+Two things carried over directly from lessons this migration already learned the hard
+way:
+
+- **Reconnection resubscribes.** Subscriptions are per-connection — exactly the BLE CCCD
+  lesson in docs/ble/winrt_ble_connection_hardening.md. `connect()` remembers every
+  property `subscribe()` was called for and resubscribes them automatically after a
+  reconnect.
+- **A connection-generation guard.** `connect()` bumps a generation counter; the
+  background reader task checks it before routing each message, so a reader from a
+  connection that's still winding down can never deliver into the router after a newer
+  `connect()` call — the same guard class BLE's reconnect loop uses.
+- **Response/event confusion is exactly what broke the first sweep run** (see "Known
+  gaps in the first run" above — WS responses matched positionally instead of by `id`).
+  `RestEventRouter` never faces that problem in the first place: `handle_event` only
+  ever routes a well-formed `propertyValueChanged` event (`is_property_event`); a
+  `response` message, or any other event type, is silently ignored rather than
+  misattributed.
+
+**Honest caveat:** the exact `propertyValueChanged` body above is spec-derived, not yet
+cross-checked against a raw captured event — no sweep run to date has logged a full
+event body (only subscription success/failure). Confirm this shape against a real WS
+session before relying on it for a verification-critical write.
+
+### Profile plumbing (`payloads/rest_schema.json`, `camera_profile.py`)
+
+A `rest/<firmware>.json` profile is optional per camera — `CameraProfile.for_model()`
+loads it if present, exactly matching the sibling `ble/<firmware>.json`'s shape:
+
+```json
+{
+  "_meta": {"model_key": "POCKET_6K_PRO", "firmware": "v8.6", "status": "UNVERIFIED"},
+  "transport": "usb",
+  "endpoints": {
+    "/system/format": {"status": 200, "supported": true, "put_status": 204, "put_supported": true}
+  },
+  "websocket_properties": ["/system/format", "..."],
+  "format_names": {},
+  "provenance": {"status": "CANDIDATE", "method": "...", "verified_on": "2026-08-03", "notes": "..."}
+}
+```
+
+This is exactly the shape `tools/rest/probe_endpoints.py`'s `build_rest_profile_block()`
+emits — the same "paste the tool's output, never hand-author it" discipline
+`tools/control/discover_command.py` established for BLE `commands` blocks. Absent
+entirely for a camera with no sweep yet: `profile.rest` is then an all-defaults
+`RestProfile`, mirroring a Phase 1 BLE scaffold's `commands == {}`.
+
+`profile.rest_endpoint(path)` / `profile.require_rest_endpoint(path)` follow the
+existing `command()` / `require_command()` pair exactly. `payloads/models/POCKET_6K_PRO/rest/v8.6.json`
+is the first real profile, populated from the 2026-08-03 write-probe sweep above — 76
+endpoints, 48 subscribable WebSocket properties. `POCKET_6K_G2 v8.6` has no `rest/` file
+yet despite being the primary reference; its sweep results are recorded in prose above
+but not yet transcribed into a profile JSON.
+
+### `tools/rest/watch_events.py`
+
+The WebSocket analogue of `examples/monitor_incoming.py` — connects, subscribes (either
+an explicit `--properties` list or a profile's confirmed `websocket_properties`), and
+logs every `propertyValueChanged` event as it arrives via `RestEventRouter`'s `on_event`
+callback hook. Unlike `probe_endpoints.py` (deliberately standalone, no `bmd_camera`
+imports), this tool exercises the Phase 2 library surface directly — it is the first
+consumer of `RestEventRouter` outside its own tests.
+
+---
+
 ## Security note
 
 No authentication and no TLS appear anywhere in the specs or in anything observed. This

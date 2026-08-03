@@ -53,8 +53,12 @@ DOC_MAP: list[tuple[str, list[str]]] = [
         ["docs/ble/protocol.md", "docs/ble/packet_structure_and_constants.md"],
     ),
     ("src/bmd_camera/ble/state.py", ["docs/ble/session_and_verification.md"]),
-    ("src/bmd_camera/camera_profile.py", ["docs/ble/payload_profiles.md"]),
+    (
+        "src/bmd_camera/camera_profile.py",
+        ["docs/ble/payload_profiles.md", "docs/rest/transport.md"],
+    ),
     ("src/bmd_camera/exceptions.py", [CLAUDE_MD]),
+    ("src/bmd_camera/rest/*", ["docs/rest/transport.md"]),
     ("tools/common/capture.py", ["docs/ble/sniffer_capture_engine.md"]),
     ("tools/common/discovery.py", ["docs/ble/command_discovery.md"]),
     ("tools/sniffers/*", ["docs/ble/sniffer_capture_engine.md"]),

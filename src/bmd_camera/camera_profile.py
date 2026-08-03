@@ -47,6 +47,7 @@ logger = logging.getLogger(__name__)
 PAYLOADS_DIR = Path(__file__).resolve().parents[2] / "payloads"
 MODELS_DIR = PAYLOADS_DIR / "models"
 SCHEMA_PATH = PAYLOADS_DIR / "ble_schema.json"
+REST_SCHEMA_PATH = PAYLOADS_DIR / "rest_schema.json"
 
 # Registry of all known (model_key, firmware) pairs.
 # Add a new tuple here after creating the corresponding JSON file.
@@ -77,6 +78,28 @@ def validate_profile(raw: dict, *, source: str) -> None:
     except jsonschema.ValidationError as exc:
         raise ValueError(
             f"Profile {source} failed schema validation at {exc.json_path}: {exc.message}"
+        ) from exc
+
+
+@lru_cache(maxsize=1)
+def load_rest_schema() -> dict:
+    """Load and cache payloads/rest_schema.json."""
+    with open(REST_SCHEMA_PATH, encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def validate_rest_profile(raw: dict, *, source: str) -> None:
+    """Validate a raw REST profile dict against payloads/rest_schema.json.
+
+    Same contract as ``validate_profile``, for the ``rest/<firmware>.json``
+    sibling files populated from ``tools/rest/probe_endpoints.py`` sweep
+    output.
+    """
+    try:
+        jsonschema.validate(raw, load_rest_schema())
+    except jsonschema.ValidationError as exc:
+        raise ValueError(
+            f"REST profile {source} failed schema validation at {exc.json_path}: {exc.message}"
         ) from exc
 
 
@@ -196,6 +219,46 @@ class StorageSignalSpec:
     provenance: CommandProvenance | None = None
 
 
+@dataclass(frozen=True)
+class RestEndpointSpec:
+    """One REST endpoint's sweep outcome from a profile's ``endpoints`` map.
+
+    ``status``/``supported`` come from the read sweep; ``put_status``/
+    ``put_supported`` are only meaningful when ``tools/rest/probe_endpoints.py
+    --probe-writes`` ran for this path. A same-value PUT proves the endpoint
+    exists, not that a *changing* write applies — see docs/rest/transport.md.
+    """
+
+    path: str
+    status: int | None
+    supported: bool
+    notes: str | None = None
+    put_status: int | None = None
+    put_supported: bool | None = None
+
+
+@dataclass(frozen=True)
+class RestProfile:
+    """Resolved REST/WebSocket profile for one (model_key, firmware) pair,
+    loaded from payloads/models/<MODEL_KEY>/rest/<FIRMWARE>.json when that
+    file exists.
+
+    Absent entirely for a camera/firmware with no REST sweep yet —
+    ``CameraProfile.rest`` is then this class's all-defaults instance,
+    mirroring a Phase 1 BLE scaffold's ``commands == {}``: the profile still
+    loads, there's just nothing here to read. ``RestCameraSession`` refuses
+    to call a known-501 endpoint rather than rediscovering it every run —
+    the role ``known_unreachable`` plays for BLE (see docs/rest/transport.md).
+    """
+
+    status: str = "UNKNOWN"
+    transport: str | None = None
+    endpoints: dict[str, RestEndpointSpec] = field(default_factory=dict)
+    websocket_properties: tuple[str, ...] = ()
+    format_names: dict[str, dict[str, str]] = field(default_factory=dict)
+    provenance: CommandProvenance | None = None
+
+
 def _parse_provenance(block: dict) -> CommandProvenance | None:
     """Parse a ``provenance`` sub-block shared by ``commands`` and ``storage`` entries."""
     provenance_raw = block.get("provenance")
@@ -247,6 +310,10 @@ class CameraProfile:
     resolutions: dict[str, ResolutionSpec] = field(default_factory=dict)
     fps_modes: dict[str, FpsModeSpec] = field(default_factory=dict)
 
+    # REST/WebSocket profile (Phase 2+), loaded from a sibling rest/<fw>.json
+    # when present. Defaults to an all-empty RestProfile — see its docstring.
+    rest: RestProfile = field(default_factory=RestProfile)
+
     # Raw JSON for reference
     _raw: dict = field(default_factory=dict, repr=False, compare=False)
 
@@ -272,6 +339,29 @@ class CameraProfile:
             raise ValueError(
                 f"Profile {self.model_key}_{self.firmware} command '{name}' is missing "
                 f"values: {', '.join(missing)} — populate commands.{name}.values in {json_path}."
+            )
+        return spec
+
+    # ── REST endpoint access ────────────────────────────────────────────────
+
+    def rest_endpoint(self, path: str) -> RestEndpointSpec | None:
+        """The named REST endpoint's sweep outcome, or None when this
+        profile has no ``rest/`` file, or the file has no entry for
+        ``path``."""
+        return self.rest.endpoints.get(path)
+
+    def require_rest_endpoint(self, path: str) -> RestEndpointSpec:
+        """Return the named REST endpoint's sweep outcome, raising
+        ValueError when it is missing from the profile's ``rest/`` file (or
+        no such file exists yet)."""
+        spec = self.rest.endpoints.get(path)
+        if spec is None:
+            known = ", ".join(sorted(self.rest.endpoints)) or "(none)"
+            raise ValueError(
+                f"Profile {self.model_key}_{self.firmware} has no REST endpoint '{path}' "
+                f"(known: {known}) — run tools/rest/probe_endpoints.py against this "
+                f"camera/firmware first and paste the result into "
+                f"payloads/models/{self.model_key}/rest/{self.firmware}.json."
             )
         return spec
 
@@ -388,6 +478,7 @@ class CameraProfile:
                 )
 
         profile = cls._from_raw(model_key, firmware, raw)
+        profile.rest = cls._load_rest_profile(model_key, firmware)
 
         if profile.status != "VERIFIED":
             logger.warning(
@@ -405,7 +496,83 @@ class CameraProfile:
                     spec.name,
                     spec.provenance.status,
                 )
+        if profile.rest.endpoints and profile.rest.status != "VERIFIED":
+            logger.info(
+                "[%s @ %s] REST profile status is %s — endpoints are sweep-derived, "
+                "not confirmed by a changing write",
+                model_key,
+                profile.ble_name,
+                profile.rest.status,
+            )
         return profile
+
+    @classmethod
+    def _load_rest_profile(cls, model_key: str, firmware: str) -> RestProfile:
+        """Load payloads/models/<MODEL_KEY>/rest/<FIRMWARE>.json if it
+        exists, else return an all-defaults RestProfile.
+
+        A REST file is optional per camera (Phase 2 profile plumbing) — its
+        absence is not an error, unlike a missing BLE profile. When present,
+        it is validated and its ``_meta`` cross-checked exactly like the BLE
+        file's.
+        """
+        filename = MODELS_DIR / model_key / "rest" / f"{firmware}.json"
+        if not filename.exists():
+            return RestProfile()
+
+        relative_path = f"payloads/models/{model_key}/rest/{firmware}.json"
+        with open(filename, encoding="utf-8") as fh:
+            raw = json.load(fh)
+
+        validate_rest_profile(raw, source=relative_path)
+
+        meta = raw.get("_meta", {})
+        for key, expected in (("model_key", model_key), ("firmware", firmware)):
+            actual = meta.get(key)
+            if actual != expected:
+                raise ValueError(
+                    f"REST profile {relative_path} declares _meta.{key}={actual!r} "
+                    f"but was loaded as {expected!r} — filename and _meta must agree."
+                )
+
+        return cls._rest_from_raw(raw)
+
+    @staticmethod
+    def _rest_from_raw(raw: dict) -> RestProfile:
+        """Build a RestProfile from an already-parsed rest/<fw>.json dict."""
+        meta = raw.get("_meta", {})
+
+        endpoints: dict[str, RestEndpointSpec] = {}
+        for path, block in raw.get("endpoints", {}).items():
+            if path.startswith("_"):
+                continue
+            endpoints[path] = RestEndpointSpec(
+                path=path,
+                status=block.get("status"),
+                supported=block.get("supported", False),
+                notes=block.get("notes"),
+                put_status=block.get("put_status"),
+                put_supported=block.get("put_supported"),
+            )
+
+        format_names: dict[str, dict[str, str]] = {}
+        for family, variants in raw.get("format_names", {}).items():
+            if family.startswith("_"):
+                continue
+            format_names[family] = {
+                variant: rest_name
+                for variant, rest_name in variants.items()
+                if not variant.startswith("_")
+            }
+
+        return RestProfile(
+            status=meta.get("status", "UNKNOWN"),
+            transport=raw.get("transport"),
+            endpoints=endpoints,
+            websocket_properties=tuple(raw.get("websocket_properties", ())),
+            format_names=format_names,
+            provenance=_parse_provenance(raw),
+        )
 
     @classmethod
     def _from_raw(cls, model_key: str, firmware: str, raw: dict) -> CameraProfile:

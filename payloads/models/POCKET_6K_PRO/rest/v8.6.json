@@ -1,0 +1,435 @@
+{
+  "_meta": {
+    "model_key": "POCKET_6K_PRO",
+    "firmware": "v8.6",
+    "status": "UNVERIFIED"
+  },
+  "transport": "usb",
+  "endpoints": {
+    "/system": {
+      "status": 204,
+      "supported": true
+    },
+    "/system/supportedCodecFormats": {
+      "status": 501,
+      "supported": false
+    },
+    "/system/codecFormat": {
+      "status": 501,
+      "supported": false
+    },
+    "/system/videoFormat": {
+      "status": 501,
+      "supported": false
+    },
+    "/system/supportedVideoFormats": {
+      "status": 501,
+      "supported": false
+    },
+    "/system/supportedFormats": {
+      "status": 200,
+      "supported": true
+    },
+    "/system/format": {
+      "status": 200,
+      "supported": true,
+      "put_status": 204,
+      "put_supported": true
+    },
+    "/transports/0": {
+      "status": 200,
+      "supported": true,
+      "put_status": 204,
+      "put_supported": true
+    },
+    "/transports/0/stop": {
+      "status": 200,
+      "supported": true
+    },
+    "/transports/0/play": {
+      "status": 200,
+      "supported": true
+    },
+    "/transports/0/playback": {
+      "status": 200,
+      "supported": true,
+      "put_status": 204,
+      "put_supported": true
+    },
+    "/transports/0/record": {
+      "status": 200,
+      "supported": true
+    },
+    "/transports/0/timecode": {
+      "status": 200,
+      "supported": true
+    },
+    "/transports/0/timecode/source": {
+      "status": 200,
+      "supported": true
+    },
+    "/media/workingset": {
+      "status": 200,
+      "supported": true
+    },
+    "/media/active": {
+      "status": 200,
+      "supported": true,
+      "put_status": 204,
+      "put_supported": true
+    },
+    "/media/devices/doformatSupportedFilesystems": {
+      "status": 200,
+      "supported": true
+    },
+    "/media/devices/sd0": {
+      "status": 200,
+      "supported": true
+    },
+    "/media/devices/sd0/doformat": {
+      "status": 200,
+      "supported": true
+    },
+    "/event/list": {
+      "status": 200,
+      "supported": true
+    },
+    "/timelines/0": {
+      "status": 200,
+      "supported": true
+    },
+    "/video/iso": {
+      "status": 200,
+      "supported": true,
+      "put_status": 204,
+      "put_supported": true
+    },
+    "/video/gain": {
+      "status": 200,
+      "supported": true,
+      "put_status": 204,
+      "put_supported": true
+    },
+    "/video/whiteBalance": {
+      "status": 200,
+      "supported": true,
+      "put_status": 204,
+      "put_supported": true
+    },
+    "/video/whiteBalanceTint": {
+      "status": 200,
+      "supported": true,
+      "put_status": 204,
+      "put_supported": true
+    },
+    "/video/ndFilter": {
+      "status": 200,
+      "supported": true,
+      "put_status": 204,
+      "put_supported": true
+    },
+    "/video/ndFilter/displayMode": {
+      "status": 200,
+      "supported": true,
+      "put_status": 204,
+      "put_supported": true
+    },
+    "/video/shutter": {
+      "status": 200,
+      "supported": true,
+      "put_status": 204,
+      "put_supported": true
+    },
+    "/video/autoExposure": {
+      "status": 200,
+      "supported": true,
+      "put_status": 204,
+      "put_supported": true
+    },
+    "/lens/iris": {
+      "status": 200,
+      "supported": true,
+      "put_status": 204,
+      "put_supported": true
+    },
+    "/lens/zoom": {
+      "status": 200,
+      "supported": true,
+      "put_status": 204,
+      "put_supported": true
+    },
+    "/lens/focus": {
+      "status": 200,
+      "supported": true,
+      "put_status": 204,
+      "put_supported": true
+    },
+    "/colorCorrection/lift": {
+      "status": 200,
+      "supported": true,
+      "put_status": 204,
+      "put_supported": true
+    },
+    "/colorCorrection/gamma": {
+      "status": 200,
+      "supported": true,
+      "put_status": 204,
+      "put_supported": true
+    },
+    "/colorCorrection/gain": {
+      "status": 200,
+      "supported": true,
+      "put_status": 204,
+      "put_supported": true
+    },
+    "/colorCorrection/offset": {
+      "status": 200,
+      "supported": true,
+      "put_status": 204,
+      "put_supported": true
+    },
+    "/colorCorrection/contrast": {
+      "status": 200,
+      "supported": true,
+      "put_status": 204,
+      "put_supported": true
+    },
+    "/colorCorrection/color": {
+      "status": 200,
+      "supported": true,
+      "put_status": 204,
+      "put_supported": true
+    },
+    "/colorCorrection/lumaContribution": {
+      "status": 200,
+      "supported": true,
+      "put_status": 204,
+      "put_supported": true
+    },
+    "/clips/list": {
+      "status": 200,
+      "supported": true
+    },
+    "/audio/channel/0/input": {
+      "status": 200,
+      "supported": true,
+      "put_status": 204,
+      "put_supported": true
+    },
+    "/audio/channel/0/input/description": {
+      "status": 200,
+      "supported": true
+    },
+    "/audio/channel/0/supportedInputs": {
+      "status": 200,
+      "supported": true
+    },
+    "/audio/channel/0/level": {
+      "status": 200,
+      "supported": true,
+      "put_status": 204,
+      "put_supported": true
+    },
+    "/audio/channel/0/phantomPower": {
+      "status": 200,
+      "supported": true,
+      "put_status": 204,
+      "put_supported": true
+    },
+    "/audio/channel/0/padding": {
+      "status": 200,
+      "supported": true,
+      "put_status": 204,
+      "put_supported": true
+    },
+    "/audio/channel/0/lowCutFilter": {
+      "status": 200,
+      "supported": true,
+      "put_status": 204,
+      "put_supported": true
+    },
+    "/audio/channel/0/available": {
+      "status": 200,
+      "supported": true
+    },
+    "/audio/channel/1/input": {
+      "status": 200,
+      "supported": true,
+      "put_status": 204,
+      "put_supported": true
+    },
+    "/audio/channel/1/input/description": {
+      "status": 200,
+      "supported": true
+    },
+    "/audio/channel/1/supportedInputs": {
+      "status": 200,
+      "supported": true
+    },
+    "/audio/channel/1/level": {
+      "status": 200,
+      "supported": true,
+      "put_status": 204,
+      "put_supported": true
+    },
+    "/audio/channel/1/phantomPower": {
+      "status": 200,
+      "supported": true,
+      "put_status": 204,
+      "put_supported": true
+    },
+    "/audio/channel/1/padding": {
+      "status": 200,
+      "supported": true,
+      "put_status": 204,
+      "put_supported": true
+    },
+    "/audio/channel/1/lowCutFilter": {
+      "status": 200,
+      "supported": true,
+      "put_status": 204,
+      "put_supported": true
+    },
+    "/audio/channel/1/available": {
+      "status": 200,
+      "supported": true
+    },
+    "/audio/channel/2/input": {
+      "status": 404,
+      "supported": false
+    },
+    "/audio/channel/2/input/description": {
+      "status": 404,
+      "supported": false
+    },
+    "/audio/channel/2/supportedInputs": {
+      "status": 404,
+      "supported": false
+    },
+    "/audio/channel/2/level": {
+      "status": 404,
+      "supported": false
+    },
+    "/audio/channel/2/phantomPower": {
+      "status": 404,
+      "supported": false
+    },
+    "/audio/channel/2/padding": {
+      "status": 404,
+      "supported": false
+    },
+    "/audio/channel/2/lowCutFilter": {
+      "status": 404,
+      "supported": false
+    },
+    "/audio/channel/2/available": {
+      "status": 404,
+      "supported": false
+    },
+    "/audio/channel/3/input": {
+      "status": 404,
+      "supported": false
+    },
+    "/audio/channel/3/input/description": {
+      "status": 404,
+      "supported": false
+    },
+    "/audio/channel/3/supportedInputs": {
+      "status": 404,
+      "supported": false
+    },
+    "/audio/channel/3/level": {
+      "status": 404,
+      "supported": false
+    },
+    "/audio/channel/3/phantomPower": {
+      "status": 404,
+      "supported": false
+    },
+    "/audio/channel/3/padding": {
+      "status": 404,
+      "supported": false
+    },
+    "/audio/channel/3/lowCutFilter": {
+      "status": 404,
+      "supported": false
+    },
+    "/audio/channel/3/available": {
+      "status": 404,
+      "supported": false
+    },
+    "/mounts/": {
+      "status": 200,
+      "supported": true
+    },
+    "/mounts/A001-sd1/": {
+      "status": 200,
+      "supported": true
+    },
+    "/mounts/A001-sd1/Stills/": {
+      "status": 500,
+      "supported": false
+    },
+    "/mounts/A001-sd1/System Volume Information/": {
+      "status": 500,
+      "supported": false
+    }
+  },
+  "websocket_properties": [
+    "/audio/channel/0/available",
+    "/audio/channel/0/input",
+    "/audio/channel/0/level",
+    "/audio/channel/0/lowCutFilter",
+    "/audio/channel/0/padding",
+    "/audio/channel/0/phantomPower",
+    "/audio/channel/0/supportedInputs",
+    "/audio/channel/1/available",
+    "/audio/channel/1/input",
+    "/audio/channel/1/level",
+    "/audio/channel/1/lowCutFilter",
+    "/audio/channel/1/padding",
+    "/audio/channel/1/phantomPower",
+    "/audio/channel/1/supportedInputs",
+    "/camera/id",
+    "/clips/list",
+    "/colorCorrection/color",
+    "/colorCorrection/contrast",
+    "/colorCorrection/gain",
+    "/colorCorrection/gamma",
+    "/colorCorrection/lift",
+    "/colorCorrection/lumaContribution",
+    "/colorCorrection/offset",
+    "/lens/focus",
+    "/lens/iris",
+    "/lens/zoom",
+    "/media/active",
+    "/media/workingset",
+    "/presets",
+    "/presets/active",
+    "/system",
+    "/system/format",
+    "/timelines/0",
+    "/transports/0",
+    "/transports/0/play",
+    "/transports/0/playback",
+    "/transports/0/record",
+    "/transports/0/stop",
+    "/transports/0/timecode",
+    "/transports/0/timecode/source",
+    "/video/autoExposure",
+    "/video/gain",
+    "/video/iso",
+    "/video/ndFilter",
+    "/video/ndFilter/displayMode",
+    "/video/shutter",
+    "/video/whiteBalance",
+    "/video/whiteBalanceTint"
+  ],
+  "format_names": {},
+  "provenance": {
+    "status": "CANDIDATE",
+    "method": "tools/rest/probe_endpoints.py sweep over usb, including idempotent write probes",
+    "verified_on": "2026-08-03",
+    "notes": "Swept on this camera and firmware only — not evidence about any other model, firmware, or transport. A same-value PUT proves the endpoint exists, not that a changing write applies."
+  }
+}
