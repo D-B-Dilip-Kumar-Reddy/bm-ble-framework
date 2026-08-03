@@ -167,8 +167,11 @@ src/bmd_camera/
                               # timecode, notification-driven is_recording); writes —
                               # record_start/record_stop (Phase 4, real-hardware-
                               # confirmed) and set_camera_format (Phase 5, dual-check
-                              # verified, live-capability-gated via supported_formats(),
-                              # real-hardware confirmation still open). See docs/rest/session.md
+                              # verified, live-capability-gated via supported_formats();
+                              # ProRes/4K DCI real-hardware-confirmed — the exact
+                              # combination BLE's write path can't reach — a full
+                              # round-trip confirming the sensorResolution fix is
+                              # still open). See docs/rest/session.md
     mapping.py                 # Codec name derivation between the BLE profile's vocabulary
                               # and REST's own spelling — confirmed strings always win
                               # (design principle 1); this is a fallback seed only
