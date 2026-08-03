@@ -803,7 +803,29 @@ an explicit `--properties` list or a profile's confirmed `websocket_properties`)
 logs every `propertyValueChanged` event as it arrives via `RestEventRouter`'s `on_event`
 callback hook. Unlike `probe_endpoints.py` (deliberately standalone, no `bmd_camera`
 imports), this tool exercises the Phase 2 library surface directly — it is the first
-consumer of `RestEventRouter` outside its own tests.
+consumer of `RestEventRouter` outside its own tests. Confirmed against real
+`POCKET_6K_PRO v8.6` hardware 2026-08-04 — see "Confirmed against real hardware" above.
+
+### `tools/rest/smoke_test_client.py`
+
+`watch_events.py` only opens the WebSocket and observes — it never calls `RestClient`'s
+`get()`/`put()`, and never arms a write. This tool exercises exactly the two pieces that
+leaves untested:
+
+- **Read-only (always runs)**: confirms `RestClient`'s full status-code contract against
+  real responses — `GET /system` -> `None` (`204`), a confirmed-`200` endpoint -> a parsed
+  body, a confirmed-`501` endpoint -> `BMDUnsupportedError`. Endpoints are chosen from the
+  target camera's own `rest/<fw>.json` profile, never hardcoded.
+- **`--verify-write` (opt-in, typed-yes gated)**: one full round trip through the exact
+  primary/secondary dual-check pattern design principle 3 specifies for REST —
+  `RestEventRouter.arm()` → idempotent same-value `PUT` via `RestClient` →
+  `RestEventRouter.wait_for()` (primary) → a `GET` readback (secondary). The property is
+  auto-picked as the first one in the profile that is both `put_supported` and a
+  confirmed `websocket_properties` member (so `wait_for()` has something to observe), or
+  overridden with `--property`.
+
+This is the first real exercise of `arm()`/`wait_for()` against live hardware — the exact
+verification primitive `RestCameraSession` (Phase 3+) will build on.
 
 ---
 
