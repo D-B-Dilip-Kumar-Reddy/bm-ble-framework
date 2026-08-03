@@ -459,11 +459,12 @@ class FakeAiohttpSession:
     """Combined fake supporting both RestClient's `.request()` (GET/PUT)
     and RestEventRouter's `.ws_connect()`."""
 
-    def __init__(self):
+    def __init__(self, *, ws_connect_raises: Exception | None = None):
         self.responses: dict[str, FakeResponse] = {}
         self.ws = FakeWebSocket()
         self.requests: list[tuple[str, str]] = []
         self.closed = False
+        self.ws_connect_raises = ws_connect_raises
 
     def request(self, method: str, url: str, *, json=None, timeout=None):
         self.requests.append((method, url))
@@ -473,6 +474,8 @@ class FakeAiohttpSession:
         raise AssertionError(f"No fake response configured for {url}")
 
     async def ws_connect(self, url: str, timeout=None):
+        if self.ws_connect_raises is not None:
+            raise self.ws_connect_raises
         return self.ws
 
     async def close(self) -> None:
@@ -503,6 +506,48 @@ class TestConnectionLifecycle:
 
         async with session:
             pass
+
+        assert fake_session.closed is False
+
+    @pytest.mark.asyncio
+    async def test_owned_session_closed_when_connect_fails(self, monkeypatch):
+        """Real-hardware-confirmed leak (POCKET_6K_G2 v8.6, 2026-08-03):
+        when the WS connect fails (e.g. the host doesn't resolve),
+        __aenter__ never returns, so Python never calls __aexit__ — an
+        aiohttp.ClientSession opened here must be closed on this failure
+        path itself, or it leaks ("Unclosed client session"). No
+        `session=` is injected here specifically so RestCameraSession
+        creates (and must own the cleanup of) a real aiohttp.ClientSession,
+        exactly like the real crash."""
+        session = RestCameraSession("cam.local", MODEL_KEY, FIRMWARE)
+        assert session._owns_session is True
+
+        async def fail_connect(*args, **kwargs):
+            raise BMDConnectionError("simulated DNS failure")
+
+        monkeypatch.setattr(session._router, "connect", fail_connect)
+
+        with pytest.raises(BMDConnectionError):
+            async with session:
+                pass
+
+        assert session._session is None
+        assert session._client is None
+
+    @pytest.mark.asyncio
+    async def test_injected_session_not_closed_when_connect_fails(self):
+        """The failure-path cleanup must respect ownership exactly like the
+        success path does — an injected session is never this session's to
+        close, successful connect or not."""
+        fake_session = FakeAiohttpSession(
+            ws_connect_raises=aiohttp.ClientConnectionError("simulated DNS failure")
+        )
+        session = RestCameraSession("cam.local", MODEL_KEY, FIRMWARE, session=fake_session)
+        assert session._owns_session is False
+
+        with pytest.raises(BMDConnectionError):
+            async with session:
+                pass
 
         assert fake_session.closed is False
 

@@ -254,19 +254,38 @@ class RestCameraSession:
         return f"{self.scheme}://{netloc}"
 
     async def __aenter__(self) -> RestCameraSession:
+        """Real-hardware-confirmed failure mode this guards against
+        (`POCKET_6K_G2 v8.6`, 2026-08-03): if the WS connect fails (e.g. the
+        host doesn't resolve), `__aenter__` never returns, so Python never
+        calls `__aexit__` — an `aiohttp.ClientSession` opened here would
+        otherwise leak (`ERROR - Unclosed client session`) rather than being
+        closed. `connected` tracks whether every step succeeded; `finally`
+        closes an owned session on any failure path without catching or
+        masking the original exception.
+        """
         if self._session is None:
             self._session = aiohttp.ClientSession()
-        self._client = RestClient(
-            self.host,
-            scheme=self.scheme,
-            port=self.port,
-            timeout_s=self.timeout_s,
-            session=self._session,
-        )
-        await self._router.connect(
-            self._session, _websocket_url(self.base_url), timeout_s=self.ws_timeout_s
-        )
-        await self._router.subscribe("/transports/0/record")
+        connected = False
+        try:
+            self._client = RestClient(
+                self.host,
+                scheme=self.scheme,
+                port=self.port,
+                timeout_s=self.timeout_s,
+                session=self._session,
+            )
+            await self._router.connect(
+                self._session, _websocket_url(self.base_url), timeout_s=self.ws_timeout_s
+            )
+            await self._router.subscribe("/transports/0/record")
+            connected = True
+        finally:
+            if not connected:
+                await self._router.disconnect()
+                if self._owns_session and self._session is not None:
+                    await self._session.close()
+                    self._session = None
+                self._client = None
         self._log.info("[%s] Connected", self.host)
         return self
 
