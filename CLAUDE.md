@@ -167,11 +167,12 @@ src/bmd_camera/
                               # timecode, notification-driven is_recording); writes —
                               # record_start/record_stop (Phase 4, real-hardware-
                               # confirmed) and set_camera_format (Phase 5, dual-check
-                              # verified, live-capability-gated via supported_formats();
-                              # ProRes/4K DCI real-hardware-confirmed — the exact
-                              # combination BLE's write path can't reach — a full
-                              # round-trip confirming the sensorResolution fix is
-                              # still open). See docs/rest/session.md
+                              # verified, live-capability-gated via supported_formats(),
+                              # optional sensor_resolution param for disambiguating
+                              # among several camera-offered pairings — see
+                              # tools/rest/sweep_camera_format.py). ProRes/4K DCI
+                              # real-hardware-confirmed on both cameras — the exact
+                              # combination BLE's write path can't reach. See docs/rest/session.md
     mapping.py                 # Codec name derivation between the BLE profile's vocabulary
                               # and REST's own spelling — confirmed strings always win
                               # (design principle 1); this is a fallback seed only
@@ -193,10 +194,13 @@ tools/
                             # opt-in idempotent write probes; standalone, no bmd_camera imports
                             # at all), watch_events.py (streams WS events via RestEventRouter,
                             # the first consumer of the Phase 2 library outside its own tests),
-                            # and smoke_test_client.py (exercises RestClient's status-code
+                            # smoke_test_client.py (exercises RestClient's status-code
                             # contract and, opt-in, a full arm()/PUT/wait_for() write-verify
-                            # round trip — the two pieces watch_events.py doesn't touch).
-                            # See docs/rest/transport.md
+                            # round trip — the two pieces watch_events.py doesn't touch), and
+                            # sweep_camera_format.py (Phase 5 — exhaustive codec/quality/
+                            # resolution/fps/sensor-area verification sweep via
+                            # RestCameraSession.set_camera_format(), the REST analogue of
+                            # tools/control/sweep_camera_format.py). See docs/rest/transport.md
   captures/                 # Runtime output of sniffers/, control/, and rest/ scripts (gitignored)
 
 Tools are grouped by folder according to what kind of thing they do — read-only

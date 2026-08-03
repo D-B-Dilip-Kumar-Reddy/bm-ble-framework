@@ -1,16 +1,18 @@
 # REST Session — State and Control Surface (Phases 3-5)
 
-**Status:** read verbs (Phase 3) and `record_start`/`record_stop` (Phase 4) are
-implemented and **real-hardware-confirmed** — `POCKET_6K_G2` and `POCKET_6K_PRO v8.6`,
-2026-08-03, `record_start`/`record_stop` each 6/6 via the dual-check
-(`examples/rest_record_start_stop.py`), the same run that also caught and fixed
-`wait_while_recording`'s return-value-inversion defect (see below). `set_camera_format`
-(Phase 5) is implemented, unit-tested, and **partially real-hardware-confirmed**: a
-`ProRes/4K DCI` write — the exact combination BLE's write path cannot reach
-(`known_unreachable`) — was confirmed on the first `examples/rest_change_format.py` run,
-`POCKET_6K_G2 v8.6`, 2026-08-03. The very next step in that same run (`BRAW/4K DCI`)
-exposed a real defect (`sensorResolution` derivation, see below) that has since been
-fixed; a full round-trip confirming the fix itself is still open.
+**Status:** read verbs (Phase 3), `record_start`/`record_stop` (Phase 4), and
+`set_camera_format` (Phase 5) are all implemented and **real-hardware-confirmed** on both
+`POCKET_6K_G2 v8.6` and `POCKET_6K_PRO v8.6`, 2026-08-03. `record_start`/`record_stop`:
+6/6 via the dual-check (`examples/rest_record_start_stop.py`), the same run that also
+caught and fixed `wait_while_recording`'s return-value-inversion defect (see below).
+`set_camera_format`: `examples/rest_change_format.py`'s first run confirmed
+`ProRes/422/4K DCI @ 23.98` — the exact combination BLE's write path cannot reach
+(`known_unreachable`) — then hit a real `400` switching to `BRAW/5:1/4K DCI @ 23.98`
+immediately after (a `sensorResolution` derivation defect, see below); fixed, then
+re-confirmed on both cameras back to back. `tools/rest/sweep_camera_format.py`
+(also Phase 5) systematically exercises every combination, including the "sensor area"
+dimension that defect came from — implemented and unit-tested, no real-hardware run
+reported yet.
 
 ## Overview
 
@@ -280,10 +282,14 @@ requested combination itself was genuinely supported). Fixed by deriving
 of leaving it untouched. If more than one entry matches with *different*
 `sensorResolution` values (a real case: `ProRes` at `1920×1080` pairs with three different
 sensor resolutions), the method raises `BMDUnsupportedError` naming the ambiguity rather
-than guessing — see `_resolve_supported_format`'s docstring. This is **not** the same thing
-as exposing arbitrary `sensorResolution` selection (still out of scope, see below) — it's
-making sure every write this method already attempts is internally consistent with what
-the camera itself reports pairing together.
+than guessing — see `_resolve_supported_format`'s docstring — *unless* the optional
+`sensor_resolution` parameter disambiguates it explicitly (only among values the camera
+itself already pairs with the requested combination; it cannot ask for one the camera
+doesn't offer there). `tools/rest/sweep_camera_format.py` is what that parameter exists
+for — see "`tools/rest/sweep_camera_format.py`" below. This is **not** general-purpose
+`sensorResolution` selection (still out of scope, see below) — it's making sure every
+write this method already attempts is internally consistent with what the camera itself
+reports pairing together.
 
 Verified via the same dual-check pattern as `record_start`/`record_stop`: a WS
 `propertyValueChanged` event on `/system/format` primary, a `GET /system/format` readback
@@ -306,8 +312,47 @@ BLE's `settings.md` records as `known_unreachable` after nine falsification atte
 now reached over REST on the first attempt. Step 2, `BRAW/5:1/4K DCI @ 23.98`, run
 immediately after, **failed with a real `400`** — the `sensorResolution` defect described
 above, not a codec-name or capability-check problem (the capability check had already
-passed; the rejection came from the camera itself, on the `PUT`). Fixed as described above;
-a full round-trip confirming the fix itself on real hardware is still open.
+passed; the rejection came from the camera itself, on the `PUT`).
+
+**Fix re-confirmed, both cameras, 2026-08-03** (`examples/rest_change_format.py`, re-run
+after the `sensorResolution` fix): both steps — `ProRes/422/4K DCI @ 23.98` then
+`BRAW/5:1/4K DCI @ 23.98` — confirmed cleanly, back to back, on both `POCKET_6K_G2 v8.6`
+and `POCKET_6K_PRO v8.6`. The full round trip this section's earlier note called "still
+open" is now closed on both cameras this codebase targets.
+
+### `tools/rest/sweep_camera_format.py` — exhaustive verification sweep
+
+The REST analogue of `tools/control/sweep_camera_format.py`: runs `set_camera_format()`,
+the real production API, across every `(codec, variant, resolution, fps)` combination a
+profile's `codecs`/`resolutions`/`fps_modes` tables claim, in one connected session, and
+reports which combinations actually confirm. Built directly in response to the
+`sensorResolution` defect above — two manual calls in a row were enough to find a real bug
+nothing in this codebase's tooling would have caught systematically beforehand.
+
+**Adds a dimension BLE's sweep tool never needed: sensor area.** `GET
+/system/supportedFormats` can pair the *same* `(codec, recordResolution, fps)` with more
+than one `sensorResolution` (confirmed: `ProRes` at `1920×1080` pairs with three —
+`docs/rest/transport.md`). `set_camera_format()` gained an optional `sensor_resolution`
+parameter specifically so this tool can exercise every one of those pairings explicitly —
+without it, `set_camera_format()` refuses an ambiguous combination
+(`BMDUnsupportedError`) rather than guessing, and the ambiguous ones would never get
+swept at all. One live `GET /system/supportedFormats` read, taken right after connecting,
+expands every profile-table combination into one sweep item per distinct
+`sensorResolution` the camera actually pairs with it — or a single `"unsupported"` item
+with no write attempted when the camera doesn't offer the combination at all.
+
+**Deliberately sweeps `known_unreachable`/`max_fps_int` combinations BLE's tool
+excludes by default** — those are BLE-write-path-specific concepts REST's live capability
+check makes unnecessary (see `set_camera_format`'s docstring), and re-testing them is
+exactly how `ProRes/4K DCI` was already confirmed reachable over REST
+(`docs/ble/settings.md` §16.2). No filters analogous to BLE's
+`--include-known-unreachable`/`--include-unsupported-fps` exist here — REST sweeps
+everything the profile tables claim by default.
+
+`--dry-run` connects (read-only — one `supported_formats()` call) rather than staying
+fully offline like the BLE tool's, since an offline count would undercount every
+ambiguous combination before expansion. No real-hardware run of this tool has been
+reported yet.
 
 ---
 
@@ -384,23 +429,37 @@ resolve to `"ProRes:Original"` rather than the derivation rule's (wrong) `"ProRe
 and — pinning the real-hardware defect above directly — that a codec switch derives
 `sensorResolution` from the *matched* `supported_formats()` entry rather than carrying over
 whatever the canned pre-write `GET` (standing in for a stale current format) already had.
+Two further tests cover the `sensor_resolution` disambiguation parameter directly: it picks
+the requested pairing out of several ambiguous matches, and raises `BMDUnsupportedError`
+when the camera doesn't pair that exact value with the requested combination at all.
+
+`tests/unit/tools/rest/test_rest_sweep_camera_format.py` covers
+`tools/rest/sweep_camera_format.py` separately, since it's a standalone script rather than
+package code — `enumerate_combinations` against real `POCKET_6K_G2`/`POCKET_6K_PRO`
+profiles (confirming it does *not* filter `known_unreachable`/`max_fps_int`, unlike the
+BLE tool), `expand_with_sensor_resolutions` against a fake session (single match, multiple
+sensor-resolution matches, no match at all, and the `format_names`-over-derivation case
+again), and `run_combo`'s outcome classification. Loaded via `importlib` under an explicit
+module name rather than the plain `sys.path`-insert-and-import pattern
+`tests/unit/tools/rest/test_smoke_test_client.py` uses, since this script's filename is
+identical to `tools/control/sweep_camera_format.py`'s and a plain `import` would collide
+in `sys.modules` across the two test files — see that test file's module docstring.
 
 ---
 
 ## What's deliberately out of scope
 
-- **No arbitrary `sensorResolution` selection.** `set_camera_format` *does* set
-  `sensorResolution` now (see "Write verbs" above) — but only to whichever value the
-  camera's own `supported_formats()` pairs with the requested `(codec, recordResolution,
-  fps)`, and only ever the one such value when it's unambiguous. A caller cannot ask for a
-  *specific* sensor resolution among several a camera offers for the same
-  `(codec, recordResolution, fps)` (real case: `ProRes` at `1920×1080`) — that raises
-  `BMDUnsupportedError` today rather than picking one. Exposing a `sensor_resolution`
-  parameter to disambiguate is future work, not something this method invents an answer
-  for. Whether `PUT /system/format` can set a sensor resolution *other than* one already
-  paired with the requested codec/resolution/fps (the "Sensor Area" selector question,
-  docs/rest/transport.md) remains a separate, still-open question this method doesn't
-  attempt to answer.
+- **No sensor resolution the camera doesn't already offer.** `set_camera_format` sets
+  `sensorResolution` (see "Write verbs" above) to whichever value the camera's own
+  `supported_formats()` pairs with the requested `(codec, recordResolution, fps)` — the
+  optional `sensor_resolution` parameter disambiguates *among* those values when more than
+  one exists (real case: `ProRes` at `1920×1080` pairs with three;
+  `tools/rest/sweep_camera_format.py` is what exercises every one of them), but it cannot
+  ask for a sensor resolution the camera doesn't already pair with that combination —
+  that still raises `BMDUnsupportedError`. Whether `PUT /system/format` can set a sensor
+  resolution *other than* one already paired with the requested codec/resolution/fps (the
+  original "Sensor Area" selector question, docs/rest/transport.md) remains a separate,
+  still-open question this method doesn't attempt to answer.
 - **No storage precondition on `record_stop()`.** Only `record_start()` checks
   `storage_state()` — matching CLAUDE.md design principle 10's wording ("before recording
   or photo capture"), which names starting an operation, not ending one.

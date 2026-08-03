@@ -32,7 +32,7 @@ the documentation map below.
 ## Target operations
 
 - Record start / stop *(implemented over BLE — echo-verified on real hardware; implemented over REST — dual-check verified on real hardware, `POCKET_6K_G2`/`POCKET_6K_PRO v8.6`, see [`docs/rest/session.md`](docs/rest/session.md))*
-- Settings changes: codec, quality, resolution, FPS *(implemented over BLE — CANDIDATE values from an external reverse-engineering doc, pending re-verification on real hardware, see [`docs/ble/settings.md`](docs/ble/settings.md); implemented over REST via `RestCameraSession.set_camera_format` — one `PUT /system/format`, live-capability-gated, unit-tested, real-hardware confirmation still open, see [`docs/rest/session.md`](docs/rest/session.md))*
+- Settings changes: codec, quality, resolution, FPS *(implemented over BLE — CANDIDATE values from an external reverse-engineering doc, pending re-verification on real hardware, see [`docs/ble/settings.md`](docs/ble/settings.md); implemented over REST via `RestCameraSession.set_camera_format` — one `PUT /system/format`, live-capability-gated, real-hardware-confirmed on both cameras including `ProRes/4K DCI`, the exact combination BLE's write path can't reach, see [`docs/rest/session.md`](docs/rest/session.md))*
 - Photo capture *(planned)*
 - Video playback / gallery browsing *(planned)*
 - Video and photo metadata capture — *(planned over BLE; implemented read-only over REST via `RestCameraSession.clips()`, see [`docs/rest/session.md`](docs/rest/session.md))*

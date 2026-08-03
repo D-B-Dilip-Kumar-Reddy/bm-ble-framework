@@ -824,9 +824,10 @@ leaves untested:
   confirmed `websocket_properties` member (so `wait_for()` has something to observe), or
   overridden with `--property`.
 
-This is the first real exercise of `arm()`/`wait_for()` against live hardware — the exact
-verification primitive future write orchestration (Phase 4/5) will build on. `RestCameraSession`
-(Phase 3, docs/rest/session.md) is read-only so far and does not use it yet.
+This was the first real exercise of `arm()`/`wait_for()` against live hardware — the exact
+verification primitive `RestCameraSession.record_start`/`record_stop` (Phase 4) and
+`set_camera_format` (Phase 5, docs/rest/session.md) now build on, both real-hardware-
+confirmed in their own right.
 
 **Confirmed against real hardware, 2026-08-04** — both modes run against `POCKET_6K_PRO
 v8.6` over USB:
@@ -845,6 +846,17 @@ v8.6` over USB:
 Between this and `watch_events.py`'s confirmed run above, every piece of Phase 2's
 library surface (`RestClient`'s three status branches, `RestEventRouter`'s event parsing,
 and now `arm()`/`wait_for()` itself) has real-hardware evidence behind it.
+
+### `tools/rest/sweep_camera_format.py`
+
+The REST analogue of `tools/control/sweep_camera_format.py` (Phase 5, docs/rest/session.md
+has the full write-up) — runs `RestCameraSession.set_camera_format()` across every
+`(codec, variant, resolution, fps)` combination a profile's tables claim, expanded by one
+live `GET /system/supportedFormats` read into one sweep item per distinct
+`sensorResolution` the camera pairs with it. Built directly from this session's own
+`sensorResolution` finding above: two manual `set_camera_format()` calls in a row were
+enough to surface a real defect, and nothing in this codebase's tooling checked
+systematically for a similar one elsewhere. No real-hardware run reported yet.
 
 ---
 

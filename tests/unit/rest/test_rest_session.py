@@ -795,6 +795,83 @@ class TestSetCameraFormat:
         assert client.put_calls == []
 
     @pytest.mark.asyncio
+    async def test_sensor_resolution_param_disambiguates_multiple_matches(self):
+        """The explicit sensor_resolution override (tools/rest/sweep_camera_format.py's
+        reason for existing) picks a specific pairing among several the
+        camera offers, rather than refusing as ambiguous."""
+        client = FakeRestClient(
+            {
+                FORMAT_PROPERTY: CURRENT_FORMAT_BODY,
+                "/system/supportedFormats": {
+                    "supportedFormats": [
+                        {
+                            "codecs": ["ProRes:HQ"],
+                            "frameRates": ["24"],
+                            "recordResolution": {"width": 1920, "height": 1080},
+                            "sensorResolution": {"width": 2880, "height": 1512},
+                        },
+                        {
+                            "codecs": ["ProRes:HQ"],
+                            "frameRates": ["24"],
+                            "recordResolution": {"width": 1920, "height": 1080},
+                            "sensorResolution": {"width": 5376, "height": 3024},
+                        },
+                    ]
+                },
+            }
+        )
+        session = make_session(make_format_profile(), client=client)
+
+        async def deliver_event():
+            await asyncio.sleep(0.01)
+            session._router.handle_event(
+                {
+                    "type": "event",
+                    "data": {
+                        "action": "propertyValueChanged",
+                        "property": FORMAT_PROPERTY,
+                        "value": {
+                            "codec": "ProRes:HQ",
+                            "frameRate": "24",
+                            "recordResolution": {"width": 1920, "height": 1080},
+                            "sensorResolution": {"width": 5376, "height": 3024},
+                        },
+                    },
+                }
+            )
+
+        asyncio.create_task(deliver_event())
+        await session.set_camera_format("ProRes", "HQ", "HD", "24", sensor_resolution=(5376, 3024))
+
+        _path, put_body = client.put_calls[0]
+        assert put_body["sensorResolution"] == {"width": 5376, "height": 3024}
+
+    @pytest.mark.asyncio
+    async def test_sensor_resolution_param_raises_when_camera_does_not_pair_it(self):
+        client = FakeRestClient(
+            {
+                "/system/supportedFormats": {
+                    "supportedFormats": [
+                        {
+                            "codecs": ["ProRes:HQ"],
+                            "frameRates": ["24"],
+                            "recordResolution": {"width": 1920, "height": 1080},
+                            "sensorResolution": {"width": 2880, "height": 1512},
+                        }
+                    ]
+                }
+            }
+        )
+        session = make_session(make_format_profile(), client=client)
+
+        with pytest.raises(BMDUnsupportedError, match="does not report offering"):
+            await session.set_camera_format(
+                "ProRes", "HQ", "HD", "24", sensor_resolution=(6144, 3456)
+            )
+
+        assert client.put_calls == []
+
+    @pytest.mark.asyncio
     async def test_confirmed_by_get_readback_secondary_when_no_event_arrives(self):
         confirmed_body = {**EXPECTED_MERGED_BODY}
         get_bodies = iter([CURRENT_FORMAT_BODY, confirmed_body])

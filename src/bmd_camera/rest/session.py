@@ -557,7 +557,15 @@ class RestCameraSession:
 
     # ── Writes (Phase 5) ─────────────────────────────────────────────────
 
-    async def set_camera_format(self, codec: str, variant: str, resolution: str, fps: str) -> None:
+    async def set_camera_format(
+        self,
+        codec: str,
+        variant: str,
+        resolution: str,
+        fps: str,
+        *,
+        sensor_resolution: tuple[int, int] | None = None,
+    ) -> None:
         """Set codec family, quality variant, resolution, and frame rate
         together via one `PUT /system/format` — the REST analogue of the BLE
         `CameraSession.set_camera_format` orchestration, but collapsed to a
@@ -609,14 +617,25 @@ class RestCameraSession:
         entry matches with *different* `sensorResolution` values (e.g.
         `ProRes` at `1920×1080`, which pairs with three different sensor
         resolutions — see docs/rest/transport.md), `_resolve_supported_format`
-        raises `BMDUnsupportedError` rather than guessing which one the
-        caller wants; disambiguating that is future work (a
-        `sensor_resolution` parameter), not something this method invents
-        an answer for today. Every other field this method doesn't touch
-        (`offSpeedEnabled`/`offSpeedFrameRate`/min/max off-speed) is still
+        raises `BMDUnsupportedError` naming the ambiguity rather than guessing
+        which one the caller wants — *unless* `sensor_resolution` (below)
+        disambiguates it explicitly. Every other field this method doesn't
+        touch (`offSpeedEnabled`/`offSpeedFrameRate`/min/max off-speed) is still
         preserved from a `GET /system/format` taken right before the write —
         never a hand-built partial body, since a partial one risks resetting
         those to defaults.
+
+        `sensor_resolution`, if given, must be one of `supported_formats()`'s
+        own `sensor_resolution` values already paired with the requested
+        `(codec, recordResolution, fps)` — it disambiguates among the
+        camera's own offered pairings, it does not let a caller ask for an
+        arbitrary one. `BMDUnsupportedError` if the camera doesn't pair that
+        exact `sensor_resolution` with the requested combination.
+        `tools/rest/sweep_camera_format.py` is this parameter's first real
+        caller — sweeping every pairing systematically, including the
+        ambiguous ones this method would otherwise refuse, is exactly what
+        motivated adding it rather than leaving it as unreachable future
+        work.
 
         Verified via the same dual-check as `record_start`/`record_stop`:
         a WS `propertyValueChanged` event on `/system/format` primary, a
@@ -639,7 +658,9 @@ class RestCameraSession:
 
         rest_codec = resolve_rest_codec_name(self.profile.rest.format_names, codec, variant)
         record_resolution = (resolution_spec.width, resolution_spec.height)
-        matched = await self._resolve_supported_format(rest_codec, fps, record_resolution)
+        matched = await self._resolve_supported_format(
+            rest_codec, fps, record_resolution, sensor_resolution=sensor_resolution
+        )
 
         current = await self._rest_client.get(FORMAT_PROPERTY)
         body = dict(current)
@@ -683,7 +704,12 @@ class RestCameraSession:
             )
 
     async def _resolve_supported_format(
-        self, rest_codec: str, fps: str, record_resolution: tuple[int, int]
+        self,
+        rest_codec: str,
+        fps: str,
+        record_resolution: tuple[int, int],
+        *,
+        sensor_resolution: tuple[int, int] | None = None,
     ) -> SupportedFormat:
         """Design principle 7's REST sibling to BLE's static
         `known_unreachable`/`max_fps_int` checks: instead of a hand-
@@ -695,11 +721,14 @@ class RestCameraSession:
 
         Returns the matched entry (not just a bool) so its `sensor_resolution`
         can be carried into the write body — see `set_camera_format`'s
-        docstring for the real-hardware defect this closes. Also raises
-        `BMDUnsupportedError` when more than one entry matches with
-        *different* `sensor_resolution` values: this method has no evidence
-        for which one the caller wants, and guessing risks reproducing the
-        exact "internally inconsistent body" failure this exists to prevent.
+        docstring for the real-hardware defect this closes. When `sensor_resolution`
+        is given, only entries whose own `sensor_resolution` equals it are
+        considered — `set_camera_format`'s explicit disambiguation path.
+        Otherwise, more than one entry matching with *different*
+        `sensor_resolution` values raises `BMDUnsupportedError`: this method
+        has no evidence for which one the caller wants, and guessing risks
+        reproducing the exact "internally inconsistent body" failure this
+        exists to prevent.
         """
         formats = await self.supported_formats()
         matches = [
@@ -709,11 +738,16 @@ class RestCameraSession:
             and rest_codec in entry.codecs
             and fps in entry.frame_rates
         ]
+        if sensor_resolution is not None:
+            matches = [entry for entry in matches if entry.sensor_resolution == sensor_resolution]
         if not matches:
+            detail = (
+                f"sensorResolution={sensor_resolution} " if sensor_resolution is not None else ""
+            )
             raise BMDUnsupportedError(
                 f"[{self.host}] {self.profile.model_key} {self.profile.firmware} does not "
                 f"report offering codec={rest_codec!r} at recordResolution={record_resolution} "
-                f"frameRate={fps!r} in GET /system/supportedFormats"
+                f"{detail}frameRate={fps!r} in GET /system/supportedFormats"
             )
         sensor_resolutions = {entry.sensor_resolution for entry in matches}
         if len(sensor_resolutions) > 1:
@@ -722,6 +756,6 @@ class RestCameraSession:
                 f"{len(matches)} GET /system/supportedFormats entries for codec={rest_codec!r} "
                 f"recordResolution={record_resolution} frameRate={fps!r} with different "
                 f"sensorResolution values ({sorted(sensor_resolutions)}) — set_camera_format "
-                "has no way to choose between them yet"
+                "has no way to choose between them yet (pass sensor_resolution to disambiguate)"
             )
         return matches[0]
