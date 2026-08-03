@@ -137,9 +137,29 @@ as-is; only the wire decode differs between transports.
 `is_recording` starts `None` and updates only from a well-formed
 `/transports/0/record` `propertyValueChanged` event's `{"recording": bool}` value —
 `__aenter__` subscribes to this property automatically, so it is live for the whole
-session lifetime with no extra call needed. `wait_while_recording(timeout)` blocks until
-`is_recording` becomes `False`, returning `True` if it was already stopped/unknown or
-stops within the timeout, `False` if it times out while still recording.
+session lifetime with no extra call needed. `wait_while_recording(timeout)` mirrors the
+BLE `CameraSession.wait_while_recording`'s return-value contract exactly: `True` if still
+recording (or state unknown) when `timeout` elapses, `False` if a stop is confirmed
+before then — the case a caller uses to notice a camera-initiated stop and move on instead
+of blindly sleeping out a planned duration.
+
+**Real-hardware-confirmed defect, `POCKET_6K_G2`/`POCKET_6K_PRO v8.6`, 2026-08-03**: the
+first version of `wait_while_recording` had the *opposite* contract — `True` for
+"confirmed stopped", `False` for "still recording after timeout" — while
+`examples/rest_record_start_stop.py` used the same `if not held: stopped_early = True`
+pattern as the BLE example, which assumes `CameraSession`'s (correct) contract. Every
+cycle's `record_start` → `wait_while_recording` → `record_stop` sequence — which never
+sends an explicit stop before this call — misreported "recording stopped before the
+requested 5s" on **every single cycle** (6/6 across both cameras), even though the
+operator confirmed on the camera's own screen that each recording ran the full requested
+duration. `record_start`/`record_stop` themselves were unaffected — both cameras confirmed
+6/6 start and 6/6 stop via the dual-check — this was purely `wait_while_recording`'s return
+value disagreeing with what it actually observed. Fixed by inverting the two return points
+to match `CameraSession`'s contract; also fixed in the same pass: the internal stop-event
+flag is now cleared before each wait, closing a latent staleness gap where a flag set by an
+*earlier* cycle's stop (possible when that cycle's `record_start()` confirmed via the
+secondary `GET` readback rather than the primary WS event, since only the event path clears
+it) could have been mistaken for a fresh stop in a later cycle.
 
 **Confirmed against real hardware, 2026-08-03** (`examples/rest_read_state.py`,
 `POCKET_6K_PRO v8.6`): every `GET`-based read verb (`get_format`, `supported_formats`,
@@ -200,13 +220,15 @@ through `_on_event` independently). When only the secondary `GET` readback confi
 gap `is_recording`'s own docstring already describes for the read path, not a new one this
 introduces.
 
-**Real-hardware confirmation is still open.** `docs/rest/transport.md`'s sweep results
-mark `PUT /transports/0/record` as "Open — never probed, and never will be by this tool" —
-by design, since the sweep excludes every state-changing write. `examples/rest_record_start_stop.py`'s
-first successful run against real hardware is what closes this gap; until then, treat the
-event/body shapes above as spec-derived (`Notification.yaml`), not yet cross-checked
-against a raw captured `/transports/0/record` event or `GET` response — the same caveat
-`rest/events.py`'s docstring already carries for the event side.
+**Real-hardware-confirmed, `POCKET_6K_G2` and `POCKET_6K_PRO v8.6`, 2026-08-03**:
+`examples/rest_record_start_stop.py`, 3 cycles per camera. `PUT /transports/0/record` is
+implemented — `record_start` and `record_stop` were each confirmed 6/6 (3/3 per camera) via
+the dual-check, closing the "Open" row `docs/rest/transport.md`'s sweep results left for
+this endpoint (`NEVER_WRITE` there by design — this session's own verification was always
+going to be the only channel this endpoint ever got). This run is also what surfaced
+`wait_while_recording`'s return-value-inversion defect described above — the two findings
+came from the same run: the writes themselves were solid 6/6, only the surrounding
+hold-and-check helper had the bug.
 
 ---
 

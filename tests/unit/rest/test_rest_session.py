@@ -539,29 +539,36 @@ class TestRecordStop:
 
 
 class TestWaitWhileRecording:
+    """Mirrors CameraSession.wait_while_recording's return-value contract
+    exactly: True = still recording (or state unknown) when the timeout
+    elapses, False = a stop was confirmed before then. Real-hardware run
+    (POCKET_6K_G2/POCKET_6K_PRO v8.6, 2026-08-03) caught the first version
+    of this method returning the opposite of this contract — see
+    wait_while_recording's docstring and docs/rest/session.md."""
+
     @pytest.mark.asyncio
-    async def test_returns_true_immediately_when_not_recording(self):
+    async def test_returns_false_immediately_when_already_stopped(self):
         session = make_session(make_profile())
         session.is_recording = False
 
-        assert await session.wait_while_recording(timeout=0.05) is True
+        assert await session.wait_while_recording(timeout=0.05) is False
 
     @pytest.mark.asyncio
-    async def test_returns_true_immediately_when_unknown(self):
+    async def test_returns_true_after_timeout_when_unknown(self):
         session = make_session(make_profile())
         assert session.is_recording is None
 
         assert await session.wait_while_recording(timeout=0.05) is True
 
     @pytest.mark.asyncio
-    async def test_returns_false_on_timeout_while_still_recording(self):
+    async def test_returns_true_on_timeout_while_still_recording(self):
         session = make_session(make_profile())
         session.is_recording = True
 
-        assert await session.wait_while_recording(timeout=0.05) is False
+        assert await session.wait_while_recording(timeout=0.05) is True
 
     @pytest.mark.asyncio
-    async def test_returns_true_when_stop_event_arrives_before_timeout(self):
+    async def test_returns_false_when_stop_event_arrives_before_timeout(self):
         session = make_session(make_profile())
         session.is_recording = True
 
@@ -571,8 +578,24 @@ class TestWaitWhileRecording:
 
         asyncio.create_task(stop_later())
 
-        assert await session.wait_while_recording(timeout=1.0) is True
+        assert await session.wait_while_recording(timeout=1.0) is False
         assert session.is_recording is False
+
+    @pytest.mark.asyncio
+    async def test_stale_stop_flag_from_earlier_cycle_does_not_leak_in(self):
+        """A stop confirmed via the secondary GET-readback path (rather
+        than the primary WS event) never touches _recording_stopped or
+        is_recording (design principle 4 — see record_start/record_stop's
+        docstrings), so a later cycle's wait_while_recording must not treat
+        an earlier cycle's real stop-event flag as a fresh one. Simulates
+        that by setting the flag directly (as an earlier real stop event
+        would have) without going through _on_event, then confirming a
+        call with no new event still waits out the full timeout."""
+        session = make_session(make_profile())
+        session.is_recording = True
+        session._recording_stopped.set()  # stale, from a prior cycle
+
+        assert await session.wait_while_recording(timeout=0.05) is True
 
 
 # ── Connection lifecycle (real constructor, fake aiohttp session) ──────────

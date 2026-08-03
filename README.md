@@ -31,7 +31,7 @@ the documentation map below.
 
 ## Target operations
 
-- Record start / stop *(implemented over BLE — echo-verified on real hardware; implemented over REST — dual-check verified in unit tests, real-hardware confirmation of the `PUT` still pending, see [`docs/rest/session.md`](docs/rest/session.md))*
+- Record start / stop *(implemented over BLE — echo-verified on real hardware; implemented over REST — dual-check verified on real hardware, `POCKET_6K_G2`/`POCKET_6K_PRO v8.6`, see [`docs/rest/session.md`](docs/rest/session.md))*
 - Settings changes: codec, quality, resolution, FPS *(implemented — CANDIDATE values from an external reverse-engineering doc, pending re-verification on real hardware; see [`docs/ble/settings.md`](docs/ble/settings.md))*
 - Photo capture *(planned)*
 - Video playback / gallery browsing *(planned)*

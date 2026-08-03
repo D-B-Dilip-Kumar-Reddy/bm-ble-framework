@@ -559,9 +559,9 @@ differs (the ND filter) — see that section rather than a second copy of this t
 | Are the 5xx defects wider than Stills? | **Yes — every subdirectory under a mount root 500s**, not Stills specifically |
 | Which WS properties subscribe? | **46/49** — every property except the three `501` `/system/*` endpoints, which the event feed also rejects as unknown |
 | `PUT /system/format` implemented? | **Yes — 204**, same-value probe |
-| `PUT /transports/0/record` implemented? | **Open** — never probed, and never will be by this tool (`NEVER_WRITE`). `RestCameraSession.record_start`/`record_stop` (Phase 4, docs/rest/session.md) is built and unit-tested against this open question, not an answer to it — its own dual-check verification on real hardware is what will finally close this row |
+| `PUT /transports/0/record` implemented? | **Yes** — never probed by this tool (`NEVER_WRITE`), but confirmed 6/6 (3/3 per camera) by `RestCameraSession.record_start`/`record_stop`'s own dual-check verification, `POCKET_6K_G2` and `POCKET_6K_PRO v8.6`, 2026-08-03 — see docs/rest/session.md |
 | `sensorResolution` writable? | **Open** — the format PUT itself works, but only a same-value body has been sent; a *changing* write to `sensorResolution` specifically is untried |
-| USB link survives recording, and BLE concurrently? | **Open** — `examples/rest_record_start_stop.py`'s first real run answers both at once |
+| USB link survives recording, and BLE concurrently? | **Partially answered** — the USB link survived 3 full record/stop cycles on each camera (2026-08-03, no BLE session open concurrently). Concurrent BLE + REST during a recording is still untested |
 
 ### Write probe results — `POCKET_6K_G2 v8.6`, over USB, plaintext HTTP — 2026-08-03
 

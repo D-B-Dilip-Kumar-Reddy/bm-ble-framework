@@ -345,18 +345,43 @@ class RestCameraSession:
             self._recording_stopped.set()
 
     async def wait_while_recording(self, timeout: float) -> bool:
-        """Block until `is_recording` becomes `False`, or `timeout` elapses.
+        """Wait up to `timeout` seconds, returning early if a stop is
+        confirmed before then (e.g. a camera-initiated stop reported over
+        the WS event feed). Mirrors `CameraSession.wait_while_recording`'s
+        return-value contract exactly: `True` if still recording (or state
+        unknown) when `timeout` elapses, `False` if a stop was confirmed
+        before then. If `is_recording` is already `False` when called,
+        returns `False` immediately — there is nothing left to hold.
 
-        Returns `True` if it stopped within the timeout (or was already
-        stopped/unknown), `False` if it timed out while still recording.
+        Real-hardware-confirmed defect this fixes (`POCKET_6K_G2`/
+        `POCKET_6K_PRO v8.6`, 2026-08-03): the first version of this method
+        had the *opposite* contract — `True` for "confirmed stopped",
+        `False` for "still recording after timeout" — while
+        `examples/rest_record_start_stop.py` used the same
+        `if not held: stopped_early = True` pattern as the BLE example,
+        which assumes `CameraSession`'s contract. Every cycle's
+        `record_start` -> `wait_while_recording` -> `record_stop` sequence
+        (which never sends an explicit stop before this call) misreported
+        "recording stopped before the requested Ns" on every single cycle,
+        even though the camera recorded the full requested duration each
+        time — see docs/rest/session.md.
+
+        Also clears the internal stop-event flag before waiting (mirroring
+        `CameraSession.wait_while_recording`'s own clear-before-wait), so a
+        stale flag left `.set()` by an *earlier* cycle's stop — possible
+        when that cycle's `record_start()` confirmed via the secondary
+        `GET` readback rather than the primary WS event, since only the
+        event path clears it (see `_on_event`) — can never be mistaken for
+        a fresh stop in this call.
         """
-        if self.is_recording is not True:
-            return True
+        if self.is_recording is False:
+            return False
+        self._recording_stopped.clear()
         try:
             await asyncio.wait_for(self._recording_stopped.wait(), timeout=timeout)
         except TimeoutError:
-            return False
-        return True
+            return True
+        return False
 
     @property
     def _rest_client(self) -> RestClient:
