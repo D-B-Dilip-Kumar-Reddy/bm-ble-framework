@@ -45,33 +45,36 @@ actually needs it.
 
 Usage:
     python tools/rest/probe_endpoints.py --host pocket-cinema-camera-6k-g2.local \
-        --model-key POCKET_6K_G2 --firmware v8.6 --insecure
-    python tools/rest/probe_endpoints.py --host https://10.0.0.3 \
-        --model-key POCKET_6K_G2 --firmware v8.6 --insecure --probe-writes
+        --model-key POCKET_6K_G2 --firmware v8.6
+    python tools/rest/probe_endpoints.py --host pocket-cinema-camera-6k-g2.local \
+        --model-key POCKET_6K_G2 --firmware v8.6 --probe-writes
 
 ADDRESSING THE CAMERA
 ─────────────────────
-Don't guess. The camera's own Setup utility shows the exact URL under
-Network Access, and its IP under Network Settings. On the operator's
-`POCKET_6K_G2 v8.6` that is `pocket-cinema-camera-6k-g2.local` and a static
-`10.0.0.3` — **mDNS resolves fine**, so the `.local` name is the more stable
-of the two. Note the gateway there is `10.0.0.1`, i.e. *not* the camera: any
-"the camera is your adapter's default gateway" heuristic is wrong on this
-setup, which is why this tool has none.
+Use the mDNS name. It resolves (verified 2026-08-03,
+`pocket-cinema-camera-6k-g2.local` -> `172.30.161.225`) and survives address
+changes, which a hardcoded IP does not.
 
-That Explorer cannot open `\\\\pocket-cinema-camera-6k-g2.local` over SMB is
-therefore *not* a name-resolution problem — the same name works over HTTPS.
-Whatever breaks SMB is a separate matter and does not affect this API.
+Do NOT use the IP from Setup -> Network Settings. On the operator's camera
+that reads `10.0.0.3`, which is the **Ethernet port's** configuration and is
+unreachable over USB — connecting to it is refused. The USB-C link is its
+own /30 point-to-point network: the camera at `172.30.161.225`, the laptop
+at `172.30.161.226`, netmask `255.255.255.252`. Two hosts, no gateway. So
+neither the Setup IP nor any "camera is your default gateway" heuristic is
+correct here, which is why this tool offers no address guessing at all.
 
-`--scheme` defaults to `https`, which is what the operator confirmed
-working; a full URL in `--host` overrides it. The camera's TLS certificate
-is self-signed, so `--insecure` is needed to talk to it at all. That flag is
-opt-in and never implied: it is the correct call for a device on a
-point-to-point link whose certificate no CA will ever vouch for, and the
-wrong call for anything else.
+Setup -> Network Access is the authority on the **scheme**: it shows the URL
+the camera actually serves. `Web media manager (HTTP): Enabled` means
+plaintext on port 80; `Enabled with security only` means TLS on 443. This
+tool defaults to `http` for that reason, and `preflight` transparently
+retries with the other scheme before giving up, so the setting is not
+something you have to know in advance. `--insecure` skips certificate
+verification and is only needed on the TLS listener, whose certificate is
+self-signed.
 
-If every endpoint reports unreachable, rule out Windows Firewall classifying
-the adapter as a Public network before concluding the camera is at fault.
+If nothing is reachable, rule out Windows Firewall classifying the adapter
+as a Public network, and confirm a browser reaches the camera in the same
+session — the USB link drops on sleep, unplug, and power cycle.
 """
 
 from __future__ import annotations
@@ -115,10 +118,14 @@ API_BASE = "/control/api/v1"
 WS_PATH = "/control/api/v1/event/websocket"
 MOUNTS_PATH = "/mounts/"
 
-# The camera serves HTTPS with a self-signed certificate. `https` is what the
-# operator confirmed working on POCKET_6K_G2 v8.6 with "Web media manager
-# (HTTP): Enabled" (as opposed to "Enabled with security only").
-DEFAULT_SCHEME = "https"
+# What the camera itself advertises. POCKET_6K_G2 v8.6's Setup -> Network
+# Access screen shows the Web media manager URL as `http://...` and the
+# setting as "Enabled" rather than "Enabled with security only" (the
+# HTTPS-only option) — and on 2026-08-03, port 443 refused/hung for both this
+# tool and curl while the link itself was demonstrably healthy. So plaintext
+# is the default, and `preflight` falls back to the other scheme rather than
+# making the operator guess.
+DEFAULT_SCHEME = "http"
 
 CAPTURES_DIR = Path(__file__).resolve().parents[1] / "captures" / "rest"
 
@@ -201,6 +208,21 @@ def normalise_base_url(host: str, scheme: str = DEFAULT_SCHEME) -> str:
     if host.startswith(("http://", "https://")):
         return host
     return f"{scheme}://{host}"
+
+
+def alternate_scheme_url(base_url: str) -> str:
+    """`base_url` with http and https swapped.
+
+    Which listener a camera exposes depends on its "Web media manager"
+    setting: "Enabled" serves plaintext, "Enabled with security only" serves
+    TLS. Rather than make that a thing the operator has to know before the
+    first successful request, `preflight` tries both.
+    """
+    if base_url.startswith("https://"):
+        return f"http://{base_url[len('https://') :]}"
+    if base_url.startswith("http://"):
+        return f"https://{base_url[len('http://') :]}"
+    raise ValueError(f"base_url must start with http:// or https:// — got {base_url!r}")
 
 
 def websocket_url(base_url: str) -> str:
@@ -684,8 +706,11 @@ def diagnose(error: str | None) -> list[str]:
         steps.append("TLS failed. The camera's certificate is self-signed — add --insecure.")
     if "cannot connect" in lowered or "refused" in lowered or "unreachable" in lowered:
         steps.append(
-            "The TCP connection was refused or had no route. The address is probably "
-            "not the camera on THIS interface."
+            "The TCP connection was refused or had no route. Either the address is not "
+            "the camera on THIS interface, or nothing is listening on that port — "
+            "check Setup -> Network Access, which shows the URL the camera actually "
+            "serves. 'Enabled' means plaintext on :80; 'Enabled with security only' "
+            "means TLS on :443."
         )
     if "timeout" in lowered or "timed out" in lowered:
         steps.append(
@@ -715,14 +740,34 @@ def diagnose(error: str | None) -> list[str]:
     return steps
 
 
-async def preflight(session: aiohttp.ClientSession, base_url: str) -> ProbeResult:
-    """One request to a known-good endpoint, to prove the camera answers.
+async def preflight(session: aiohttp.ClientSession, base_url: str) -> tuple[str, ProbeResult]:
+    """Prove the camera answers, and settle which scheme it answers on.
 
     `/system/format` is the operator-confirmed working endpoint on
     POCKET_6K_G2 v8.6, so a failure here is about the transport rather than
-    about that endpoint.
+    about that endpoint. If the requested scheme is unreachable the other one
+    is tried before giving up, and the working base URL is returned — which
+    also answers, in passing, the open question of whether the plaintext
+    listener is live (see docs/rest/transport.md).
     """
-    return await request(session, "GET", f"{base_url}{API_BASE}/system/format")
+    result = await request(session, "GET", f"{base_url}{API_BASE}/system/format")
+    if result.classification != "unreachable":
+        return base_url, result
+
+    fallback = alternate_scheme_url(base_url)
+    logger.info("%s did not answer; trying %s before giving up", base_url, fallback)
+    fallback_result = await request(session, "GET", f"{fallback}{API_BASE}/system/format")
+    if fallback_result.classification != "unreachable":
+        logger.warning(
+            "%s was unreachable but %s answered — using it. Pass --scheme to "
+            "skip this fallback next time.",
+            base_url,
+            fallback,
+        )
+        return fallback, fallback_result
+
+    # Report the originally-requested scheme's failure, not the fallback's.
+    return base_url, result
 
 
 # ── Reporting ───────────────────────────────────────────────────────────────
@@ -897,16 +942,16 @@ def save_report(report: Report, *, captures_dir: Path = CAPTURES_DIR) -> Path:
 HOST_HELP = """\
 --host is required. Read it off the camera rather than guessing:
 
-  Setup -> Network Access   shows the exact URL, e.g.
-                            https://pocket-cinema-camera-6k-g2.local
-  Setup -> Network Settings shows the IP, e.g. 10.0.0.3
+  Setup -> Network Access   shows the URL the camera actually serves, e.g.
+                            http://pocket-cinema-camera-6k-g2.local
 
-mDNS resolves, so the .local name is the more stable of the two — the IP can
-change, and on the operator's setup the adapter's default gateway (10.0.0.1)
-is NOT the camera, so no gateway heuristic is offered here on purpose.
+Use the mDNS name. Do NOT use the IP from Setup -> Network Settings: that is
+the Ethernet port's address and is refused over USB. The USB-C link is its
+own /30 (camera .225, laptop .226 on the operator's setup), so no gateway or
+Setup-IP heuristic is offered here on purpose.
 
-The certificate is self-signed: add --insecure. Pass a full URL to --host to
-override --scheme.
+The preflight tries the other scheme automatically. --insecure is only
+needed on the HTTPS listener. Pass a full URL to --host to pin the scheme.
 """
 
 
@@ -958,7 +1003,8 @@ async def run(args: argparse.Namespace) -> int:
     async with aiohttp.ClientSession(
         timeout=timeout, connector=connector, trust_env=True
     ) as session:
-        check = await preflight(session, base_url)
+        base_url, check = await preflight(session, base_url)
+        report.host = base_url
         if check.classification == "unreachable":
             logger.error("Preflight failed: GET %s -> %s", check.path, check.describe())
             print(f"\nCannot reach {base_url} — not sweeping {len(build_catalog())} endpoints")
@@ -1041,16 +1087,17 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_SCHEME,
         choices=["https", "http"],
         help=(
-            f"URL scheme when --host has none. Default: {DEFAULT_SCHEME} (what the "
-            "operator confirmed working). Ignored if --host carries a scheme."
+            f"URL scheme when --host has none. Default: {DEFAULT_SCHEME}, matching what "
+            "Setup -> Network Access advertises. The preflight retries with the other "
+            "scheme anyway. Ignored if --host carries a scheme."
         ),
     )
     parser.add_argument(
         "--insecure",
         action="store_true",
         help=(
-            "Skip TLS certificate verification. Required to reach the camera at all "
-            "over HTTPS, because its certificate is self-signed. Never implied."
+            "Skip TLS certificate verification. Needed only on the HTTPS listener, "
+            "whose certificate is self-signed. Never implied."
         ),
     )
     parser.add_argument(

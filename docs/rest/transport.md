@@ -39,8 +39,7 @@ profile to another without re-verifying*. A sweep's results are evidence about o
 
 ## The transport is USB, not LAN
 
-The camera presents a **USB Ethernet gadget** and serves the control API over it — over
-HTTPS, confirmed; possibly over plaintext HTTP as well, unconfirmed.
+The camera presents a **USB Ethernet gadget** and serves the control API over it.
 
 Exact conditions everything in this doc was observed under, recorded because the repo
 treats test conditions as provenance: `POCKET_6K_G2 v8.6`, connected to a Windows laptop
@@ -64,45 +63,63 @@ instead of a code change.
 
 ### Addressing the camera
 
-Confirmed working, 2026-07-31: **`https://pocket-cinema-camera-6k-g2.local/`**.
+**Use the mDNS name.** Verified 2026-08-03:
 
-The camera's own Setup utility is the authority, and it shows both forms directly:
+```
+Resolve-DnsName pocket-cinema-camera-6k-g2.local  ->  172.30.161.225
+```
 
-| Setup screen | Field | Value on this camera |
+**The USB-C link is its own /30 point-to-point network.** From `ipconfig`, adapter
+"Ethernet 3":
+
+| | Address |
+|---|---|
+| Camera | `172.30.161.225` |
+| Laptop | `172.30.161.226` |
+| Netmask | `255.255.255.252` (a /30 — exactly two usable hosts) |
+| Gateway | none |
+
+**Do not use the IP from Setup → Network Settings.** That screen reads `10.0.0.3` /
+gateway `10.0.0.1`, and connecting to it over USB is *refused*. It describes the
+**Ethernet port's** configuration, which is a different interface entirely. Two heuristics
+are therefore both wrong on this camera, and `probe_endpoints.py` offers neither: "use the
+Setup IP" and "the camera is your adapter's default gateway" (there is no gateway on a
+/30).
+
+**Setup → Network Access is the authority on the scheme.** It shows the URL the camera
+actually serves:
+
+| Setting | Listener |
+|---|---|
+| `Web media manager (HTTP): Enabled` | plaintext, port 80 |
+| `Web media manager (HTTP): Enabled with security only` | TLS, port 443 |
+
+This camera is set to `Enabled`, and its Setup screen shows an `http://` URL — consistent
+with port 443 refusing for both `probe_endpoints.py` and `curl` on 2026-08-03 while the
+link itself was demonstrably healthy. The tool defaults to `--scheme http` for that
+reason, and the preflight retries with the other scheme before giving up, so the setting
+is not something you must know in advance. `--insecure` is needed only on the TLS
+listener, whose certificate is self-signed.
+
+### Assumptions this doc got wrong, and what corrected them
+
+Kept rather than quietly edited away, because each was believed on reasonable-looking
+evidence and each cost a debugging round.
+
+| Claimed | Actual | Corrected by |
 |---|---|---|
-| Network Access | Web media manager (HTTP) URL | `http://Pocket-Cinema-Camera-…` |
-| Network Settings | Protocol | Static IP |
-| Network Settings | IP Address | `10.0.0.3` |
-| Network Settings | Subnet Mask | `255.255.255.0` |
-| Network Settings | Gateway | `10.0.0.1` |
+| USB means no mDNS | `.local` resolves to `172.30.161.225` | `Resolve-DnsName`, 2026-08-03 |
+| SMB fails because the name does not resolve | The name resolves; SMB fails for some unrelated reason | the same |
+| The camera is at `10.0.0.3` (Setup → Network Settings) | That is the **Ethernet** port; over USB it is `172.30.161.225` on a /30 | `ipconfig` + `Resolve-DnsName` |
+| The camera is the adapter's default gateway | A /30 has no gateway at all | `ipconfig` |
+| The API is served over HTTPS | Setup advertises `http://`, and 443 refuses | `curl`, and the camera's own Setup screen |
 
-Three things to take from that:
+The last one is worth dwelling on: it came from a browser address bar showing `https://`.
+Browsers silently try HTTPS first and fall back, so **the address bar is not evidence of
+which scheme a device serves.** The camera's own Setup screen is.
 
-1. **mDNS resolves.** The `.local` name works over HTTPS, so it is the more stable
-   handle — the IP can change, the name does not.
-2. **The camera is not the gateway.** It is at `10.0.0.3` while the gateway is
-   `10.0.0.1`. The usual RNDIS heuristic "the camera is your adapter's default gateway"
-   is simply wrong here, so `probe_endpoints.py` offers no gateway guessing at all; it
-   points you at the two Setup screens instead. Guessing wrong means sweeping some other
-   device and filing the results as the camera's.
-3. **This is HTTPS with a self-signed certificate**, so `--insecure` is required to reach
-   the camera at all. The flag is opt-in and never implied — correct for a device whose
-   certificate no CA will ever vouch for, wrong for anything else. The tool defaults to
-   `--scheme https` and warns if you use HTTPS without `--insecure`, since every request
-   would otherwise fail verification and look like an unreachable camera.
-
-**`Web media manager (HTTP)` is set to `Enabled`, not `Enabled with security only`** —
-the middle option is the HTTPS-only one. So the plaintext listener may also be live;
-whether it is, is an open question the sweep answers by running twice, once per
-`--scheme`.
-
-### Corrections to an earlier assumption
-
-An earlier draft of this doc asserted that USB meant no mDNS, and used that to explain
-why Windows Explorer cannot open `\\pocket-cinema-camera-6k-g2.local` over SMB. **Both
-halves were wrong.** mDNS resolves fine — the same name works over HTTPS. Whatever
-breaks SMB is a separate matter (SMB is `Enabled` on the camera) and has no bearing on
-this API. FTP is likewise enabled and out of scope. Neither is used.
+SMB is `Enabled` on the camera and still unreachable from Explorer; FTP is enabled too.
+Both are out of scope and neither is used.
 
 ### Other consequences that shape the design
 
@@ -121,40 +138,28 @@ this API. FTP is likewise enabled and out of scope. Neither is used.
 
 ### When nothing is reachable
 
-The first real run (2026-07-31) reached nothing, by either address, and is the reason the
-tool now preflights. Two distinct failure shapes showed up, and the difference between
-them is itself evidence:
+Two runs reached nothing before the addressing was understood. The failure *shapes*
+differed, and that difference was the useful part:
 
-| Address | Time per request | Reads as |
-|---|---|---|
-| `https://10.0.0.3` | ~3 s | Fast failure — refused, or no route |
-| `https://pocket-cinema-camera-6k-g2.local` | ~11 s | Hit the timeout — the name resolved, but nothing answered at the address |
+| Address | Per request | Exception | Meaning |
+|---|---|---|---|
+| `https://10.0.0.3` | ~3 s | `ClientConnectorError: … refused the network connection` | Wrong interface — that is the Ethernet port's IP |
+| `https://pocket-cinema-camera-6k-g2.local` | ~11 s | `TimeoutError` | Right host, wrong port — nothing listens on 443 |
 
-A name that resolves and then hangs is a different problem from an address that refuses
-immediately. The leading hypothesis is that **Setup → Network Settings describes the
-Ethernet interface, not the USB one** — in which case `10.0.0.3` is simply the wrong
-address to probe over a USB-C cable, and the `.local` name may be resolving to that same
-address or to an IPv6 link-local one that nothing serves.
-
-Untested at the time of writing. What settles it:
+A refusal and a hang are different diagnoses, so the tool always prints the exception
+rather than a bare "unreachable". `curl` reproduced both failures identically, which is
+what ruled out the tool itself as the cause — worth repeating whenever a result looks
+like a client bug:
 
 ```powershell
-Resolve-DnsName pocket-cinema-camera-6k-g2.local   # what does the name actually resolve to?
-ping -4 pocket-cinema-camera-6k-g2.local           # force IPv4
-Test-NetConnection <ip> -Port 443                  # is 443 open at that address?
-ipconfig                                           # which adapter is the camera on?
-curl.exe -k -v https://pocket-cinema-camera-6k-g2.local/control/api/v1/system/format
+Resolve-DnsName pocket-cinema-camera-6k-g2.local   # what the name resolves to
+ipconfig                                           # which adapter, which subnet
+curl.exe -v http://pocket-cinema-camera-6k-g2.local/control/api/v1/system/format
 ```
 
-The `curl` line is the decisive one: it shares nothing with this tool's stack, so if curl
-succeeds where `probe_endpoints.py` fails, the fault is in the tool; if curl fails too,
-the fault is in the address or the link. Run it in the same session as a working browser
-tab — the USB link drops on sleep, unplug, and power cycle, so "it worked earlier" is not
-evidence that it works now.
-
-**Also worth ruling out:** Windows Firewall classifying the adapter as a *Public* network,
-and forgetting `--insecure` (which fails every request at TLS and looks identical to an
-unreachable camera). The preflight names both when the exception matches.
+Also worth ruling out: Windows Firewall classifying the adapter as *Public*, and a stale
+link — the USB connection drops on sleep, unplug, and power cycle, so a browser tab that
+worked earlier is not evidence that it works now.
 
 ---
 
@@ -329,8 +334,12 @@ what remains unexplained. Do not fill this in from the specs.)*
 
 ### `POCKET_6K_G2 v8.6` over USB
 
-Not yet swept. Confirmed by hand before any tooling existed, over
-`https://pocket-cinema-camera-6k-g2.local/` (static IP `10.0.0.3`):
+Not yet swept. Confirmed by hand before any tooling existed, by browser. The scheme
+recorded at the time was `https://`, but that has not held up: on 2026-08-03 port 443
+refused for both the probe tool and `curl`, while Setup → Network Access advertises
+`http://` and is set to `Enabled` rather than `Enabled with security only`. Treat the
+browser's address bar as unreliable evidence of the scheme — it silently upgrades and
+falls back. The endpoints themselves are unaffected:
 
 | Endpoint | Status | Notes |
 |---|---|---|

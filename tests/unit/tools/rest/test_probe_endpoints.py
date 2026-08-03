@@ -18,6 +18,7 @@ from probe_endpoints import (  # noqa: E402
     Endpoint,
     ProbeResult,
     Report,
+    alternate_scheme_url,
     build_catalog,
     build_rest_profile_block,
     classify,
@@ -314,6 +315,7 @@ class TestDiagnose:
         steps = diagnose(self.REFUSED)
         assert not any("--insecure" in step for step in steps)
         assert any("refused or had no route" in step for step in steps)
+        assert any("Network Access" in step for step in steps)
 
     def test_timeout_suggests_a_wrong_or_dropped_address(self):
         steps = diagnose(self.TIMEOUT)
@@ -335,25 +337,49 @@ class TestDiagnose:
 
 
 class TestNormaliseBaseUrl:
-    def test_defaults_to_https(self):
-        """The scheme the operator confirmed working."""
-        assert normalise_base_url("10.0.0.3") == "https://10.0.0.3"
+    def test_defaults_to_http(self):
+        """Matches what Setup -> Network Access advertises: "Web media
+        manager (HTTP): Enabled" serves plaintext on :80. Port 443 refused
+        for both this tool and curl on 2026-08-03."""
+        assert normalise_base_url("172.30.161.225") == "http://172.30.161.225"
 
     def test_accepts_an_mdns_name(self):
         assert (
             normalise_base_url("pocket-cinema-camera-6k-g2.local")
-            == "https://pocket-cinema-camera-6k-g2.local"
+            == "http://pocket-cinema-camera-6k-g2.local"
         )
 
-    @pytest.mark.parametrize("url", ["http://10.0.0.3", "https://10.0.0.3"])
+    @pytest.mark.parametrize("url", ["http://172.30.161.225", "https://172.30.161.225"])
     def test_a_full_url_overrides_the_scheme(self, url):
         assert normalise_base_url(url, "https") == url
 
     def test_strips_trailing_slash_and_whitespace(self):
-        assert normalise_base_url("  10.0.0.3/  ") == "https://10.0.0.3"
+        assert normalise_base_url("  172.30.161.225/  ") == "http://172.30.161.225"
 
     def test_explicit_scheme_argument_is_honoured(self):
-        assert normalise_base_url("10.0.0.3", "http") == "http://10.0.0.3"
+        assert normalise_base_url("172.30.161.225", "https") == "https://172.30.161.225"
+
+
+class TestAlternateSchemeUrl:
+    """The preflight retries with the other scheme, because which listener is
+    live depends on the camera's "Web media manager" setting: "Enabled"
+    serves plaintext on :80, "Enabled with security only" serves TLS on :443."""
+
+    def test_http_becomes_https(self):
+        assert alternate_scheme_url("http://cam.local") == "https://cam.local"
+
+    def test_https_becomes_http(self):
+        assert alternate_scheme_url("https://cam.local") == "http://cam.local"
+
+    def test_round_trips(self):
+        assert alternate_scheme_url(alternate_scheme_url("http://cam.local")) == "http://cam.local"
+
+    def test_preserves_path_and_port(self):
+        assert alternate_scheme_url("http://172.30.161.225:8080") == "https://172.30.161.225:8080"
+
+    def test_rejects_a_schemeless_url(self):
+        with pytest.raises(ValueError, match="http:// or https://"):
+            alternate_scheme_url("172.30.161.225")
 
 
 class TestWebsocketUrl:
