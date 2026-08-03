@@ -58,11 +58,11 @@ Codec IDs, quality variant IDs, FPS encodings, resolution encodings, category/pa
 
 Use a dual-check strategy — per transport:
 - **BLE**: primary — await an echo on `INCOMING_CONTROL` (fast; subscribe and buffer *before* sending the command, not after); secondary — read `CAMERA_STATUS` as a cross-check
-- **REST *(planned)***: primary — a WebSocket `propertyValueChanged` event; secondary — a `GET` readback. `204` on a `PUT` means accepted, not applied
+- **REST**: primary — a WebSocket `propertyValueChanged` event; secondary — a `GET` readback. `204` on a `PUT` means accepted, not applied
 
 Both checks carry configurable timeouts. If neither confirms the state change, raise `BMDVerificationError`. On `POCKET_6K_G2 v7.9`, `CAMERA_STATUS` notifications are unreliable — always attempt the echo first and treat the status read as a secondary check only.
 
-*Current implementation status:* recording verification is **echo-only** — none of the known `CAMERA_STATUS` bits encode recording state, so there is no meaningful secondary cross-check for it yet. See `docs/ble/session_and_verification.md`.
+*Current implementation status:* BLE recording verification is **echo-only** — none of the known `CAMERA_STATUS` bits encode recording state, so there is no meaningful secondary cross-check for it yet. See `docs/ble/session_and_verification.md`. REST's dual-check is implemented for `RestCameraSession.record_start`/`record_stop` (Phase 4) — event primary, `GET /transports/0/record` readback secondary — but real-hardware confirmation of the `PUT` is still pending, since `tools/rest/probe_endpoints.py` deliberately never exercises this endpoint (it would start/stop a real recording). See `docs/rest/session.md`.
 
 Photo capture is a harder case still unresolved over BLE: the trigger command is confirmed on real hardware on both cameras, but no BLE channel — neither echo nor `CAMERA_STATUS` — has ever been observed to move in response to it. This is why `CameraSession.capture_photo()` isn't built yet. `POCKET_6K_G2 v8.6`'s USB/HTTP interface is the leading candidate for the out-of-band confirmation channel BLE never had — see `docs/ble/photo_capture.md` §7/§9 for the full evidentiary record and open decision.
 
@@ -116,9 +116,14 @@ src/bmd_camera/
                             # BMDUnsupportedError
   exceptions.py             # BMDConnectionError, BMDTimeoutError, BMDCommandError,
                             # BMDVerificationError, BMDUnsupportedError, BMDStorageError
-                            # (BMDVerificationError and BMDUnsupportedError are raised
-                            # today — the latter by the settings writes; the rest are
-                            # reserved for the planned subsystems that will use them)
+                            # (raised today: BMDVerificationError by BLE settings/recording
+                            # writes and REST record_start/record_stop; BMDUnsupportedError
+                            # by BLE settings writes and REST capability checks;
+                            # BMDConnectionError by REST transport failures;
+                            # BMDStorageError by RestCameraSession.clips()'s no-media
+                            # translation and record_start()'s storage precondition.
+                            # BMDTimeoutError and BMDCommandError remain unused, reserved
+                            # for future subsystems)
   camera_profile.py         # Load, validate, and cache model/firmware profiles —
                             # shared across transports; loads a model's ble/ profile
                             # always, and its rest/ profile too when one exists
@@ -157,10 +162,12 @@ src/bmd_camera/
                               # mirrors ble/notification_router.py's arm()/wait_for() contract
                               # exactly, keyed by property path instead of (category, parameter)
     exceptions.py            # BMDRestError + re-exports of the shared exception types
-    session.py                # RestCameraSession — user-facing API, read verbs only so far
+    session.py                # RestCameraSession — user-facing API. Read verbs
                               # (get_format, supported_formats, storage_state, clips,
-                              # timecode, notification-driven is_recording). No writes yet
-                              # (Phase 4/5). See docs/rest/session.md
+                              # timecode, notification-driven is_recording) plus
+                              # record_start/record_stop (Phase 4, dual-check verified,
+                              # storage-gated). Format writes not yet built (Phase 5).
+                              # See docs/rest/session.md
     mapping.py                 # Codec name derivation between the BLE profile's vocabulary
                               # and REST's own spelling — confirmed strings always win
                               # (design principle 1); this is a fallback seed only
@@ -212,6 +219,10 @@ examples/
   change_codec.py           # BRAW <-> ProRes round trip via set_camera_format
                             # (codec+quality+resolution+fps orchestration;
                             # see docs/ble/settings.md and docs/ble/session_and_verification.md)
+  rest_read_state.py        # RestCameraSession's full read surface — format, storage,
+                            # clips, timecode, notification-driven is_recording
+  rest_record_start_stop.py # Dual-check-verified record start/stop via RestCameraSession
+                            # (Phase 4); see docs/rest/session.md
   capture_photo.py          # (planned)
   playback.py               # (planned)
 
@@ -256,7 +267,7 @@ added, a new `docs/<feature>.md` must be created alongside the code change.
 | `docs/ble/reverse_engineering.md` | Tool-by-tool procedure for bringing up a new `(MODEL_KEY, FIRMWARE)` pair, and for adding a single new command |
 | `docs/ble/camera_registry.md` | Full evidentiary notes behind the Camera Registry table above |
 | `docs/rest/transport.md` | REST/WebSocket transport (8.6) — addressing the camera over USB, scheme discovery, `tools/rest/probe_endpoints.py`, sweep results for both cameras, the `RestClient`/`RestEventRouter` library surface |
-| `docs/rest/session.md` | `RestCameraSession` — the read-only REST state surface (Phase 3): format, storage, clips, timecode, notification-driven `is_recording`; codec name mapping and REST timecode decode |
+| `docs/rest/session.md` | `RestCameraSession` — the REST state/control surface: read verbs (Phase 3 — format, storage, clips, timecode, notification-driven `is_recording`) plus `record_start`/`record_stop` (Phase 4 — dual-check verification, storage precondition); codec name mapping and REST timecode decode |
 
 ---
 

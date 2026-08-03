@@ -7,22 +7,28 @@ as `ble/session.py`'s `CameraSession` composes `BMDCameraController` and
 `NotificationRouter` — see design principle 5's transport/protocol
 boundary, held here for REST.
 
-STATUS: read verbs only. No write orchestration yet (Phase 4/5) —
-`BMDVerificationError` is never raised here because nothing here writes.
+STATUS: read verbs plus record start/stop (Phase 4) — the REST dual-check
+design principle 3 has always specified: a WS `propertyValueChanged` event
+primary, a `GET` readback secondary. Format writes (Phase 5) are not here yet.
 
     async with RestCameraSession("172.27.97.141", "POCKET_6K_PRO", "v8.6") as session:
         fmt = await session.get_format()
         storage = await session.storage_state()
         clips = await session.clips()
         tc = await session.timecode()
+        await session.record_start()
+        await session.record_stop()
 
 `is_recording` is the one piece of state this session tracks continuously
 rather than fetching on demand — notification-derived only, from
 `/transports/0/record` `propertyValueChanged` events (design principle 4),
-mirroring the BLE `CameraSession`'s `is_recording` attribute exactly.
-Everything else (`get_format`, `storage_state`, `clips`, `timecode`) is a
-plain `GET`, fetched fresh on every call — there is no background cache to
-go stale.
+mirroring the BLE `CameraSession`'s `is_recording` attribute exactly. This
+holds even for `record_start`/`record_stop`'s own writes: their verification
+reads the event (and, secondarily, a `GET`) locally rather than setting
+`is_recording` directly, so a caller relying on `is_recording` still only
+ever sees a value the camera itself reported. Everything else (`get_format`,
+`storage_state`, `clips`, `timecode`) is a plain `GET`, fetched fresh on
+every call — there is no background cache to go stale.
 """
 
 from __future__ import annotations
@@ -38,7 +44,12 @@ except ImportError:  # pragma: no cover - exercised only without the dependency
     aiohttp = None  # type: ignore[assignment]
 
 from ..camera_profile import CameraProfile
-from ..exceptions import BMDConnectionError, BMDStorageError, BMDUnsupportedError
+from ..exceptions import (
+    BMDConnectionError,
+    BMDStorageError,
+    BMDUnsupportedError,
+    BMDVerificationError,
+)
 from .client import RestClient, require_aiohttp
 from .constants import WS_PATH
 from .events import RestEventRouter
@@ -46,6 +57,8 @@ from .exceptions import BMDRestError
 from .timecode import Timecode, decode_rest_timecode
 
 logger = logging.getLogger(__name__)
+
+RECORD_PROPERTY = "/transports/0/record"
 
 
 def _websocket_url(base_url: str) -> str:
@@ -143,6 +156,19 @@ class Clip:
 # ── Parsing helpers ──────────────────────────────────────────────────────────
 
 
+def _recording_flag(value: Any) -> bool | None:
+    """Extract `/transports/0/record`'s `{"recording": bool}` shape —
+    `Notification.yaml`'s documented event `value`, assumed (not yet
+    directly observed on real hardware — see events.py's docstring caveat)
+    to be shared by the `GET` readback body too. Returns None for anything
+    else, including a `wait_for()` timeout's own `None`, so a caller can
+    treat "malformed" and "no delivery yet" identically — both mean "not
+    confirmed by this channel"."""
+    if isinstance(value, dict) and isinstance(value.get("recording"), bool):
+        return value["recording"]
+    return None
+
+
 def _resolution(body: dict | None) -> tuple[int, int]:
     if not body:
         return (0, 0)
@@ -224,6 +250,7 @@ class RestCameraSession:
         port: int | None = None,
         timeout_s: float = 5.0,
         ws_timeout_s: float = 5.0,
+        verify_timeout_s: float = 5.0,
         session: Any | None = None,
     ) -> None:
         require_aiohttp()
@@ -233,6 +260,11 @@ class RestCameraSession:
         self.port = port
         self.timeout_s = timeout_s
         self.ws_timeout_s = ws_timeout_s
+        # Timeout for a write's dual-check verification (design principle 3's
+        # REST sibling) — how long to wait for the WS event before falling
+        # back to a GET readback. Distinct from timeout_s (one HTTP request)
+        # and ws_timeout_s (the WS connect handshake).
+        self.verify_timeout_s = verify_timeout_s
         self._log = logging.getLogger(f"{__name__}.{model_key}")
 
         # `session` may be injected (real or fake) for testing, mirroring
@@ -381,3 +413,89 @@ class RestCameraSession:
     async def timecode(self) -> Timecode:
         body = await self._rest_client.get("/transports/0/timecode")
         return decode_rest_timecode(body["timecode"])
+
+    # ── Writes (Phase 4) ─────────────────────────────────────────────────
+
+    async def record_start(self) -> None:
+        """Start recording, raising `BMDVerificationError` unless confirmed.
+
+        Checks storage readiness first (design principle 10) — see
+        `_require_storage_ready`.
+        """
+        await self._require_storage_ready()
+        await self._set_recording_state(recording=True)
+
+    async def record_stop(self) -> None:
+        """Stop recording, raising `BMDVerificationError` unless confirmed.
+
+        A no-op if `is_recording` already positively confirms the camera
+        isn't recording — mirrors the BLE `CameraSession.record_stop`'s
+        documented no-echo-on-redundant-write handling (docs/ble/recording.md).
+        Whether this camera's REST record endpoint behaves the same way on a
+        redundant `PUT` is unconfirmed, but the guard is harmless either
+        way: `is_recording` is only ever notification-derived (design
+        principle 4), never assumed, so skipping here never masks a real
+        state mismatch.
+        """
+        if self.is_recording is False:
+            return
+        await self._set_recording_state(recording=False)
+
+    async def _require_storage_ready(self) -> None:
+        """Design principle 10's REST implementation for the record write
+        path: read `storage_state()` before allowing a start, raising
+        `BMDStorageError` for no active device or an active device with no
+        remaining record time — rather than letting the camera silently
+        fail to save the clip."""
+        storage = await self.storage_state()
+        device = storage.active_device
+        if device is None:
+            raise BMDStorageError(
+                f"[{self.host}] No active storage device in {self.profile.model_key} "
+                f"{self.profile.firmware} — cannot start recording"
+            )
+        if device.remaining_record_time <= 0:
+            raise BMDStorageError(
+                f"[{self.host}] Active storage device '{device.device_name}' in "
+                f"{self.profile.model_key} {self.profile.firmware} has no remaining "
+                f"record time ({device.remaining_record_time}) — cannot start recording"
+            )
+
+    async def _set_recording_state(self, *, recording: bool) -> None:
+        """`PUT /transports/0/record`, verified via the REST dual-check
+        design principle 3 specifies: a WS `propertyValueChanged` event
+        primary, a `GET` readback secondary. `204` on the `PUT` means
+        accepted, not applied — neither check confirming raises
+        `BMDVerificationError`.
+
+        The capability check below only confirms this endpoint's `GET` side
+        was swept — `tools/rest/probe_endpoints.py --probe-writes`
+        deliberately never `PUT`s here (`NEVER_WRITE`: it would start or
+        stop a real recording), so no profile will ever carry a confirmed
+        `put_supported` for this path. The `PUT` itself is confirmed by this
+        method's own verification below instead, on every call, the same
+        way BLE's `record_start`/`record_stop` are verified without a
+        profile-level "this command works" flag.
+        """
+        endpoint = self.profile.rest_endpoint(RECORD_PROPERTY)
+        if endpoint is None or not endpoint.supported:
+            raise BMDUnsupportedError(
+                f"[{self.host}] {RECORD_PROPERTY} is not confirmed present in the "
+                f"{self.profile.model_key} {self.profile.firmware} rest/ profile — run "
+                "tools/rest/probe_endpoints.py against this camera first."
+            )
+
+        action = "record_start" if recording else "record_stop"
+        self._router.arm(RECORD_PROPERTY)
+        await self._rest_client.put(RECORD_PROPERTY, {"recording": recording})
+        event_value = await self._router.wait_for(RECORD_PROPERTY, timeout=self.verify_timeout_s)
+        confirmed = _recording_flag(event_value)
+        if confirmed is None:
+            body = await self._rest_client.get(RECORD_PROPERTY)
+            confirmed = _recording_flag(body)
+        if confirmed != recording:
+            raise BMDVerificationError(
+                f"{action}: neither a WS '{RECORD_PROPERTY}' propertyValueChanged event "
+                f"nor a GET readback confirmed recording={recording} within "
+                f"{self.verify_timeout_s}s"
+            )

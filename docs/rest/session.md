@@ -1,7 +1,12 @@
-# REST Session — Read-Only State Surface (Phase 3)
+# REST Session — State and Control Surface (Phases 3-4)
 
-**Status:** implemented — `RestCameraSession` is live and confirmed against real
-`POCKET_6K_PRO v8.6` hardware. Read verbs only; no write orchestration yet (Phase 4/5).
+**Status:** read verbs (Phase 3) are implemented and confirmed against real
+`POCKET_6K_PRO v8.6` hardware. `record_start`/`record_stop` (Phase 4) are implemented
+and unit-tested but **real-hardware confirmation of the `PUT` is still pending** —
+`tools/rest/probe_endpoints.py` deliberately never exercises `/transports/0/record`
+(`NEVER_WRITE`: it would start or stop a real recording), so this session's own
+dual-check verification is the first and only confirmation channel this endpoint will
+ever get. Format writes (Phase 5) are not built yet.
 
 ## Overview
 
@@ -18,9 +23,15 @@ async with RestCameraSession("172.27.97.141", "POCKET_6K_PRO", "v8.6") as sessio
     clips = await session.clips()
     tc = await session.timecode()
     print(session.is_recording)
+
+    await session.record_start()
+    await session.wait_while_recording(timeout=5)
+    await session.record_stop()
 ```
 
-`examples/rest_read_state.py` is the first (and currently only) consumer.
+`examples/rest_read_state.py` exercises the read verbs; `examples/rest_record_start_stop.py`
+exercises `record_start`/`record_stop` across several cycles, mirroring the BLE
+`examples/record_start_stop.py`.
 
 Every read verb (`get_format`, `supported_formats`, `storage_state`, `clips`, `timecode`)
 is a plain `GET`, fetched fresh on every call — there is no background cache to go stale.
@@ -147,6 +158,58 @@ cross-check today should read the transport mode/state directly rather than rely
 
 ---
 
+## Write verbs (Phase 4)
+
+### `record_start()` / `record_stop()`
+
+`PUT /transports/0/record {"recording": bool}`, verified via the dual-check design
+principle 3 specifies for REST: a WS `propertyValueChanged` event on `/transports/0/record`
+primary, a `GET /transports/0/record` readback secondary. `204` on the `PUT` means
+accepted, not applied — if neither channel confirms the requested state within
+`verify_timeout_s` (constructor parameter, default `5.0`, distinct from `timeout_s`'s
+single-request timeout and `ws_timeout_s`'s WS connect timeout), `BMDVerificationError` is
+raised.
+
+`record_start()` first calls `storage_state()` and raises `BMDStorageError` — design
+principle 10's REST implementation for the record write path — when there is no active
+storage device, or the active device reports `remaining_record_time <= 0`. `record_stop()`
+carries no such check and is a no-op when `is_recording` already positively confirms the
+camera isn't recording, mirroring the BLE `CameraSession.record_stop`'s documented
+no-echo-on-redundant-write handling (`docs/ble/recording.md`) — whether this camera's REST
+endpoint behaves the same way on a redundant `PUT` is unconfirmed, but the guard is
+harmless either way since `is_recording` is only ever notification-derived (design
+principle 4), never assumed.
+
+**Capability check is GET-only, deliberately.** Both methods refuse to run unless the
+target camera/firmware's `rest/<fw>.json` profile confirms `/transports/0/record`'s `GET`
+side was swept (design principle 7) — but `tools/rest/probe_endpoints.py --probe-writes`
+puts this path on its `NEVER_WRITE` list (a same-value `PUT` here would still start or stop
+a real recording, unlike the idempotent probe every other write-probeable endpoint gets).
+So no profile will ever carry a confirmed `put_supported` for this path, and the capability
+check does not attempt one — the `PUT` itself is confirmed by this method's own
+verification, on every call, the same way BLE's `record_start`/`record_stop` are verified
+without a profile-level "this command works" flag.
+
+**`is_recording` is never set directly by either method** — consistent with design
+principle 4's rule that it updates only from a `propertyValueChanged` event, never from a
+request the session itself made. When the primary WS event confirms, `is_recording` is
+already current by the time `record_start`/`record_stop` returns (the same event routes
+through `_on_event` independently). When only the secondary `GET` readback confirms
+(no event arrived in time), `record_start`/`record_stop` still returns successfully, but
+`is_recording` can remain stale/`None` until a real event eventually arrives — the same
+gap `is_recording`'s own docstring already describes for the read path, not a new one this
+introduces.
+
+**Real-hardware confirmation is still open.** `docs/rest/transport.md`'s sweep results
+mark `PUT /transports/0/record` as "Open — never probed, and never will be by this tool" —
+by design, since the sweep excludes every state-changing write. `examples/rest_record_start_stop.py`'s
+first successful run against real hardware is what closes this gap; until then, treat the
+event/body shapes above as spec-derived (`Notification.yaml`), not yet cross-checked
+against a raw captured `/transports/0/record` event or `GET` response — the same caveat
+`rest/events.py`'s docstring already carries for the event side.
+
+---
+
 ## Codec name mapping (`rest/mapping.py`)
 
 `RestCameraSession` (and, later, its write orchestration) takes profile *names* — the
@@ -197,17 +260,29 @@ Confirmed on real `POCKET_6K_G2 v8.6` hardware (2026-08-03): `{"timecode": 27415
 connection-lifecycle tests. `test_mapping.py` and `test_rest_timecode.py` cover the pure
 derivation/decode functions directly, including the real captured timecode value above.
 
+`record_start`/`record_stop` reuse the same fake `RestClient`, extended with a `.put()`
+that records every call and returns a canned response (`None` by default, matching a real
+`204`). The WS-event primary path is exercised by calling the session's real
+`RestEventRouter.handle_event()` directly from a background `asyncio.Task` scheduled just
+before awaiting `record_start()`/`record_stop()` — the same "deliver later, from a
+concurrent task" shape `TestWaitWhileRecording`'s tests already use for the read side — so
+`wait_for()`'s actual freshness/staleness logic runs, not a mock standing in for it. The
+GET-readback secondary path is exercised by never delivering an event and shortening
+`verify_timeout_s` to keep the test fast.
+
 ---
 
 ## What's deliberately out of scope
 
-- **No writes.** `RestCameraSession` has no `set_*`/`put`-shaped method yet — that is
-  Phase 4 (record start/stop) and Phase 5 (format writes), which will reuse
-  `RestEventRouter.arm()`/`wait_for()` exactly as `tools/rest/smoke_test_client.py`'s
-  `--verify-write` mode already proved works end to end on real hardware.
-- **No storage preconditions.** Design principle 10's pre-condition gate ("verify storage
-  is ready before recording, raise `BMDStorageError` otherwise") has nothing to gate yet
-  with no write path — it lands with Phase 4.
+- **No format writes yet.** `set_camera_format`'s REST equivalent (`PUT /system/format`)
+  is Phase 5 — gated on real-hardware confirmation that the endpoint's `PUT` applies a
+  *changing* value, not just accepts a same-value probe (docs/rest/transport.md). It will
+  reuse `RestEventRouter.arm()`/`wait_for()` exactly as `record_start`/`record_stop`
+  already do, and exactly as `tools/rest/smoke_test_client.py`'s `--verify-write` mode
+  already proved works end to end on real hardware.
+- **No storage precondition on `record_stop()`.** Only `record_start()` checks
+  `storage_state()` — matching CLAUDE.md design principle 10's wording ("before recording
+  or photo capture"), which names starting an operation, not ending one.
 - **No caching.** Every read verb hits the camera fresh. A future phase may add a
   `CameraState`-style cached view if a real use case needs one; nothing here assumes it
   will.

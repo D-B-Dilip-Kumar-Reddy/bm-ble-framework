@@ -17,10 +17,16 @@ import aiohttp
 import pytest
 
 from bmd_camera.camera_profile import CameraProfile
-from bmd_camera.exceptions import BMDConnectionError, BMDStorageError, BMDUnsupportedError
+from bmd_camera.exceptions import (
+    BMDConnectionError,
+    BMDStorageError,
+    BMDUnsupportedError,
+    BMDVerificationError,
+)
 from bmd_camera.rest.events import RestEventRouter
 from bmd_camera.rest.exceptions import BMDRestError
 from bmd_camera.rest.session import (
+    RECORD_PROPERTY,
     Clip,
     Format,
     RestCameraSession,
@@ -40,21 +46,48 @@ def make_profile(*, rest_raw: dict | None = None) -> CameraProfile:
     return profile
 
 
+def make_profile_with_record_confirmed() -> CameraProfile:
+    """A profile whose rest/ file confirms /transports/0/record's GET side
+    was swept — probe_endpoints.py never PUTs this path (NEVER_WRITE), so
+    only the GET side can ever be profile-confirmed; see
+    RestCameraSession._set_recording_state's docstring."""
+    rest_raw = {
+        "_meta": {"model_key": MODEL_KEY, "firmware": FIRMWARE, "status": "UNVERIFIED"},
+        "endpoints": {RECORD_PROPERTY: {"status": 200, "supported": True}},
+    }
+    return make_profile(rest_raw=rest_raw)
+
+
 class FakeRestClient:
     """Minimal stand-in for RestClient: `.get(path)` returns a canned body,
     or raises a canned exception (for `errors`) — e.g. simulating a real
-    404 without a real network."""
+    404 without a real network. `.put(path, body)` records the call and
+    returns a canned response (None by default, matching a real 204)."""
 
-    def __init__(self, responses: dict[str, object], *, errors: dict[str, Exception] | None = None):
+    def __init__(
+        self,
+        responses: dict[str, object],
+        *,
+        errors: dict[str, Exception] | None = None,
+        put_responses: dict[str, object] | None = None,
+    ):
         self.responses = responses
         self.errors = errors or {}
+        self.put_responses = put_responses or {}
         self.calls: list[str] = []
+        self.put_calls: list[tuple[str, object]] = []
 
     async def get(self, path: str):
         self.calls.append(path)
         if path in self.errors:
             raise self.errors[path]
         return self.responses[path]
+
+    async def put(self, path: str, body: object):
+        self.put_calls.append((path, body))
+        if path in self.errors:
+            raise self.errors[path]
+        return self.put_responses.get(path)
 
 
 def make_session(
@@ -69,6 +102,7 @@ def make_session(
     session.port = None
     session.timeout_s = 5.0
     session.ws_timeout_s = 5.0
+    session.verify_timeout_s = 5.0
     session._log = logging.getLogger("test.rest_session")
     session._session = None
     session._owns_session = True
@@ -360,6 +394,148 @@ class TestIsRecordingTracking:
         session._on_event("/transports/0/record", None)
 
         assert session.is_recording is None
+
+
+def _storage_client(
+    *, active: bool, remaining_record_time: int, extra_responses: dict[str, object] | None = None
+) -> FakeRestClient:
+    device = {
+        "activeDisk": active,
+        "clipCount": 0,
+        "deviceName": "sd0" if active else "",
+        "index": 0,
+        "remainingRecordTime": remaining_record_time,
+        "remainingSpace": 123,
+        "totalSpace": 456,
+        "volume": "A001" if active else None,
+    }
+    responses = {
+        "/media/workingset": {"size": 1, "workingset": [device]},
+        "/media/active": {
+            "deviceName": device["deviceName"],
+            "workingsetIndex": 0 if active else -1,
+        },
+        **(extra_responses or {}),
+    }
+    return FakeRestClient(responses)
+
+
+class TestRecordStart:
+    @pytest.mark.asyncio
+    async def test_raises_bmd_storage_error_when_no_active_device(self):
+        client = _storage_client(active=False, remaining_record_time=0)
+        session = make_session(make_profile_with_record_confirmed(), client=client)
+
+        with pytest.raises(BMDStorageError, match="No active storage device"):
+            await session.record_start()
+
+        assert client.put_calls == []
+
+    @pytest.mark.asyncio
+    async def test_raises_bmd_storage_error_when_no_remaining_record_time(self):
+        client = _storage_client(active=True, remaining_record_time=0)
+        session = make_session(make_profile_with_record_confirmed(), client=client)
+
+        with pytest.raises(BMDStorageError, match="no remaining record time"):
+            await session.record_start()
+
+        assert client.put_calls == []
+
+    @pytest.mark.asyncio
+    async def test_raises_bmd_unsupported_when_endpoint_not_confirmed_in_profile(self):
+        client = _storage_client(active=True, remaining_record_time=100)
+        session = make_session(make_profile(), client=client)  # no rest_raw
+
+        with pytest.raises(BMDUnsupportedError, match="transports/0/record"):
+            await session.record_start()
+
+        assert client.put_calls == []
+
+    @pytest.mark.asyncio
+    async def test_confirmed_by_ws_event_primary(self):
+        client = _storage_client(active=True, remaining_record_time=100)
+        session = make_session(make_profile_with_record_confirmed(), client=client)
+
+        async def deliver_event():
+            await asyncio.sleep(0.01)
+            session._router.handle_event(
+                {
+                    "type": "event",
+                    "data": {
+                        "action": "propertyValueChanged",
+                        "property": RECORD_PROPERTY,
+                        "value": {"recording": True},
+                    },
+                }
+            )
+
+        asyncio.create_task(deliver_event())
+        await session.record_start()
+
+        assert client.put_calls == [(RECORD_PROPERTY, {"recording": True})]
+        assert RECORD_PROPERTY not in client.calls  # no GET readback needed
+        assert session.is_recording is True
+
+    @pytest.mark.asyncio
+    async def test_confirmed_by_get_readback_secondary_when_no_event_arrives(self):
+        client = _storage_client(
+            active=True,
+            remaining_record_time=100,
+            extra_responses={RECORD_PROPERTY: {"recording": True}},
+        )
+        session = make_session(make_profile_with_record_confirmed(), client=client)
+        session.verify_timeout_s = 0.05
+
+        await session.record_start()
+
+        assert client.put_calls == [(RECORD_PROPERTY, {"recording": True})]
+        assert RECORD_PROPERTY in client.calls
+
+    @pytest.mark.asyncio
+    async def test_raises_verification_error_when_neither_channel_confirms(self):
+        client = _storage_client(
+            active=True,
+            remaining_record_time=100,
+            extra_responses={RECORD_PROPERTY: {"recording": False}},
+        )
+        session = make_session(make_profile_with_record_confirmed(), client=client)
+        session.verify_timeout_s = 0.05
+
+        with pytest.raises(BMDVerificationError, match="record_start"):
+            await session.record_start()
+
+
+class TestRecordStop:
+    @pytest.mark.asyncio
+    async def test_noop_when_already_confirmed_stopped(self):
+        session = make_session(make_profile(), client=FakeRestClient({}))
+        session.is_recording = False
+
+        await session.record_stop()  # must not raise despite no rest/ profile at all
+
+    @pytest.mark.asyncio
+    async def test_confirmed_by_ws_event_primary(self):
+        client = FakeRestClient({})
+        session = make_session(make_profile_with_record_confirmed(), client=client)
+
+        async def deliver_event():
+            await asyncio.sleep(0.01)
+            session._router.handle_event(
+                {
+                    "type": "event",
+                    "data": {
+                        "action": "propertyValueChanged",
+                        "property": RECORD_PROPERTY,
+                        "value": {"recording": False},
+                    },
+                }
+            )
+
+        asyncio.create_task(deliver_event())
+        await session.record_stop()
+
+        assert client.put_calls == [(RECORD_PROPERTY, {"recording": False})]
+        assert session.is_recording is False
 
 
 class TestWaitWhileRecording:
