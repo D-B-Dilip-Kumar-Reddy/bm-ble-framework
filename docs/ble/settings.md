@@ -2052,10 +2052,21 @@ what REST can now do.
 
 The same run's very next step (switching to `BRAW/4K DCI` immediately after) failed with a
 real `400` from the camera — a genuine `set_camera_format` defect (`sensorResolution`
-carried over stale from the ProRes write rather than derived per-codec), now fixed. See
-`docs/rest/session.md`'s "Write verbs" section for the full write-up. The ProRes/4K DCI
-result above is unaffected by that defect or its fix — it was the first, and successful,
-step in the run.
+carried over stale from the ProRes write rather than derived per-codec), now fixed and
+re-confirmed on both cameras (`docs/rest/session.md`'s "Write verbs" section has the full
+write-up). The ProRes/4K DCI result above is unaffected by that defect or its fix — it was
+the first, and successful, step in the run.
+
+### 16.3 A systematic REST re-test tool now exists (2026-08-03, unrun)
+
+`tools/rest/sweep_camera_format.py` (docs/rest/session.md, docs/rest/transport.md) can
+re-test every `known_unreachable`/`max_fps_int` entry across a whole profile over REST in
+one sweep, not just the ProRes/4K DCI combination §16.2 tested by hand — deliberately,
+since REST's live capability check makes the BLE-specific exclusions
+`tools/control/sweep_camera_format.py` applies unnecessary there. No run has been
+reported yet. Same caveat as §16.2: a confirmed REST write for a `known_unreachable`
+combination is evidence about the camera, never a reason to remove the BLE entry itself —
+each `known_unreachable` note describes only this codebase's BLE write path.
 
 ---
 
