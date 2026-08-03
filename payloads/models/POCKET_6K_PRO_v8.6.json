@@ -156,57 +156,90 @@
     "HD": {
       "width": 1920,
       "height": 1080,
-      "codecs": ["ProRes"],
-      "dimension_enums": { "ProRes": 3 }
+      "codecs": [
+        "ProRes"
+      ],
+      "dimension_enums": {
+        "ProRes": 3
+      }
     },
     "UHD": {
       "width": 3840,
       "height": 2160,
-      "codecs": ["ProRes"],
-      "dimension_enums": { "ProRes": 6 }
+      "codecs": [
+        "ProRes"
+      ],
+      "dimension_enums": {
+        "ProRes": 6
+      }
     },
     "4K DCI": {
       "width": 4096,
       "height": 2160,
-      "codecs": ["BRAW", "ProRes"],
-      "dimension_enums": { "BRAW": 8 },
+      "codecs": [
+        "BRAW",
+        "ProRes"
+      ],
+      "dimension_enums": {
+        "BRAW": 8
+      },
       "known_unreachable": {
-        "ProRes": "Accepted capability gap, 2026-07-24 (see docs/settings.md §16 for the full evidentiary write-up). Every write-value hypothesis was tried at its confirmed-correct value — resolution, fps (including the exact fps_int=24 the camera itself reports at this state, not the fps=25 every earlier attempt used), codec variant (including the exact HQ variant the camera itself reports, not the 422/PXY every earlier attempt used, with the precondition confirmed by genuine wire echo immediately beforehand), data_type byte, and Operation (ASSIGN and OFFSET, both absolute and delta payloads) — and none of it produces a recording_format echo or an on-screen change. The camera demonstrably holds and reports ProRes/4K DCI when reached through its own body menu (see the CONFIRMATION note below), so this is a software capability gap in this codebase's BLE write path, not a camera-side refusal — never remove 'ProRes' from the codecs list above on the strength of this note. CameraSession.set_camera_format raises BMDUnsupportedError immediately for this (codec, resolution) pair rather than attempting a write known to fail."
+        "ProRes": "Accepted capability gap, 2026-07-24 (see docs/settings.md §16 for the full evidentiary write-up). Every write-value hypothesis was tried at its confirmed-correct value — resolution, fps (including the exact fps_int=24 the camera itself reports at this state, not the fps=25 every earlier attempt used), codec variant (including the exact HQ variant the camera itself reports, not the 422/PXY every earlier attempt used, with the precondition confirmed by genuine wire echo immediately beforehand), data_type byte, and Operation (ASSIGN and OFFSET, both absolute and delta payloads) — and none of it produces a recording_format echo or an on-screen change. The camera demonstrably holds and reports ProRes/4K DCI when reached through its own body menu (see the CONFIRMATION note below), so this is a software capability gap in this codebase's BLE write path, not a camera-side refusal — never remove 'ProRes' from the codecs list above on the strength of this note. CameraSession.set_camera_format raises BMDUnsupportedError immediately for this (codec, resolution) pair rather than attempting a write known to fail. THIRD INDEPENDENT CONFIRMATION, 2026-08-03 (docs/settings.md §16.1, docs/rest/transport.md): unlike the G2 v8.6 profile's equivalent entry, this one never rested on write-side evidence alone — the passive body-menu capture above already proved the camera holds this combination. The first REST sweep of this camera adds a third channel to the same conclusion: GET /system/supportedFormats lists ProRes at recordResolution 4096x2160. Nothing about the guard changes — known_unreachable and the BLE write-path failure it records are unaffected; REST evidence says nothing about the BLE write path either way."
       },
       "_comment": "Camera offers 4K DCI under both codecs (operator-confirmed), but the only known dimension_enum (8) reaches BRAW's 4K DCI only — same unresolved gap as POCKET_6K_G2_v7.9's 4K DCI/ProRes (docs/settings.md §7-§9), independently observed here, not assumed from the G2. Unlike the G2, the two-step proxy workaround (video_format to UHD, then recording_format to nudge to 4K DCI) does NOT close this gap on the PRO: two real-hardware examples/change_codec.py round trips (2026-07-22, docs/settings.md §16) confirmed video_format+codec_quality land ProRes/422/UHD cleanly, then recording_format's write to 4K DCI gets no echo at all within 6.0s. See commands.recording_format's provenance for the full evidence. ProRes/4K DCI is currently unreachable on this camera via CameraSession — but IS reachable on the camera itself: a passive capture of the body's own menu switching into it (docs/settings.md §16 addendum) confirms the firmware genuinely holds and reports this state, so the gap is in this codebase's write path, not a camera-side refusal. An exhaustive tools/control/sweep_dimension_enum.py run across every dimension_enum in 0x00-0x1F not already known (2026-07-22 and 2026-07-23, docs/settings.md §16) found no ProRes dimension_enum for this resolution anywhere in that 32-value range — same negative result as the G2's own exhausted 0x01-0x16 search. See commands.video_format's provenance for the sweep's full results. ACCEPTED, 2026-07-24: every write-value hypothesis (resolution, fps, codec variant, data_type, operation) has now been tried at its confirmed-correct value with no success — see the known_unreachable.ProRes note above for the final evidentiary summary and docs/settings.md §16 for the full write-up. This is now a documented, guarded software limitation rather than an open investigation."
     },
     "2.8K 17:9": {
       "width": 2880,
       "height": 1512,
-      "codecs": ["BRAW"],
-      "dimension_enums": { "BRAW": 13 }
+      "codecs": [
+        "BRAW"
+      ],
+      "dimension_enums": {
+        "BRAW": 13
+      }
     },
     "3.7K Anamorphic": {
       "width": 3728,
       "height": 3104,
-      "codecs": ["BRAW"],
-      "dimension_enums": { "BRAW": 15 },
+      "codecs": [
+        "BRAW"
+      ],
+      "dimension_enums": {
+        "BRAW": 15
+      },
       "_comment": "Operator-verified (2026-07-21), same dimension_enum (0x0F) as POCKET_6K_G2_v7.9's '3.7K Anamorphic' — independently confirmed on this camera, not copied."
     },
     "5.7K 17:9": {
       "width": 5744,
       "height": 3024,
-      "codecs": ["BRAW"],
-      "dimension_enums": { "BRAW": 18 }
+      "codecs": [
+        "BRAW"
+      ],
+      "dimension_enums": {
+        "BRAW": 18
+      }
     },
     "6K": {
       "width": 6144,
       "height": 3456,
-      "codecs": ["BRAW"],
-      "dimension_enums": { "BRAW": 19 },
+      "codecs": [
+        "BRAW"
+      ],
+      "dimension_enums": {
+        "BRAW": 19
+      },
       "max_fps_int": 50,
-      "_comment": "dimension_enum 19 (0x13) cleanly reproduced this resolution at the requested 50fps. Enum 2 (0x02) also produced the same pixel dimensions once, but clamped fps to 30 and did not reproduce on a later attempt (no confirming echo that time) — left unresolved rather than recorded as a second candidate, since the schema holds only one enum per resolution/codec pair. frame_flags reported as 0x00 here vs 0x10 for every other resolution — matches the G2's 'windowed bit' hypothesis (0x00 = full sensor, 0x10 = windowed/cropped), consistent with a full-sensor readout mode plausibly explaining the lower fps ceiling. CONFIRMED, 2026-07-24 (see docs/settings.md): tools/control/sweep_camera_format.py's first full production run found all 8 BRAW variants unconfirmed at 59.94/60fps here (16/16), every other fps (23.98-50) confirming cleanly for all 8 -- a systematic, codec-variant-independent pattern, the signature of a real ceiling rather than a write bug. Operator confirmed the camera's own UI does not offer 59.94/60fps as options at 6K either -- a genuine hardware/sensor-readout limit, not a software write-path gap (contrast resolutions.\"4K DCI\".known_unreachable.ProRes, which the camera CAN reach). max_fps_int=50 now guards this in CameraSession.set_video_format/set_recording_format and is excluded by default from sweep_camera_format.py's combination space."
+      "_comment": "dimension_enum 19 (0x13) cleanly reproduced this resolution at the requested 50fps. Enum 2 (0x02) also produced the same pixel dimensions once, but clamped fps to 30 and did not reproduce on a later attempt (no confirming echo that time) — left unresolved rather than recorded as a second candidate, since the schema holds only one enum per resolution/codec pair. frame_flags reported as 0x00 here vs 0x10 for every other resolution — matches the G2's 'windowed bit' hypothesis (0x00 = full sensor, 0x10 = windowed/cropped), consistent with a full-sensor readout mode plausibly explaining the lower fps ceiling. CONFIRMED, 2026-07-24 (see docs/settings.md): tools/control/sweep_camera_format.py's first full production run found all 8 BRAW variants unconfirmed at 59.94/60fps here (16/16), every other fps (23.98-50) confirming cleanly for all 8 -- a systematic, codec-variant-independent pattern, the signature of a real ceiling rather than a write bug. Operator confirmed the camera's own UI does not offer 59.94/60fps as options at 6K either -- a genuine hardware/sensor-readout limit, not a software write-path gap (contrast resolutions.\"4K DCI\".known_unreachable.ProRes, which the camera CAN reach). max_fps_int=50 now guards this in CameraSession.set_video_format/set_recording_format and is excluded by default from sweep_camera_format.py's combination space. THIRD INDEPENDENT CONFIRMATION, 2026-08-03 (docs/settings.md §17.1, docs/rest/transport.md): GET /system/supportedFormats offers 6144x3456 only up to '50', while 6144x2560 (6K 2.4:1) offers '59.94' and '60' — the identical resolution-specific, variant-independent ceiling the BLE sweep and the operator's own UI check already established, now from a transport this profile's BLE work never had."
     },
     "6K 2.4:1": {
       "width": 6144,
       "height": 2560,
-      "codecs": ["BRAW"],
-      "dimension_enums": { "BRAW": 20 }
+      "codecs": [
+        "BRAW"
+      ],
+      "dimension_enums": {
+        "BRAW": 20
+      }
     }
   },
   "fps_modes": {

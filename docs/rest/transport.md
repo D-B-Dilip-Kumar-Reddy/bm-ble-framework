@@ -1,11 +1,13 @@
 # REST / WebSocket Transport
 
-**Status:** Phase 0 — three sweep runs on `POCKET_6K_G2 v8.6` over USB (2026-08-03).
-Reads: 53 endpoints working, 5 not implemented, 2 `5xx` (every subdirectory under a
-mount root, not Stills specifically). Writes: **`--probe-writes` confirms `PUT
-/system/format` returns `204`** — the gate question that decides whether settings can
-move to REST at all — plus 29 other endpoints, same-value only. Full results under
-"Sweep results". No REST client, session, or profile exists yet; that is Phase 2.
+**Status:** Phase 0 — swept on both `POCKET_6K_G2 v8.6` and `POCKET_6K_PRO v8.6`, over
+USB, 2026-08-03. `PUT /system/format` returns `204` on both — the gate question
+deciding whether settings can move to REST at all — plus roughly 30 other endpoints
+each, same-value only. The two cameras agree almost everywhere (addressing, scheme,
+the mounts `5xx` defect, the `supportedFormats` capability matrix) and differ exactly
+where their hardware differs (the PRO has a built-in ND filter the G2 lacks). Full
+results under "Sweep results". No REST client, session, or profile exists yet; that is
+Phase 2.
 
 ## Overview
 
@@ -544,6 +546,10 @@ the abstract.
 
 ### Gate table status
 
+Answered from the `POCKET_6K_G2 v8.6` sweep. The `POCKET_6K_PRO v8.6` sweep below
+reconfirmed every one of these identically except where the cameras' hardware genuinely
+differs (the ND filter) — see that section rather than a second copy of this table.
+
 | Question | Answer |
 |---|---|
 | `GET /system/supportedFormats` works? | **Yes** — full capability matrix, above |
@@ -596,11 +602,57 @@ read-confirmed.
 No camera setting changed as a result of this run — every write sent back exactly the
 value just read.
 
-### `POCKET_6K_PRO v8.6`
+### `POCKET_6K_PRO v8.6`, over USB, plaintext HTTP — 2026-08-03
 
-Not swept. Nothing above transfers.
+Swept with the same tool, same transport, same `--scheme http` default — deliberately not
+assumed to transfer from the G2 (design principle 6), and it did not transfer identically.
+`pocket-cinema-camera-6k-pro.local` resolved and answered on port 80 exactly like the G2,
+confirming the addressing story is not a G2 quirk.
 
----
+**Read sweep:** 54 working, 4 `501`, 2 `5xx`, 16 `404` — one fewer `501` than the G2.
+**Write probe:** all 32 write-probeable endpoints returned `204` — better than the G2's
+30/32, and both G2 gaps are explained rather than reproduced:
+
+| Endpoint | G2 v8.6 | PRO v8.6 | Why |
+|---|---|---|---|
+| `/video/ndFilter` | `501` | **`200`**, `{"stop": 0.0}` | The 6K Pro has a **built-in ND filter**; the G2 does not. A genuine hardware capability difference, correctly surfaced by the sweep — not a bug on either camera |
+| `/video/ndFilter/displayMode` | `200`/`204`, no body, write skipped | **`200`**, `{"displayMode": "Number"}`, write **succeeded** | Only echoable when the parent feature exists |
+| `/lens/focus` write | skipped, then fixed (previous commit) | **`204`** first time | Confirms the `pick_first("normalised", "focus")` fix generalises — the real field name is `normalised` on this camera too, not a G2 coincidence |
+
+Everything else matches the G2 run: the same `/system/*` `501`s, the same mounts
+`5xx` pattern (root and `A001-sd1/` list cleanly; `Stills/` and `System Volume
+Information/` both `500`) — reproduced on **different hardware**, which is stronger
+evidence that this is a shared 8.6 Web Media Manager defect than a second run on the
+same camera could be. The same three `501` endpoints reject the WS subscription
+(`48/51`, not `46/49`, purely because of the two extra ND-filter properties).
+
+**`/system/supportedFormats` is structurally identical to the G2's** — the same twelve
+`(codec, resolution)` combinations, the same frame-rate ceilings, including `6K` capped
+at `50` while `6K 2.4:1` reaches `60`. Independently confirmed on this camera's own
+connection, not copied from the G2 run — and itself informative: it suggests the 6K G2
+and 6K Pro share the same sensor and recording pipeline, differing in body features
+(ND filter, physical controls) rather than recording capability. Two BLE findings
+originally established *on this camera* (`docs/settings.md` §16, §17.1) now have a third
+independent confirmation from a channel the original BLE work never had — see the
+addenda in those sections and in `payloads/models/POCKET_6K_PRO_v8.6.json`.
+
+**Timecode decode reconfirmed on a second camera model.** `289886744` → `11:47:52:18`
+and `289886977` → `11:47:53:01`, both matching the sweep's wall-clock time — the fourth
+and fifth confirmations of BCD big-endian `HH:MM:SS:FF`, and the first on hardware other
+than the G2.
+
+**The clip data is byte-identical to the G2's run** — same filename
+(`A001_07311253_C001.mov`), same size (`49058872`), same timestamps, same
+`remainingSpace`/`totalSpace` (`1023925420032` / `1024060293120`). This is not a
+coincidence worth trusting as independent evidence about either camera: it strongly
+suggests the **same physical SD card** was moved between the two camera bodies for this
+test. One number does differ meaningfully — `remainingRecordTime` is `52233` on the G2
+(active format ProRes/4096×2160/24fps) versus `212102` on the PRO (ProRes/1920×1080/
+23.98fps) — consistent with the same free space yielding a longer estimate at a lower
+resolution, which is itself a small sanity check that `remainingRecordTime` really is
+derived from the active format rather than being a static card property.
+
+No tool bugs found in this run. No camera setting changed.
 
 ## What has no REST equivalent
 

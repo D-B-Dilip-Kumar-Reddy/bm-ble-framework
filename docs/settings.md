@@ -2013,6 +2013,22 @@ a systematic tool that runs `CameraSession.set_camera_format()` across every
 combination a profile claims to support and reports which ones actually
 confirm.
 
+### 16.1 A third, independent channel corroborates this over REST (2026-08-03)
+
+Not a BLE finding, and it changes nothing above — recorded here because it is further
+evidence for the same conclusion, from a channel this section never had. Full write-up:
+`docs/rest/transport.md`.
+
+Unlike the G2 v8.6 profile's equivalent gap (`docs/settings.md` §18.14), this section's
+`known_unreachable` entry was **never resting on write-side evidence alone** — the
+addendum earlier in this section already has a passive body-menu capture proving the
+camera reaches and reports ProRes/4K DCI. The first REST sweep of `POCKET_6K_PRO v8.6`
+adds a third channel to that same conclusion: `GET /system/supportedFormats` lists
+ProRes at `recordResolution` 4096×2160, independently confirming what BLE passive
+capture and now REST both agree the camera does. The `known_unreachable` entry and the
+`BMDUnsupportedError` guard it drives are unchanged — both still describe the BLE write
+path specifically, which this REST evidence says nothing about either way.
+
 ---
 
 ## 17. `POCKET_6K_PRO v8.6` — `sweep_camera_format.py`'s first production run (2026-07-24)
@@ -2069,6 +2085,14 @@ resolution, hypothesized then as "full sensor readout" versus "windowed/
 cropped" — a full-sensor readout mode is exactly the kind of thing that
 would plausibly cap the achievable frame rate lower than a windowed/cropped
 one. Not proven by this finding alone, but consistent with it.
+
+**Third independent confirmation, over REST (2026-08-03):** `GET /system/supportedFormats`
+on `POCKET_6K_PRO v8.6` offers `6144×3456` (6K) frame rates only up to `50`, while
+`6144×2560` (6K 2.4:1) offers `59.94` and `60` — the identical resolution-specific,
+variant-independent pattern this section's 16/16 sweep failure and the operator's own UI
+check already established. Two channels agreeing was already past design principle 7's
+bar; this is a third, from a transport this section never had access to. See
+`docs/rest/transport.md`.
 
 ### 17.2 — A false negative in the sweep tool's own default timeout, not a camera fact
 
