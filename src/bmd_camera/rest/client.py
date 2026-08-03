@@ -140,7 +140,9 @@ class RestClient:
             raise BMDUnsupportedError(f"[{self.host}] {method} {path} — not implemented (501)")
         if 200 <= status < 300:
             return body
-        raise BMDRestError(f"[{self.host}] {method} {path} -> {status}: {body!r}")
+        raise BMDRestError(
+            f"[{self.host}] {method} {path} -> {status}: {body!r}", status=status, body=body
+        )
 
     @staticmethod
     async def _read_body(resp: Any) -> Any:

@@ -77,6 +77,23 @@ name might suggest — an assumption this repo already got wrong once
 (docs/rest/transport.md). No stills appear here and there is no file-size field, so the
 photo-capture confirmation design (Phase 6) cannot lean on this endpoint alone.
 
+**Real-hardware-confirmed, `POCKET_6K_G2 v8.6`, 2026-08-03**: with no SD card inserted,
+`GET /clips/list` returns `404 {"error": "No disk or media"}` rather than an empty
+`clipList` — a real, informative error, not a broken endpoint. `clips()` catches this
+specific case (`BMDRestError.status == 404`, checked structurally via the attribute
+`RestClient` now attaches to the exception, never by string-matching the message) and
+re-raises `BMDStorageError` instead — exactly what that exception exists to name (design
+principle 10), rather than a misleading empty tuple or a generic `BMDRestError` the
+caller has to decode by hand. Any other `BMDRestError` (a real `5xx` firmware defect,
+say) propagates unchanged — only a confirmed-404-means-no-media translation is made, not
+a blanket "swallow every REST error" policy. `examples/rest_read_state.py` demonstrates
+the intended catch.
+
+This is the first place a REST read verb needed storage awareness at all; `storage_state()`
+itself never raises on a missing card — `/media/workingset` and `/media/active` keep
+returning valid (if all-empty) data (confirmed the same run), which is exactly why
+`storage_state()`'s `active_device` is designed to come back `None` rather than error.
+
 ### `timecode()` → `Timecode`
 
 `GET /transports/0/timecode`, decoded via `rest/timecode.py`'s `decode_rest_timecode` —

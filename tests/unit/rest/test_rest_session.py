@@ -17,8 +17,9 @@ import aiohttp
 import pytest
 
 from bmd_camera.camera_profile import CameraProfile
-from bmd_camera.exceptions import BMDConnectionError, BMDUnsupportedError
+from bmd_camera.exceptions import BMDConnectionError, BMDStorageError, BMDUnsupportedError
 from bmd_camera.rest.events import RestEventRouter
+from bmd_camera.rest.exceptions import BMDRestError
 from bmd_camera.rest.session import (
     Clip,
     Format,
@@ -40,14 +41,19 @@ def make_profile(*, rest_raw: dict | None = None) -> CameraProfile:
 
 
 class FakeRestClient:
-    """Minimal stand-in for RestClient: `.get(path)` returns a canned body."""
+    """Minimal stand-in for RestClient: `.get(path)` returns a canned body,
+    or raises a canned exception (for `errors`) — e.g. simulating a real
+    404 without a real network."""
 
-    def __init__(self, responses: dict[str, object]):
+    def __init__(self, responses: dict[str, object], *, errors: dict[str, Exception] | None = None):
         self.responses = responses
+        self.errors = errors or {}
         self.calls: list[str] = []
 
     async def get(self, path: str):
         self.calls.append(path)
+        if path in self.errors:
+            raise self.errors[path]
         return self.responses[path]
 
 
@@ -278,6 +284,36 @@ class TestClips:
         session = make_session(make_profile(), client=client)
 
         assert await session.clips() == ()
+
+    @pytest.mark.asyncio
+    async def test_no_media_404_raises_bmd_storage_error(self):
+        """Real-hardware-confirmed (POCKET_6K_G2 v8.6, 2026-08-03): with no
+        SD card inserted, /clips/list returns 404 {"error": "No disk or
+        media"} rather than an empty clipList. Must surface as
+        BMDStorageError — design principle 10's "no storage media" case —
+        not a misleading empty tuple or a generic BMDRestError."""
+        error = BMDRestError(
+            "[cam.local] GET /clips/list -> 404: {'error': 'No disk or media'}",
+            status=404,
+            body={"error": "No disk or media"},
+        )
+        client = FakeRestClient({}, errors={"/clips/list": error})
+        session = make_session(make_profile(), client=client)
+
+        with pytest.raises(BMDStorageError, match="No storage media"):
+            await session.clips()
+
+    @pytest.mark.asyncio
+    async def test_non_404_rest_error_propagates_unchanged(self):
+        """Only a 404 is interpreted as "no media" — any other BMDRestError
+        (e.g. a real 500 firmware defect) must not be silently reclassified
+        as a storage condition."""
+        error = BMDRestError("[cam.local] GET /clips/list -> 500: {}", status=500, body={})
+        client = FakeRestClient({}, errors={"/clips/list": error})
+        session = make_session(make_profile(), client=client)
+
+        with pytest.raises(BMDRestError, match="500"):
+            await session.clips()
 
 
 class TestTimecode:

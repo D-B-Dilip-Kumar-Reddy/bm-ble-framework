@@ -19,7 +19,7 @@ import asyncio
 import logging
 
 from bmd_camera import RestCameraSession
-from bmd_camera.exceptions import BMDUnsupportedError
+from bmd_camera.exceptions import BMDStorageError, BMDUnsupportedError
 
 HOST = "pocket-cinema-camera-6k-pro.local"
 MODEL_KEY = "POCKET_6K_PRO"
@@ -50,8 +50,14 @@ async def main() -> None:
         else:
             print("Active storage: none reporting active")
 
-        clips = await session.clips()
-        print(f"Clips: {len(clips)}")
+        try:
+            clips = await session.clips()
+            print(f"Clips: {len(clips)}")
+        except BMDStorageError as exc:
+            # Real-hardware-confirmed: /clips/list 404s with no SD card
+            # inserted rather than returning an empty list. See
+            # docs/rest/session.md's "clips()" section.
+            print(f"Clips: {exc}")
 
         tc = await session.timecode()
         print(f"Timecode: {tc.hours:02d}:{tc.minutes:02d}:{tc.seconds:02d}:{tc.frames:02d}")

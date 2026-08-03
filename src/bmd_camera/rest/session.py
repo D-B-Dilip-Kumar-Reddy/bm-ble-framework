@@ -38,10 +38,11 @@ except ImportError:  # pragma: no cover - exercised only without the dependency
     aiohttp = None  # type: ignore[assignment]
 
 from ..camera_profile import CameraProfile
-from ..exceptions import BMDConnectionError, BMDUnsupportedError
+from ..exceptions import BMDConnectionError, BMDStorageError, BMDUnsupportedError
 from .client import RestClient, require_aiohttp
 from .constants import WS_PATH
 from .events import RestEventRouter
+from .exceptions import BMDRestError
 from .timecode import Timecode, decode_rest_timecode
 
 logger = logging.getLogger(__name__)
@@ -335,7 +336,27 @@ class RestCameraSession:
         return _parse_storage_state(workingset, active)
 
     async def clips(self) -> tuple[Clip, ...]:
-        body = await self._rest_client.get("/clips/list")
+        """`GET /clips/list`.
+
+        Real-hardware-confirmed (`POCKET_6K_G2 v8.6`, 2026-08-03): with no
+        SD card inserted, this endpoint returns `404 {"error": "No disk or
+        media"}` rather than an empty `clipList` — a real, informative
+        error, not evidence the endpoint is broken. Design principle 9's
+        "reads are best-effort, return None" is for auxiliary metadata
+        reads; "no storage media" is exactly what `BMDStorageError` exists
+        to name (design principle 10), so it is re-raised as that rather
+        than swallowed into a misleading empty tuple or left as a generic
+        `BMDRestError` the caller has to decode by hand.
+        """
+        try:
+            body = await self._rest_client.get("/clips/list")
+        except BMDRestError as exc:
+            if exc.status == 404:
+                raise BMDStorageError(
+                    f"[{self.host}] No storage media in {self.profile.model_key} — "
+                    f"cannot list clips (GET /clips/list -> 404 {exc.body!r})"
+                ) from exc
+            raise
         return tuple(_parse_clip(entry) for entry in body.get("clipList", ()))
 
     async def timecode(self) -> Timecode:

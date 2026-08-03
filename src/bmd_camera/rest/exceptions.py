@@ -9,6 +9,8 @@ their names are BLE-specific) and adds the one REST-only type.
 
 from __future__ import annotations
 
+from typing import Any
+
 from ..exceptions import (
     BMDConnectionError,
     BMDStorageError,
@@ -35,4 +37,17 @@ class BMDRestError(Exception):
     camera is correctly declining an operation it doesn't support, not
     failing). See RestClient's status-handling contract in
     docs/rest/transport.md.
+
+    Carries the raw `status` and parsed `body` as attributes (not just
+    embedded in the message string) so a caller with enough camera-semantic
+    context can interpret a specific response meaningfully — e.g.
+    `RestCameraSession.clips()` re-raising as `BMDStorageError` when
+    `/clips/list` 404s with `{"error": "No disk or media"}` (real-hardware-
+    confirmed, `POCKET_6K_G2 v8.6`, 2026-08-03) — without string-matching
+    the message.
     """
+
+    def __init__(self, message: str, *, status: int | None = None, body: Any = None) -> None:
+        super().__init__(message)
+        self.status = status
+        self.body = body

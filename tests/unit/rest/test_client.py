@@ -122,6 +122,22 @@ class TestStatusHandling:
             await client.get("/audio/channel/2/input")
 
     @pytest.mark.asyncio
+    async def test_404_error_carries_structured_status_and_body(self):
+        """BMDRestError.status/.body let a caller with camera-semantic
+        context (e.g. RestCameraSession.clips()) interpret a specific
+        response meaningfully without string-matching the message —
+        see tests/unit/rest/test_rest_session.py's clips()-with-no-media
+        translation to BMDStorageError."""
+        session = FakeSession(FakeResponse(404, json_body={"error": "No disk or media"}))
+        client = RestClient("cam.local", session=session)
+
+        with pytest.raises(BMDRestError) as exc_info:
+            await client.get("/clips/list")
+
+        assert exc_info.value.status == 404
+        assert exc_info.value.body == {"error": "No disk or media"}
+
+    @pytest.mark.asyncio
     async def test_500_raises_bmd_rest_error_not_unsupported(self):
         """A 500 is a firmware defect (docs/rest/transport.md's mounts bug),
         distinct from a 501's "correctly declining" — must not be conflated
