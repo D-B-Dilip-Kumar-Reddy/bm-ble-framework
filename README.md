@@ -45,9 +45,16 @@ the documentation map below.
 ```bash
 git clone https://github.com/D-B-Dilip-Kumar-Reddy/bmd-camera-control.git
 cd bmd-camera-control
-pip install -r requirements.txt        # runtime
+pip install -e .                       # runtime, editable — makes `bmd_camera` importable
 pip install -r requirements-dev.txt    # development (tests, lint)
 ```
+
+`bmd_camera` lives under `src/`, which is not on Python's import path by default —
+`pip install -e .` is what makes `python examples/scan_camera.py` or
+`python tools/rest/watch_events.py` work from a fresh clone without also setting
+`PYTHONPATH`. (Tests don't need this step: `pytest.ini` sets `pythonpath = src` for
+`pytest` itself.) `pip install -r requirements.txt` still works as a dependencies-only
+install if you don't want the editable package.
 
 ## Quick start
 
