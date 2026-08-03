@@ -201,8 +201,8 @@ def normalise_base_url(host: str, scheme: str = DEFAULT_SCHEME) -> str:
     """`host` as a scheme-qualified base URL with no trailing slash.
 
     A `--host` that already carries a scheme wins over `--scheme`, so
-    `--host http://10.0.0.3` reaches the plaintext listener even though this
-    tool defaults to HTTPS.
+    `--host https://cam.local` pins TLS even though this tool defaults to
+    plaintext.
     """
     host = host.strip().rstrip("/")
     if host.startswith(("http://", "https://")):
@@ -1077,7 +1077,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--host",
         help=(
-            "Camera hostname or IP, e.g. pocket-cinema-camera-6k-g2.local or 10.0.0.3. "
+            "Camera hostname or IP, e.g. pocket-cinema-camera-6k-g2.local. Prefer the "
+            "mDNS name over an IP, and never the one from Setup -> Network Settings "
+            "(that is the Ethernet port and is refused over USB). "
             "A full URL (https://host) overrides --scheme. Read it off the camera's "
             "Setup -> Network Access / Network Settings screens; omit to print help."
         ),
