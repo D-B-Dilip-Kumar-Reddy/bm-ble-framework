@@ -56,6 +56,10 @@ async def main() -> None:
         tc = await session.timecode()
         print(f"Timecode: {tc.hours:02d}:{tc.minutes:02d}:{tc.seconds:02d}:{tc.frames:02d}")
 
+        # is_recording is notification-driven only (design principle 4) — it can
+        # still be None here if no /transports/0/record event has arrived yet in
+        # the short time since connecting. Confirmed on real hardware, see
+        # docs/rest/session.md's "is_recording" section. Not a bug.
         print(f"Recording: {session.is_recording}")
 
 

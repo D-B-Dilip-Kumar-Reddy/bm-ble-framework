@@ -92,6 +92,21 @@ session lifetime with no extra call needed. `wait_while_recording(timeout)` bloc
 `is_recording` becomes `False`, returning `True` if it was already stopped/unknown or
 stops within the timeout, `False` if it times out while still recording.
 
+**Confirmed against real hardware, 2026-08-03** (`examples/rest_read_state.py`,
+`POCKET_6K_PRO v8.6`): every `GET`-based read verb (`get_format`, `supported_formats`,
+`storage_state`, `clips`, `timecode`) returned correct real data, but `is_recording` was
+still `None` when printed — connect, subscribe, and five `GET`s all completed before any
+`/transports/0/record` event arrived. This is design principle 4 working as intended, not
+a bug: `is_recording` is never inferred or polled, only set from a genuine event, so a
+caller that needs a value *now* rather than eventually should not assume one is available
+immediately after connecting. Whether the camera pushes an initial "current value" event
+for this property at all (some properties, e.g. `/system/format` and `/media/workingset`,
+were observed doing so in the `watch_events.py` run in "Library surface (Phase 2)" above,
+tens of seconds after subscribing) or only pushes on an actual state *change* is not yet
+disambiguated for `/transports/0/record` specifically — a caller wanting a same-camera
+cross-check today should read the transport mode/state directly rather than relying on
+`is_recording` being populated on connect.
+
 ---
 
 ## Codec name mapping (`rest/mapping.py`)
