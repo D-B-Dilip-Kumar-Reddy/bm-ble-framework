@@ -31,6 +31,27 @@ session itself made — design principle 4).
 
 ---
 
+## Connection lifecycle
+
+`session` may be injected (real or fake) into the constructor for testing, mirroring
+`RestClient`'s own constructor — an injected session is never this session's to close.
+When no `session` is given, `__aenter__` creates its own `aiohttp.ClientSession`, and
+`__aexit__` closes it. This ownership rule holds on *every* exit path, not just the
+success one:
+
+**Real-hardware-confirmed leak, `POCKET_6K_G2 v8.6`, 2026-08-03**: the first version of
+`__aenter__` created the owned `aiohttp.ClientSession` and then called
+`RestEventRouter.connect()`. When that WS connect failed (a `ClientConnectorDNSError` —
+the host didn't resolve), `__aenter__` raised without returning, so Python never called
+`__aexit__` — the session it had already created went unclosed
+(`ERROR - Unclosed client session`, aiohttp's own leak warning). `__aenter__` now tracks
+whether every setup step succeeded and closes an owned session in a `finally` block on
+any failure, without catching/masking the original exception — the same "cleanup on
+failure, propagate the real error" shape as `except Exception: cleanup(); raise` gets you,
+without the broad `except` "What Not To Do" forbids.
+
+---
+
 ## Read verbs
 
 ### `get_format()` → `Format`
