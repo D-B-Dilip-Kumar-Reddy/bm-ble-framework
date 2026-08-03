@@ -827,6 +827,24 @@ leaves untested:
 This is the first real exercise of `arm()`/`wait_for()` against live hardware — the exact
 verification primitive `RestCameraSession` (Phase 3+) will build on.
 
+**Confirmed against real hardware, 2026-08-04** — both modes run against `POCKET_6K_PRO
+v8.6` over USB:
+
+- Read-only: all three checks passed exactly as designed. `GET /system` -> `None`.
+  Auto-picked `GET /audio/channel/0/available` -> `{'available': True}`. Auto-picked
+  `GET /system/codecFormat` -> raised `BMDUnsupportedError`.
+- `--verify-write`: auto-picked `/audio/channel/0/input` (`put_supported` and a confirmed
+  `websocket_properties` member). `PUT {'input': 'Camera - Left'}` (same-value) — the
+  **primary check succeeded**: `wait_for()` returned `{'input': 'Camera - Left'}` within
+  the WS event stream, not a timeout falling back to the secondary. The `GET` readback
+  agreed. This is the first end-to-end proof that the exact dual-check pattern design
+  principle 3 specifies for REST — event primary, readback secondary — actually closes
+  the loop on real hardware, not just against fakes in the test suite.
+
+Between this and `watch_events.py`'s confirmed run above, every piece of Phase 2's
+library surface (`RestClient`'s three status branches, `RestEventRouter`'s event parsing,
+and now `arm()`/`wait_for()` itself) has real-hardware evidence behind it.
+
 ---
 
 ## Security note
