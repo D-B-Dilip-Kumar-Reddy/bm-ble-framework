@@ -138,7 +138,13 @@ async with RestCameraSession("172.27.97.141", "POCKET_6K_PRO", "v8.6") as sessio
 `examples/rest_read_state.py` exercises the read verbs; `examples/rest_record_start_stop.py`
 exercises `record_start`/`record_stop` across several cycles, mirroring the BLE
 `examples/record_start_stop.py`; `examples/rest_change_format.py` exercises
-`set_camera_format`, mirroring `examples/change_codec.py`.
+`set_camera_format`, mirroring `examples/change_codec.py`. `examples/rest_record_test_clip.py`
+composes several of these together end to end — `set_camera_format`, a full-length
+`record_start`/`wait_while_recording`/`record_stop` cycle, and `storage_state`/`clips`
+snapshots taken before and after — to record a real test clip at a chosen combination and
+report the clip it produced (name, length, storage consumed), identified by diffing
+`clips()` before against after since `GET /clips/list` has no "just-written" flag of its
+own. No new library surface; not yet run against real hardware.
 
 Every read verb (`get_format`, `supported_formats`, `storage_state`, `clips`, `timecode`)
 is a plain `GET`, fetched fresh on every call — there is no background cache to go stale.

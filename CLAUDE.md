@@ -353,6 +353,17 @@ examples/
                             # /timelines/0/add fully replaces the timeline even without
                             # DELETE ever running. See docs/rest/session.md's
                             # timeline_clip_ids() and select_clip() sections
+  rest_record_test_clip.py  # Sets a (codec, variant, resolution, fps) combination via
+                            # set_camera_format(), records a real clip of configurable
+                            # length (default 10 minutes), and prints camera
+                            # settings/media state/clip inventory both before and after —
+                            # then identifies the newly-written clip by diffing clips()
+                            # before vs. after (GET /clips/list has no "just-written"
+                            # flag), reporting its name (file_path), length
+                            # (duration_timecode), and memory used (active storage
+                            # device's remaining_space before minus after — Clip carries
+                            # no size field of its own, the same gap Phase 6's
+                            # rest/media.py hit for stills)
   playback.py               # (planned)
 
 tests/
