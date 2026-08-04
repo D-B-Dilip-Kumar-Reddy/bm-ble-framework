@@ -205,16 +205,18 @@ src/bmd_camera/
                               # surfaced something unexpected: after exit_playback(), the
                               # camera's format had reverted to what it was before
                               # select_clip() ran, though nothing explicitly requested that.
-                              # An immediate follow-up narrowed it: select_clip() called
+                              # Two follow-ups narrowed it further: select_clip() called
                               # alone (playback steps skipped entirely) left the camera at
                               # the switched format with no revert, ruling out
-                              # select_clip()/set_camera_format() themselves — whatever
-                              # triggers it requires actually entering/leaving playback
-                              # mode, still not isolated to a single call (stop() is
-                              # currently exit_playback() itself) — see docs/rest/session.md
-                              # for the full trail and exactly which endpoints/field names
-                              # are sweep-confirmed vs. this migration's own plan-derived
-                              # hypotheses
+                              # select_clip()/set_camera_format() themselves; then
+                              # select_clip() + enter_playback() + immediate
+                              # exit_playback() (play/pause/seek/shuttle/stop all skipped)
+                              # reverted anyway, ruling those out too — only
+                              # enter_playback() and exit_playback() remain candidates,
+                              # still not distinguished from each other — see
+                              # docs/rest/session.md for the full trail and exactly which
+                              # endpoints/field names are sweep-confirmed vs. this
+                              # migration's own plan-derived hypotheses
     mapping.py                 # Codec name derivation between the BLE profile's vocabulary
                               # and REST's own spelling — confirmed strings always win
                               # (design principle 1); this is a fallback seed only.
@@ -311,11 +313,13 @@ examples/
                             # own set_camera_format() switch branch and surfaced an
                             # unexpected finding: the camera's format reverted to its
                             # pre-select_clip() value after exit_playback(), unrequested by
-                            # anything in this script. An immediate follow-up ran
-                            # select_clip() alone (playback steps skipped entirely) and saw
-                            # no revert — ruling out select_clip()/set_camera_format()
-                            # themselves, but still not isolating which playback-mode call
-                            # is responsible. Now brackets its run with GET /system/format
+                            # anything in this script. Two follow-ups narrowed it: select_clip()
+                            # alone (playback steps skipped) saw no revert, ruling out
+                            # select_clip()/set_camera_format() themselves; then select_clip() +
+                            # enter_playback() + immediate exit_playback() (play/pause/seek/
+                            # shuttle/stop all skipped) reverted anyway, ruling those out too —
+                            # only enter_playback()/exit_playback() remain candidates, still not
+                            # distinguished from each other. Now brackets its run with GET /system/format
                             # snapshots (before select_clip, after exit_playback) to make
                             # this visible, and gives stop() (currently an alias for
                             # exit_playback()) a longer dedicated pause so an operator can

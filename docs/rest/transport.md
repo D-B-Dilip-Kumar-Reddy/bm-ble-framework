@@ -800,6 +800,19 @@ those two still can't be told apart). Next narrowing test:
 play/pause/seek/shuttle steps, to check whether the bare `Output`/`InputPreview` round
 trip alone reproduces it.
 
+**Ninth real-hardware evidence, `POCKET_6K_G2 v8.6`, 2026-08-04, the next run — the
+eighth finding's own narrowing test:** `select_clip()` + `enter_playback()` + immediate
+`exit_playback()`, with `play()`/`pause()`/`seek()`/`shuttle()`/`stop()` all skipped,
+reverted anyway — a fresh switch from `ProRes:HQ @ 4096x2160p25` to the requested clip's
+`BRaw:5_1 @ 6144x3456p25`, then back to `ProRes:HQ @ 4096x2160p25` right after
+`exit_playback()`. This rules out `play()`/`pause()`/`seek()`/`shuttle()`/`stop()` as
+necessary triggers — the bare `Output`/`InputPreview` round trip alone reproduces it. Only
+`enter_playback()` and `exit_playback()` remain candidates, still not distinguished from
+each other since both ran in every reverting test so far. Final narrowing test:
+`select_clip()` + `enter_playback()` alone, checking the format *before* calling
+`exit_playback()` at all — pins the trigger on whichever side of that boundary the format
+is still switched vs. already reverted.
+
 ---
 
 ## Library surface (Phase 2)

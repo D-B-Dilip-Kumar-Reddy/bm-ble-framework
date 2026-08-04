@@ -745,21 +745,28 @@ by the time `exit_playback()` completed, the "after" snapshot reported `BRaw:8_1
 4096x2160p29.97` again — the exact format the camera started in — even though nothing in
 the script, or in `RestCameraSession`, ever requested that switch back.
 
-**Immediate follow-up, same day — the narrowing test paid off.** `select_clip()` called
+**Follow-up #1, same day — the first narrowing test paid off.** `select_clip()` called
 *alone*, with `enter_playback()`/`play()`/`pause()`/`seek()`/`shuttle()`/`stop()`/
 `exit_playback()` all skipped entirely, left the camera at `BRaw:5_1 @ 6144x3456p25` — the
 switched format — with no revert. This rules out `select_clip()`/`set_camera_format()`
 themselves as the cause: whatever triggers the revert requires actually entering or
-leaving playback mode, not merely switching format. Still not isolated further —
-`enter_playback()`, `play()`, `pause()`, `seek()`, `shuttle()`, `stop()`, and
-`exit_playback()` all remain candidates within that sequence (`stop()` *is*
-`exit_playback()` right now, see "`play()` / `pause()` / `stop()`" below, so the two still
-can't be distinguished from each other). **Not relied on anywhere in this session** — a
+leaving playback mode, not merely switching format.
+
+**Follow-up #2, same day, right after — the second narrowing test paid off too.**
+`select_clip()` + `enter_playback()` + immediate `exit_playback()`, with
+`play()`/`pause()`/`seek()`/`shuttle()`/`stop()` all skipped, reverted anyway: a fresh
+switch from `ProRes:HQ @ 4096x2160p25` to the requested clip's `BRaw:5_1 @ 6144x3456p25`,
+then back to `ProRes:HQ @ 4096x2160p25` right after `exit_playback()`. This rules out
+`play()`/`pause()`/`seek()`/`shuttle()`/`stop()` as necessary triggers — the bare
+`Output`/`InputPreview` round trip alone reproduces it. Only `enter_playback()` and
+`exit_playback()` remain candidates, and they still aren't distinguished from each other
+(both ran in every reverting test so far). **Not relied on anywhere in this session** — a
 caller that needs a particular format after playback should call `set_camera_format()`
-explicitly rather than assume the camera restores it. Next narrowing test:
-`select_clip()` + `enter_playback()` + immediate `exit_playback()`, skipping
-`play()`/`pause()`/`seek()`/`shuttle()` entirely, to check whether just the
-`Output`/`InputPreview` round trip alone reproduces it.
+explicitly rather than assume the camera restores it. Final narrowing test:
+`select_clip()` + `enter_playback()` alone, checking the format *before* calling
+`exit_playback()` at all — if it's already reverted right after `enter_playback()`,
+entering `Output` mode is the trigger; if it's still the switched format at that point and
+only reverts once `exit_playback()` runs, the trigger is leaving playback specifically.
 
 ### `play()` / `pause()` / `stop()`
 
