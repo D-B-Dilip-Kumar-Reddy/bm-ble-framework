@@ -588,6 +588,18 @@ entire sequence — `select_clip()` through `exit_playback()` — is now real-ha
 confirmed end to end on both `POCKET_6K_G2` and `POCKET_6K_PRO v8.6` (2026-08-04,
 `examples/rest_playback.py`).
 
+### `timeline_clip_ids()` → `tuple[int, ...]`
+
+The one read verb in this section — a plain `GET /timelines/0`, parsed by the same
+`_parse_timeline_clip_ids()` `select_clip()`'s own poll uses, but standalone: no format
+switch, no `select_clip()`-style "is my clip a member" check, just whatever the camera
+currently reports. Added specifically so a caller (or a diagnostic script) can inspect the
+timeline independently of driving it — `select_clip()`'s own poll only ever checks for the
+*requested* clip's membership and would not itself notice an unrelated leftover entry.
+First consumer: `examples/check_timeline_stale_entries.py` (below), built to test whether
+skipping `DELETE /timelines/0` (`select_clip()`'s finding #1 — `501` on this firmware)
+ever leaves a previous format's clips mixed in with a newly-selected format's clips.
+
 ### `select_clip(clip_unique_id)`
 
 Makes one clip (`Clip.clip_unique_id`, from `clips()`, Phase 3) playable: switches the
@@ -680,6 +692,10 @@ specific evidence doesn't cover the `set_camera_format()` branch inside `select_
 open, from finding #1: whether skipping the DELETE clear leaves stale entries when adding
 does work — this run's card only ever held clips of the one format being requested, so it
 couldn't distinguish a clean add from one with leftover entries.
+`examples/check_timeline_stale_entries.py` (below `timeline_clip_ids()`'s own section)
+was built specifically to close this gap: it switches between two clips of different
+formats via `select_clip()` and checks `timeline_clip_ids()` after each switch for any id
+that doesn't belong to the second clip's format.
 
 No WS event shape is known for `/timelines/0`, so verification there isn't the usual
 primary/secondary dual-check — it's a poll: `GET /timelines/0` repeatedly (default every
@@ -908,6 +924,9 @@ whatever the canned pre-write `GET` (standing in for a stale current format) alr
 Two further tests cover the `sensor_resolution` disambiguation parameter directly: it picks
 the requested pairing out of several ambiguous matches, and raises `BMDUnsupportedError`
 when the camera doesn't pair that exact value with the requested combination at all.
+
+`TestTimelineClipIds` covers the new read verb directly: the capability-check
+`BMDUnsupportedError`, a normal parsed readback, and an empty timeline.
 
 Phase 7's writes (`TestEnterExitPlayback`, `TestShuttleAndSeek`, `TestPlayPauseStop`,
 `TestSelectClip`) reuse the same fake-`RestClient`/deliver-an-event pattern, plus a new

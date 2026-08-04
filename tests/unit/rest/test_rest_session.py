@@ -1729,6 +1729,43 @@ class TestPlayPauseStop:
         assert client.put_calls == [(TRANSPORT_MODE_PROPERTY, {"mode": "InputPreview"})]
 
 
+class TestTimelineClipIds:
+    """timeline_clip_ids() — a plain GET /timelines/0, no format switch, no
+    select_clip()-style poll. Added for examples/check_timeline_stale_entries.py,
+    which needs to read the timeline independently of select_clip()'s own
+    internal membership check."""
+
+    @pytest.mark.asyncio
+    async def test_raises_bmd_unsupported_when_endpoint_not_confirmed(self):
+        session = make_session(make_profile(), client=FakeRestClient({}))
+
+        with pytest.raises(BMDUnsupportedError, match="timelines/0"):
+            await session.timeline_clip_ids()
+
+    @pytest.mark.asyncio
+    async def test_returns_parsed_clip_ids(self):
+        client = FakeRestClient(
+            {
+                TIMELINE_PATH: {
+                    "clips": [
+                        {"clipUniqueId": 10, "frameCount": 118},
+                        {"clipUniqueId": 1, "frameCount": 60},
+                    ]
+                }
+            }
+        )
+        session = make_session(make_playback_profile(), client=client)
+
+        assert await session.timeline_clip_ids() == (10, 1)
+
+    @pytest.mark.asyncio
+    async def test_empty_timeline(self):
+        client = FakeRestClient({TIMELINE_PATH: {"clips": []}})
+        session = make_session(make_playback_profile(), client=client)
+
+        assert await session.timeline_clip_ids() == ()
+
+
 class TestSelectClip:
     """select_clip() replaces the old set_timeline(clip_unique_ids: list[int])
     — real hardware (POCKET_6K_G2/POCKET_6K_PRO v8.6, 2026-08-04) disproved

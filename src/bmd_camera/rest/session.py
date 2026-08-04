@@ -941,6 +941,39 @@ class RestCameraSession:
             )
         return matches[0]
 
+    # ── Reads (Phase 7 — playback and gallery) ────────────────────────────
+
+    async def timeline_clip_ids(self) -> tuple[int, ...]:
+        """`GET /timelines/0`, returning the clip ids the camera currently
+        reports in its playback timeline — see `select_clip()`'s docstring
+        for what "timeline" means on this camera: always every clip
+        sharing the camera's *current* format, never a caller-curated
+        subset. Read-only — does not call `select_clip()`, does not switch
+        format, does not sync anything; it only reports whatever the
+        camera already has active. Parsed via the same
+        `_parse_timeline_clip_ids()` `select_clip()`'s own poll uses (real
+        shape confirmed `POCKET_6K_PRO v8.6`, 2026-08-04: `{"clips":
+        [{"clipUniqueId": int, "frameCount": int}]}`).
+
+        Added for `examples/check_timeline_stale_entries.py` — answering
+        whether skipping `DELETE /timelines/0` (`501` on this firmware,
+        `select_clip()`'s finding #1) ever leaves cross-format entries
+        behind after switching to a differently-formatted clip requires
+        reading the timeline back independently of `select_clip()`'s own
+        internal poll, which only checks for the *requested* clip's
+        membership and would not itself notice an unrelated leftover
+        entry.
+        """
+        endpoint = self.profile.rest_endpoint(TIMELINE_PATH)
+        if endpoint is None or not endpoint.supported:
+            raise BMDUnsupportedError(
+                f"[{self.host}] {TIMELINE_PATH} is not confirmed present in the "
+                f"{self.profile.model_key} {self.profile.firmware} rest/ profile — run "
+                "tools/rest/probe_endpoints.py against this camera first."
+            )
+        body = await self._rest_client.get(TIMELINE_PATH)
+        return tuple(_parse_timeline_clip_ids(body))
+
     # ── Writes (Phase 7 — playback and gallery) ───────────────────────────
 
     async def select_clip(self, clip_unique_id: int, *, poll_interval_s: float = 0.5) -> None:

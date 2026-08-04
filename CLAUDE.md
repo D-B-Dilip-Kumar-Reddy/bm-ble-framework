@@ -166,7 +166,10 @@ src/bmd_camera/
     exceptions.py            # BMDRestError + re-exports of the shared exception types
     session.py                # RestCameraSession — user-facing API. Read verbs
                               # (get_format, supported_formats, storage_state, clips,
-                              # timecode, notification-driven is_recording); writes —
+                              # timecode, notification-driven is_recording,
+                              # timeline_clip_ids — a plain GET /timelines/0, added to let
+                              # a caller inspect the timeline independently of
+                              # select_clip()'s own membership poll); writes —
                               # record_start/record_stop (Phase 4, real-hardware-
                               # confirmed) and set_camera_format (Phase 5, dual-check
                               # verified, live-capability-gated via supported_formats(),
@@ -331,6 +334,18 @@ examples/
                             # is via this session's own dual-checks; watching the camera
                             # screen is still the independent ground truth, see
                             # docs/rest/session.md and docs/rest/transport.md
+  check_timeline_stale_entries.py  # Takes two clip_unique_ids of differing format,
+                            # switches between them via select_clip(), and reads back
+                            # RestCameraSession.timeline_clip_ids() (new read verb) after
+                            # each switch to check whether any clip from the first
+                            # format's group lingers after switching to the second —
+                            # closing the one open question select_clip()'s own
+                            # real-hardware runs left behind (whether skipping the broken
+                            # DELETE /timelines/0 leaves stale cross-format entries).
+                            # Deliberately never calls enter_playback()/exit_playback(),
+                            # since exit_playback()'s confirmed format-revert would muddy
+                            # the read. See docs/rest/session.md's timeline_clip_ids() and
+                            # select_clip() sections
   playback.py               # (planned)
 
 tests/
