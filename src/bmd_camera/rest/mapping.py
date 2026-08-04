@@ -68,3 +68,28 @@ def resolve_rest_codec_name(
     if confirmed is not None:
         return confirmed
     return derive_rest_codec_name(family, variant)
+
+
+def resolve_ble_codec_name(
+    format_names: dict[str, dict[str, str]], rest_codec: str
+) -> tuple[str, str] | None:
+    """The reverse of `resolve_rest_codec_name`: given a REST codec string
+    a camera actually reported (e.g. from `Clip.codec`, `GET /clips/list`),
+    find the `(family, variant)` BLE profile pair it came from by scanning
+    `format_names` for a matching value.
+
+    Deliberately table-lookup only, with **no** derivation fallback the way
+    `resolve_rest_codec_name` has one: `derive_rest_codec_name`'s BLE ->
+    REST substitution (`":"` -> `"_"`) is not safely invertible in the other
+    direction — ProRes's confirmed `"422"` -> `"ProRes:Original"` entry is
+    exactly the counterexample (`mapping.py`'s module docstring) that proves
+    no fixed rule can be trusted to guess backwards. Returns `None` when
+    `rest_codec` isn't in the table at all, rather than a wrong guess — the
+    caller (`RestCameraSession.select_clip`) turns that into a loud
+    `BMDUnsupportedError` naming the unmapped string, per design principle
+    7, instead of silently trying an invented `(family, variant)`."""
+    for family, variants in format_names.items():
+        for variant, candidate in variants.items():
+            if candidate == rest_codec:
+                return family, variant
+    return None

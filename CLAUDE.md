@@ -175,43 +175,38 @@ src/bmd_camera/
                               # tools/rest/sweep_camera_format.py). ProRes/4K DCI
                               # real-hardware-confirmed on both cameras — the exact
                               # combination BLE's write path can't reach. Playback/gallery
-                              # writes (Phase 7) — set_timeline, enter_playback/
+                              # writes (Phase 7) — select_clip, enter_playback/
                               # exit_playback, play/pause/stop, shuttle/seek — built,
-                              # dual-check verified; first real-hardware run
-                              # (POCKET_6K_G2 v8.6, 2026-08-04) hit two real defects back
-                              # to back — DELETE /timelines/0 returns 501 (now caught,
-                              # degrades to POST-only) and the original per-clip
-                              # {"clipUniqueId": id} POST body was rejected with 400
-                              # "Invalid clips data" (now sends one POST with all clips
-                              # under a "clips" key, matching GET /timelines/0's own
-                              # confirmed shape) — but stopped there, so that new body
-                              # shape and everything past set_timeline() remain
-                              # not-yet-real-hardware-confirmed. Separately, operator
-                              # testing directly on POCKET_6K_PRO v8.6 the same day found
-                              # /transports/0/playback's real body ({"type", "loop",
-                              # "singleClip", "speed", "position"} — not just "speed"),
-                              # retiring the plan's "Shuttle"/"Jog" type guess and
-                              # "timecode"/"clip" position guess; shuttle()/seek()/
-                              # _put_playback() now read-modify-write that real shape, and
-                              # seek() takes position (frames) instead of timecode/clip.
-                              # Also observed physically: playback requires the camera's
-                              # current format to match the clip's own format, not yet
-                              # checked in code. A follow-up Postman debugging session on
-                              # the same camera confirmed the "clips" POST body is the
-                              # only accepted shape (four alternates all rejected) but
-                              # exposed a live trap: that same accepted body returns 204
-                              # yet leaves an existing timeline entry unchanged when the
-                              # requested clip's format differs from the resident one —
-                              # leading, unconfirmed hypothesis: the same format-match
-                              # constraint applies at timeline-build time, not just at
-                              # playback start. GET /timelines/0's real body is now
-                              # confirmed too ({"clips": [{"clipUniqueId", "frameCount"}]})
-                              # — see docs/rest/session.md for exactly which
-                              # endpoints/field names are sweep-confirmed vs. this
-                              # migration's own plan-derived hypotheses
+                              # dual-check verified. /transports/0/playback's real body
+                              # ({"type", "loop", "singleClip", "speed", "position"}) is
+                              # real-hardware-confirmed (POCKET_6K_PRO v8.6, 2026-08-04);
+                              # shuttle()/seek()/_put_playback() read-modify-write that
+                              # shape, and seek() takes position (frames). select_clip()
+                              # replaces an earlier set_timeline(clip_unique_ids: list[int])
+                              # design that the same real-hardware round disproved outright:
+                              # requesting one clip while the camera's format matched it
+                              # produced a GET /timelines/0 readback of every clip sharing
+                              # that format (seven clips, not one) — confirmed two
+                              # independent ways (the REST readback, and the camera's own
+                              # on-screen playback view showing "CLIP 1/7" for the same
+                              # group). The camera has no concept of a caller-curated
+                              # playlist, so select_clip(clip_unique_id) picks one clip,
+                              # switches format to match it via a new reverse Clip ->
+                              # profile-vocabulary mapping (mapping.py's
+                              # resolve_ble_codec_name), and confirms the clip is a member
+                              # of whatever timeline comes back — not that it's alone. This
+                              # exact combination (reverse-map, switch format, sync
+                              # timeline) has not itself been run against real hardware —
+                              # see docs/rest/session.md for the full five-round trail and
+                              # exactly which endpoints/field names are sweep-confirmed vs.
+                              # this migration's own plan-derived hypotheses
     mapping.py                 # Codec name derivation between the BLE profile's vocabulary
                               # and REST's own spelling — confirmed strings always win
-                              # (design principle 1); this is a fallback seed only
+                              # (design principle 1); this is a fallback seed only.
+                              # resolve_ble_codec_name is the reverse direction (REST ->
+                              # BLE), table-lookup only with no derivation fallback, used by
+                              # select_clip() to turn a Clip's REST-reported codec back into
+                              # a (family, variant) set_camera_format() accepts
     timecode.py                # REST TIMECODE decode — BCD HH:MM:SS:FF, big-endian,
                               # byte-reversed relative to BLE; reuses ble/timecode.py's
                               # Timecode dataclass and duration_seconds() as-is
@@ -283,19 +278,20 @@ examples/
                             # REST confirmation (rest/media.py); the first script in this
                             # codebase to hold a BLE and a REST session open concurrently
                             # against the same camera. See docs/ble/photo_capture.md §11
-  rest_playback.py          # Phase 7 — set_timeline + enter_playback/play/pause/seek/
+  rest_playback.py          # Phase 7 — select_clip + enter_playback/play/pause/seek/
                             # shuttle/stop/exit_playback; entirely new capability BLE
-                            # never reached. First real-hardware run (POCKET_6K_G2 v8.6,
-                            # 2026-08-04) hit two defects inside set_timeline() back to
-                            # back — DELETE /timelines/0 returning 501 (fixed: degrades to
-                            # POST-only) and the per-clip POST body rejected with 400
-                            # (fixed: one POST, all clips under "clips") — but stopped
-                            # there. A follow-up Postman debugging session (POCKET_6K_PRO
-                            # v8.6, same day) confirmed that "clips" body is the only
-                            # accepted shape yet found it can return 204 while leaving the
-                            # timeline unchanged — leading, unconfirmed hypothesis: a
-                            # format-match precondition enforced at timeline-build time,
-                            # not just at playback start. enter_playback() onward remain
+                            # never reached. select_clip() replaces an earlier
+                            # set_timeline(clip_unique_ids) design that real-hardware
+                            # debugging (POCKET_6K_G2/POCKET_6K_PRO v8.6, 2026-08-04)
+                            # disproved outright — the camera has no concept of a
+                            # caller-curated playlist; the timeline is always every clip
+                            # matching the camera's current format, confirmed two
+                            # independent ways (a REST readback and the camera's own
+                            # on-screen playback view agreeing on the same seven-clip
+                            # group). select_clip() switches format to match the requested
+                            # clip and confirms it's a member of the resulting group. This
+                            # exact combination has not itself been run against real
+                            # hardware; every step from select_clip() onward remains
                             # not-yet-real-hardware-confirmed. Verification is by eye
                             # (operator watches the camera screen), see
                             # docs/rest/session.md and docs/rest/transport.md
@@ -342,7 +338,7 @@ added, a new `docs/<feature>.md` must be created alongside the code change.
 | `docs/ble/reverse_engineering.md` | Tool-by-tool procedure for bringing up a new `(MODEL_KEY, FIRMWARE)` pair, and for adding a single new command |
 | `docs/ble/camera_registry.md` | Full evidentiary notes behind the Camera Registry table above |
 | `docs/rest/transport.md` | REST/WebSocket transport (8.6) — addressing the camera over USB, scheme discovery, `tools/rest/probe_endpoints.py`, sweep results for both cameras, the `RestClient`/`RestEventRouter` library surface |
-| `docs/rest/session.md` | `RestCameraSession` — the REST state/control surface: read verbs (Phase 3 — format, storage, clips, timecode, notification-driven `is_recording`); `record_start`/`record_stop` (Phase 4 — dual-check verification, storage precondition, real-hardware-confirmed); `set_camera_format` (Phase 5 — one `PUT /system/format`, live-capability-gated via `supported_formats()`); photo-capture confirmation primitives (Phase 6 — `list_mount`/`mount_names`/`path_exists`/`guess_new_still_path`, real-hardware-confirmed); playback/gallery writes (Phase 7 — `set_timeline`/`enter_playback`/`play`/`pause`/`seek`/`shuttle`/`stop`, built, not yet real-hardware-confirmed); codec name mapping and REST timecode decode |
+| `docs/rest/session.md` | `RestCameraSession` — the REST state/control surface: read verbs (Phase 3 — format, storage, clips, timecode, notification-driven `is_recording`); `record_start`/`record_stop` (Phase 4 — dual-check verification, storage precondition, real-hardware-confirmed); `set_camera_format` (Phase 5 — one `PUT /system/format`, live-capability-gated via `supported_formats()`); photo-capture confirmation primitives (Phase 6 — `list_mount`/`mount_names`/`path_exists`/`guess_new_still_path`, real-hardware-confirmed); playback/gallery writes (Phase 7 — `select_clip`/`enter_playback`/`play`/`pause`/`seek`/`shuttle`/`stop`, built, not yet real-hardware-confirmed — `select_clip` replaced an earlier `set_timeline` design real hardware disproved outright); codec name mapping and REST timecode decode |
 
 ---
 

@@ -10,13 +10,16 @@ boundary, held here for REST.
 STATUS: read verbs, record start/stop (Phase 4), format writes (Phase 5), photo
 confirmation primitives (Phase 6), and playback/gallery writes (Phase 7) — the
 REST dual-check design principle 3 has always specified: a WS
-`propertyValueChanged` event primary, a `GET` readback secondary. Phase 7's
+`propertyValueChanged` event primary, a `GET` readback secondary.
 `enter_playback()`/`play()`/`pause()`/`stop()`/`shuttle()`/`seek()` have real
-hardware evidence behind their bodies now (POCKET_6K_PRO v8.6, 2026-08-04).
-`set_timeline()` is the one holdout: its confirmed `POST` body returns `204`
-but can leave the timeline unchanged when the target clip's format doesn't
-match the camera's current format (unconfirmed hypothesis, not yet proven) —
-see its own docstring for the full real-hardware debugging trail.
+hardware evidence behind their bodies (POCKET_6K_PRO v8.6, 2026-08-04).
+`select_clip()` replaces an earlier `set_timeline(clip_unique_ids: list[int])`
+design that real hardware disproved outright — this camera has no concept of
+a caller-curated playlist; the playable set is always every clip matching
+the camera's current format, confirmed on real hardware two independent
+ways (a REST readback and the camera's own on-screen playback view both
+agreeing on the same seven-clip group) — see `select_clip()`'s own
+docstring for the full real-hardware debugging trail.
 
     async with RestCameraSession("172.27.97.141", "POCKET_6K_PRO", "v8.6") as session:
         fmt = await session.get_format()
@@ -26,7 +29,7 @@ see its own docstring for the full real-hardware debugging trail.
         await session.record_start()
         await session.record_stop()
         await session.set_camera_format("BRAW", "5:1", "4K DCI", "23.98")
-        await session.set_timeline([c.clip_unique_id for c in clips[:1]])
+        await session.select_clip(clips[0].clip_unique_id)
         await session.enter_playback()
         await session.play()
         await session.exit_playback()
@@ -47,6 +50,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -67,7 +71,7 @@ from .client import RestClient, require_aiohttp
 from .constants import MOUNTS_PATH, WS_PATH
 from .events import RestEventRouter
 from .exceptions import BMDRestError
-from .mapping import resolve_rest_codec_name
+from .mapping import resolve_ble_codec_name, resolve_rest_codec_name
 from .timecode import Timecode, decode_rest_timecode
 
 logger = logging.getLogger(__name__)
@@ -326,6 +330,42 @@ def _parse_timeline_clip_ids(body: Any) -> list[int]:
         elif isinstance(entry, dict) and isinstance(entry.get("clipUniqueId"), int):
             ids.append(entry["clipUniqueId"])
     return ids
+
+
+_VIDEO_FORMAT_RE = re.compile(r"^(\d+)x(\d+)p(\d+(?:\.\d+)?)$")
+
+
+def _parse_video_format(video_format: str) -> tuple[int, int, str] | None:
+    """Decode `Clip.video_format`'s real wire shape (`GET /clips/list`,
+    confirmed `POCKET_6K_PRO v8.6`, 2026-08-04: `"4096x2160p24"`,
+    `"4096x2160p23.98"`, `"3840x2160p60"`, `"6144x2560p60"`) into
+    `(width, height, fps_str)`. `fps_str` is returned exactly as printed —
+    `"23.98"` vs `"24"` matters, since it's compared directly against
+    `Format.frame_rate` and looked up directly in `fps_modes` (no
+    translation needed there — `mapping.py`'s module docstring). Returns
+    `None` for anything that doesn't match this shape, rather than raising
+    — `select_clip()` turns that into a loud `BMDUnsupportedError` naming
+    the clip, not a stack trace from a regex match on `None`."""
+    match = _VIDEO_FORMAT_RE.match(video_format)
+    if match is None:
+        return None
+    width, height, fps_str = match.groups()
+    return int(width), int(height), fps_str
+
+
+def _resolution_name_for_dimensions(
+    resolutions: dict[str, Any], width: int, height: int
+) -> str | None:
+    """Reverse lookup into the (BLE, shared — design principle 1)
+    `resolutions` profile table: the name whose `(width, height)` matches,
+    or `None` if no entry does. The forward direction (`"4K DCI"` ->
+    `{width: 4096, ...}`) is what `set_camera_format` already uses;
+    `select_clip()` needs the reverse to turn a clip's REST-reported pixel
+    dimensions back into a profile name `set_camera_format` accepts."""
+    for name, spec in resolutions.items():
+        if spec.width == width and spec.height == height:
+            return name
+    return None
 
 
 # ── Session ──────────────────────────────────────────────────────────────────
@@ -891,101 +931,130 @@ class RestCameraSession:
 
     # ── Writes (Phase 7 — playback and gallery) ───────────────────────────
 
-    async def set_timeline(
-        self, clip_unique_ids: list[int], *, poll_interval_s: float = 0.5
-    ) -> None:
-        """Build the active timeline from `clip_unique_ids` (`Clip.clip_unique_id`,
-        from `clips()`, Phase 3) — `DELETE /timelines/0` clears whatever
-        timeline exists, then one `POST /timelines/0/add` carrying every
-        clip. Required before `enter_playback()`/`play()` can show
-        anything.
+    async def select_clip(self, clip_unique_id: int, *, poll_interval_s: float = 0.5) -> None:
+        """Make `clip_unique_id` (`Clip.clip_unique_id`, from `clips()`,
+        Phase 3) playable: switch the camera's format to match that clip's
+        own recorded format if it doesn't already (`set_camera_format`,
+        Phase 5), then `POST /timelines/0/add` to sync the camera's
+        playback timeline. Required before `enter_playback()`/`play()` can
+        show anything.
 
-        **Unswept — this method is the first real evidence either way.**
-        `/timelines/0` (DELETE) and `/timelines/0/add` (POST) are both in
-        `tools/rest/probe_endpoints.py`'s `NEVER_WRITE` list: a delete or
-        add is destructive regardless of value, so the idempotent
-        same-value probe that proved `/system/format`/`/transports/0`/
-        `/transports/0/playback` writable structurally cannot touch them
-        (design principle 6's REST sibling — the same position
-        `/transports/0/record` was in before Phase 4 proved it out).
+        **Replaces the original `set_timeline(clip_unique_ids: list[int])`
+        design — real hardware disproved that design's core premise.** The
+        plan this was built from assumed a caller could hand-curate an
+        arbitrary ordered subset of clips into one custom playlist. Four
+        rounds of real-hardware testing (`POCKET_6K_G2`/`POCKET_6K_PRO
+        v8.6`, 2026-08-04, `docs/rest/session.md` carries the full trail)
+        showed that isn't how this camera works at all:
 
-        **Real-hardware finding, `POCKET_6K_G2 v8.6`, 2026-08-04 (first
-        Phase 7 run):** `DELETE /timelines/0` returns `501` — the DELETE
-        *method* on this path is genuinely not implemented on this
-        firmware, unlike the read sweep's confirmed `GET`. This is not the
-        same question `probe_endpoints.py`'s read sweep answered (that a
-        `GET` on this path works); the HTTP method matters, and DELETE's
-        answer is negative. Since a `BMDUnsupportedError` here would
-        otherwise block every subsequent `POST` from ever being tried, and
-        whether this camera even needs an explicit clear before adding is
-        itself unconfirmed, a `501` from the DELETE specifically is caught
-        and logged rather than propagated — the method proceeds straight to
-        `POST`ing. Any other error from the DELETE still propagates
-        normally. Whether skipping the clear leaves stale entries in the
-        timeline, or whether `POST /timelines/0/add` itself replaces rather
-        than appends, remains unconfirmed until a real run reaches the
-        `POST` step.
+        1. `DELETE /timelines/0` returns `501` on this firmware — caught
+           and logged, not propagated, so a `POST` is still attempted.
+        2. `POST /timelines/0/add`'s only accepted body shape is
+           `{"clips": [{"clipUniqueId": id}, ...]}` — four alternate
+           shapes tried in a Postman debugging session all failed
+           (`{"clips": [id]}` and `{"clipUniqueIds": [id]}` both
+           `"Not implemented for this device"`, `{"clip": {...}}` a `400
+           "Invalid clips data"`, `PUT /timelines/0` a flat `405 Method
+           Not Allowed`).
+        3. **The decisive finding:** with the camera's format confirmed
+           `ProRes:Proxy` at `4096x2160p24` immediately beforehand,
+           `POST`ing `{"clips": [{"clipUniqueId": 1}]}` produced a
+           `GET /timelines/0` readback of **seven** clips
+           (`[10, 1, 9, 8, 7, 5, 6]`) — every clip on the card whose own
+           recorded format was `ProRes:Proxy @ 4096x2160p24`, not just
+           clip `1`. Repeating the exact same request with
+           `clipUniqueId: 5` instead of `1` (format re-verified unchanged,
+           no camera-body interaction in between) produced the *identical*
+           seven-clip set. The requested id does not select which clips
+           end up in the timeline. Independently, the camera's own
+           on-screen playback view (photographed live) showed `"CLIP 1/7"`
+           for the same seven-clip group — confirming this is native
+           camera behavior, not a REST-API-specific quirk: **the
+           "timeline" is always every clip matching the camera's current
+           active format, full stop.**
 
-        **Second real-hardware finding, same run, immediately after the
-        first:** the original body shape — one `POST` per clip, each body a
-        bare `{"clipUniqueId": id}` (a hypothesis borrowed from
-        `/clips/list`'s confirmed field name, not an independently captured
-        `/timelines/0/add` sample) — was rejected outright:
-        `400 {"error": "Invalid clips data"}`. The error names "clips"
-        (plural) specifically, not "clipUniqueId", which reads as the body
-        needing a top-level `clips` key rather than a bare clip object.
-        `_parse_timeline_clip_ids()` already established that `GET
-        /timelines/0`'s own confirmed response carries exactly that shape —
-        `{"clips": [{"clipUniqueId": ...}, ...]}` — so the fix sends the
-        same shape back: **one** `POST /timelines/0/add` carrying all of
-        `clip_unique_ids` under `"clips"`, instead of one bare-object `POST`
-        per id. This is still a hypothesis, not an independently confirmed
-        sample — reusing the GET response's own shape for the POST body is
-        a reasonable next guess, not a proven one — and remains open until a
-        run gets far enough to see whether it's accepted.
+        So `select_clip()` doesn't build a playlist — nothing on this
+        camera can. It picks one clip, ensures the camera's format matches
+        it (which determines the *entire* resulting playable group, same
+        as every other clip sharing that format), and confirms that
+        `clip_unique_id` specifically appears somewhere in the resulting
+        `GET /timelines/0` readback — membership, not the exact-list
+        equality `set_timeline()` used to check, since the real result is
+        never just the one clip requested.
 
-        **Third real-hardware finding, `POCKET_6K_PRO v8.6`, 2026-08-04**
-        (operator debugging directly via Postman, isolating the request
-        from this session's own polling): the `{"clips": [{"clipUniqueId":
-        id}]}` body from finding #2 is confirmed the *only* accepted
-        shape — `{"clips": [id]}` and `{"clipUniqueIds": [id]}` both come
-        back `{"error": "Not implemented for this device"}`,
-        `{"clip": {"clipUniqueId": id}}` comes back the same
-        `{"error": "Invalid clips data"}` finding #2 already ruled out, and
-        `PUT /timelines/0` (tried as a possible full-replace alternative to
-        the broken `DELETE`) is flatly `405 Method Not Allowed`. But the one
-        working shape's `204` is a real trap: `POST`ing
-        `{"clips": [{"clipUniqueId": 1}]}` against a timeline that already
-        held a *different* clip (id `12`) returned `204` — accepted — yet a
-        `GET /timelines/0` immediately after still reported only `[12]`,
-        completely unchanged. The `POST` is not failing; it is succeeding
-        at nothing.
+        **This exact combination — reverse-mapping a clip's REST-reported
+        format back to a `set_camera_format()` call, then syncing the
+        timeline — has not itself been run against real hardware.** Each
+        piece has independent real-hardware evidence
+        (`set_camera_format` since Phase 5; the `DELETE`-then-`POST`
+        sequence and its body shape from the trail above), but this method
+        is the first thing to compose them. `resolve_ble_codec_name`
+        (`mapping.py`) can raise `BMDUnsupportedError` if a clip's REST
+        codec string isn't in the profile's confirmed `format_names` table
+        (no derivation fallback — see `mapping.py`'s own docstring for
+        why guessing backwards isn't safe); `_resolution_name_for_dimensions`
+        can do the same if a clip's pixel dimensions don't match any
+        profile `resolutions` entry. Both are real gaps this method
+        surfaces loudly rather than papering over, not proof against them.
 
-        **Leading hypothesis, not yet confirmed:** clip `1` was
-        `ProRes:Proxy` at `4096x2160p24`; clip `12`, the one already
-        resident, was `BRaw:Q3` at `6144x2560p60` — a live example of
-        `enter_playback()`'s documented format precondition
-        (camera-current-format must match a clip's own recorded format),
-        possibly enforced one step earlier than expected, at *timeline
-        build* time rather than only at *playback start* time. If that
-        holds, `set_timeline()` needs `set_camera_format()` called first to
-        match the target clip's format before `add` will do anything — not
-        yet verified, since this debugging session didn't test adding a
-        clip whose format already matched the camera's then-current
-        format. Until confirmed, this method makes no attempt to detect or
-        route around it; a mismatched call is expected to reach exactly
-        this `204`-then-unchanged dead end and time out into
-        `BMDVerificationError`, which is at least an honest failure rather
-        than a false "confirmed."
-
-        Verified by polling `GET /timelines/0` until its reported clip ids
-        match `clip_unique_ids` exactly, or `verify_timeout_s` elapses
+        Verified by polling `GET /timelines/0` (default every 0.5s,
+        `poll_interval_s`) until `_parse_timeline_clip_ids()`'s reading
+        contains `clip_unique_id`, or `verify_timeout_s` elapses
         (`BMDVerificationError`) — no WS event shape is known for this
         resource, so unlike every other write in this session, there is no
         primary/secondary dual-check here, only a readback poll (the same
         shape `rest/media.py`'s `wait_for_new_still()` uses for a resource
         with no known event channel either).
         """
+        matches = [clip for clip in await self.clips() if clip.clip_unique_id == clip_unique_id]
+        if not matches:
+            raise ValueError(
+                f"[{self.host}] No clip with clip_unique_id={clip_unique_id} in "
+                f"GET /clips/list on {self.profile.model_key} {self.profile.firmware}"
+            )
+        clip = matches[0]
+        if clip.codec is None or clip.video_format is None:
+            raise BMDUnsupportedError(
+                f"[{self.host}] clip_unique_id={clip_unique_id} ({clip.file_path}) has no "
+                "codec/videoFormat in GET /clips/list — cannot determine its format"
+            )
+        parsed = _parse_video_format(clip.video_format)
+        if parsed is None:
+            raise BMDUnsupportedError(
+                f"[{self.host}] clip_unique_id={clip_unique_id}'s videoFormat "
+                f"{clip.video_format!r} doesn't match the confirmed "
+                "'<width>x<height>p<fps>' shape — cannot resolve its format"
+            )
+        width, height, fps_str = parsed
+
+        current = await self.get_format()
+        format_matches = (
+            current.codec == clip.codec
+            and current.record_resolution == (width, height)
+            and current.frame_rate == fps_str
+        )
+        if not format_matches:
+            ble_pair = resolve_ble_codec_name(self.profile.rest.format_names, clip.codec)
+            if ble_pair is None:
+                raise BMDUnsupportedError(
+                    f"[{self.host}] clip_unique_id={clip_unique_id}'s codec {clip.codec!r} is "
+                    f"not in the {self.profile.model_key} {self.profile.firmware} rest/ "
+                    "profile's format_names table — cannot resolve it to a (family, variant) "
+                    "set_camera_format() accepts; populate format_names from a sweep first."
+                )
+            family, variant = ble_pair
+            resolution_name = _resolution_name_for_dimensions(
+                self.profile.resolutions, width, height
+            )
+            if resolution_name is None:
+                raise BMDUnsupportedError(
+                    f"[{self.host}] clip_unique_id={clip_unique_id}'s recordResolution "
+                    f"{(width, height)} has no matching entry in the "
+                    f"{self.profile.model_key} {self.profile.firmware} profile's resolutions "
+                    "table — cannot resolve it to a profile resolution name"
+                )
+            await self.set_camera_format(family, variant, resolution_name, fps_str)
+
         endpoint = self.profile.rest_endpoint(TIMELINE_PATH)
         if endpoint is None or not endpoint.supported:
             raise BMDUnsupportedError(
@@ -1004,45 +1073,45 @@ class RestCameraSession:
                 TIMELINE_PATH,
                 TIMELINE_ADD_PATH,
             )
-        clips_body = {"clips": [{"clipUniqueId": clip_id} for clip_id in clip_unique_ids]}
-        await self._rest_client.post(TIMELINE_ADD_PATH, clips_body)
+        await self._rest_client.post(
+            TIMELINE_ADD_PATH, {"clips": [{"clipUniqueId": clip_unique_id}]}
+        )
 
         deadline = time.monotonic() + self.verify_timeout_s
         current_ids: list[int] = []
         while True:
             body = await self._rest_client.get(TIMELINE_PATH)
             current_ids = _parse_timeline_clip_ids(body)
-            if current_ids == list(clip_unique_ids):
+            if clip_unique_id in current_ids:
                 return
             if time.monotonic() >= deadline:
                 raise BMDVerificationError(
-                    f"set_timeline({clip_unique_ids}): GET {TIMELINE_PATH} never reported "
-                    f"matching clip ids within {self.verify_timeout_s}s "
+                    f"select_clip({clip_unique_id}): GET {TIMELINE_PATH} never reported "
+                    f"clip_unique_id={clip_unique_id} within {self.verify_timeout_s}s "
                     f"(last read: {current_ids})"
                 )
             await asyncio.sleep(poll_interval_s)
 
     async def enter_playback(self) -> None:
         """Switch the camera into playback mode — `PUT /transports/0
-        {"mode": "Output"}`. `set_timeline()` should be called first; there
+        {"mode": "Output"}`. `select_clip()` should be called first; there
         is nothing to show otherwise.
 
-        **Format precondition, observed physically on the camera body
+        **Format precondition, confirmed real on the camera body
         (`POCKET_6K_PRO v8.6`, 2026-08-04):** a clip only plays if the
         camera's *current* codec/quality/resolution/fps matches the format
-        the clip was recorded with. If they differ, the camera body
-        requires switching format (`set_camera_format()`, Phase 5) to match
-        the clip *before* playback will do anything. This was observed by
-        operating the camera directly, not yet through this REST surface,
-        but there's no reason to expect a physical-media constraint like
-        this to depend on which control surface issued the command.
-        **Not enforced here** — `Clip.codec`/`Clip.video_format` (Phase 3)
-        are not yet mapped onto `get_format()`'s vocabulary, so this
-        session cannot check the precondition for you. A mismatched
-        `play()`/`shuttle()` call is expected to dual-check-fail with a
-        `BMDVerificationError` (nothing observably changes) rather than a
-        clearer diagnosis naming the mismatch. See docs/rest/session.md's
-        Phase 7 section.
+        the clip was recorded with — in fact real-hardware testing showed
+        this isn't just a playback-time restriction but the very thing that
+        defines the camera's entire playable timeline: every clip sharing
+        the current format, and nothing else (see `select_clip()`'s
+        docstring for the full evidentiary trail). `select_clip()` already
+        switches format for you before syncing the timeline, so a caller
+        going through it doesn't need to think about this. Calling
+        `enter_playback()`/`play()`/`shuttle()` without having gone through
+        `select_clip()` first — or with the camera's format having changed
+        since — is expected to dual-check-fail with a `BMDVerificationError`
+        (nothing observably changes) rather than a clearer diagnosis naming
+        the mismatch.
         """
         await self._set_transport_mode("Output")
 

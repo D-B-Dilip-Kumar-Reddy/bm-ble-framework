@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from bmd_camera.rest.mapping import derive_rest_codec_name, resolve_rest_codec_name
+from bmd_camera.rest.mapping import (
+    derive_rest_codec_name,
+    resolve_ble_codec_name,
+    resolve_rest_codec_name,
+)
 
 
 class TestDeriveRestCodecName:
@@ -38,3 +42,30 @@ class TestResolveRestCodecName:
     def test_falls_back_when_family_present_but_variant_missing(self):
         format_names = {"BRAW": {"Q0": "BRaw:Q0"}}
         assert resolve_rest_codec_name(format_names, "BRAW", "5:1") == "BRaw:5_1"
+
+
+class TestResolveBleCodecName:
+    """The reverse direction, used by RestCameraSession.select_clip() to
+    turn a Clip's REST-reported codec back into a (family, variant) profile
+    pair — table-lookup only, no derivation fallback (see the function's
+    own docstring for why ProRes's "422"/"Original" non-rule makes a
+    reverse guess unsafe)."""
+
+    def test_finds_confirmed_reverse_entry(self):
+        format_names = {"ProRes": {"Proxy": "ProRes:Proxy"}}
+        assert resolve_ble_codec_name(format_names, "ProRes:Proxy") == ("ProRes", "Proxy")
+
+    def test_finds_the_non_derivable_prores_422_entry(self):
+        """Real evidence, docs/rest/transport.md's "Codec naming": REST
+        spells BLE's "422" variant "Original" — a mapping
+        derive_rest_codec_name explicitly cannot produce, so this only
+        works because it's a plain table lookup."""
+        format_names = {"ProRes": {"422": "ProRes:Original"}}
+        assert resolve_ble_codec_name(format_names, "ProRes:Original") == ("ProRes", "422")
+
+    def test_returns_none_when_rest_codec_not_in_table(self):
+        format_names = {"BRAW": {"5:1": "BRaw:5_1"}}
+        assert resolve_ble_codec_name(format_names, "ProRes:Proxy") is None
+
+    def test_returns_none_for_empty_table(self):
+        assert resolve_ble_codec_name({}, "BRaw:5_1") is None

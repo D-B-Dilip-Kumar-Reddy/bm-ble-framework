@@ -162,6 +162,92 @@ def make_playback_profile() -> CameraProfile:
     return make_profile(rest_raw=rest_raw)
 
 
+# ── select_clip() fixtures — real evidence, POCKET_6K_PRO v8.6, 2026-08-04 ──
+# Clip 1 (ProRes:Proxy, 4096x2160p24) is the exact clip from the Postman
+# debugging session that established select_clip()'s whole design: the
+# camera's playable timeline is always every clip matching current format,
+# never just the requested clip_unique_id.
+
+CLIP_1_BODY = {
+    "clipUniqueId": 1,
+    "filePath": "/mnt/sd0/A001/A001_07311253_C001.mov",
+    "codecFormat": {"codec": "ProRes:Proxy", "container": "MOV"},
+    "startTimecode": "12:53:56:01",
+    "durationTimecode": "00:00:02:12",
+    "videoFormat": "4096x2160p24",
+}
+
+MATCHING_FORMAT_BODY = {
+    "codec": "ProRes:Proxy",
+    "frameRate": "24",
+    "maxOffSpeedFrameRate": 60,
+    "minOffSpeedFrameRate": 5,
+    "offSpeedEnabled": False,
+    "offSpeedFrameRate": 24,
+    "recordResolution": {"height": 2160, "width": 4096},
+    "sensorResolution": {"height": 3024, "width": 5744},
+}
+
+SUPPORTED_FORMATS_BODY_PRORES_PROXY_4K_DCI = {
+    "supportedFormats": [
+        {
+            "codecs": ["ProRes:Proxy", "ProRes:LT", "ProRes:Original", "ProRes:HQ"],
+            "frameRates": ["23.98", "24", "25"],
+            "recordResolution": {"width": 4096, "height": 2160},
+            "sensorResolution": {"width": 5744, "height": 3024},
+        }
+    ]
+}
+
+
+def make_select_clip_profile(
+    *,
+    format_names: dict | None = None,
+    resolutions: dict | None = None,
+    timeline_confirmed: bool = True,
+) -> CameraProfile:
+    """A profile carrying everything select_clip() touches: the shared
+    codecs/resolutions/fps_modes tables set_camera_format() validates
+    against (mirrors make_format_profile), plus a rest/ file confirming
+    /system/format's PUT side, /system/supportedFormats' GET side, and
+    /timelines/0's GET side, with a format_names table mapping ProRes/Proxy
+    to its real REST spelling — needed by resolve_ble_codec_name's reverse
+    lookup, the direction set_camera_format's own tests never exercise."""
+    ble_raw = {
+        "_meta": {"model": "Pocket 6K Pro", "ble_name": "A:TEST"},
+        "codecs": {"ProRes": {"id": 2, "variants": {"Proxy": 0, "422": 1}}},
+        "resolutions": (
+            resolutions
+            if resolutions is not None
+            else {"4K DCI": {"width": 4096, "height": 2160, "codecs": ["ProRes"]}}
+        ),
+        "fps_modes": {"24": {"fps_int": 24, "m_rate": 0, "frame_flags": 0}},
+    }
+    profile = CameraProfile._from_raw(MODEL_KEY, FIRMWARE, ble_raw)
+
+    endpoints: dict[str, dict] = {
+        FORMAT_PROPERTY: {
+            "status": 200,
+            "supported": True,
+            "put_status": 204,
+            "put_supported": True,
+        },
+        "/system/supportedFormats": {"status": 200, "supported": True},
+    }
+    if timeline_confirmed:
+        endpoints[TIMELINE_PATH] = {"status": 200, "supported": True}
+
+    rest_raw = {
+        "_meta": {"model_key": MODEL_KEY, "firmware": FIRMWARE, "status": "UNVERIFIED"},
+        "endpoints": endpoints,
+        "format_names": (
+            format_names if format_names is not None else {"ProRes": {"Proxy": "ProRes:Proxy"}}
+        ),
+    }
+    profile.rest = CameraProfile._rest_from_raw(rest_raw)
+    return profile
+
+
 class FakeRestClient:
     """Minimal stand-in for RestClient: `.get(path)` returns a canned body,
     or raises a canned exception (for `errors`) — e.g. simulating a real
@@ -1643,73 +1729,229 @@ class TestPlayPauseStop:
         assert client.put_calls == [(TRANSPORT_MODE_PROPERTY, {"mode": "InputPreview"})]
 
 
-class TestSetTimeline:
+class TestSelectClip:
+    """select_clip() replaces the old set_timeline(clip_unique_ids: list[int])
+    — real hardware (POCKET_6K_G2/POCKET_6K_PRO v8.6, 2026-08-04) disproved
+    its whole premise: the camera has no notion of a caller-curated
+    playlist, and a POST's requested clipUniqueId doesn't select which
+    clips end up in the timeline at all — it's always every clip matching
+    the camera's *current* format. See select_clip()'s own docstring for
+    the full four-round debugging trail."""
+
     @pytest.mark.asyncio
-    async def test_raises_bmd_unsupported_when_endpoint_not_confirmed(self):
-        session = make_session(make_profile(), client=FakeRestClient({}))
+    async def test_raises_value_error_when_clip_not_found(self):
+        client = FakeRestClient({"/clips/list": {"clipList": [CLIP_1_BODY]}})
+        session = make_session(make_select_clip_profile(), client=client)
+
+        with pytest.raises(ValueError, match="clip_unique_id=99"):
+            await session.select_clip(99)
+
+    @pytest.mark.asyncio
+    async def test_raises_bmd_unsupported_when_clip_missing_codec(self):
+        clip_body = {**CLIP_1_BODY, "codecFormat": None}
+        client = FakeRestClient({"/clips/list": {"clipList": [clip_body]}})
+        session = make_session(make_select_clip_profile(), client=client)
+
+        with pytest.raises(BMDUnsupportedError, match="codec/videoFormat"):
+            await session.select_clip(1)
+
+    @pytest.mark.asyncio
+    async def test_raises_bmd_unsupported_when_video_format_unparseable(self):
+        clip_body = {**CLIP_1_BODY, "videoFormat": "not-a-real-format"}
+        client = FakeRestClient({"/clips/list": {"clipList": [clip_body]}})
+        session = make_session(make_select_clip_profile(), client=client)
+
+        with pytest.raises(BMDUnsupportedError, match="videoFormat"):
+            await session.select_clip(1)
+
+    @pytest.mark.asyncio
+    async def test_raises_bmd_unsupported_when_codec_not_in_format_names(self):
+        """Mismatched current format forces the reverse codec lookup;
+        format_names is empty, so resolve_ble_codec_name has nothing to
+        find clip 1's ProRes:Proxy in — no derivation fallback exists for
+        the reverse direction (mapping.py's own docstring)."""
+        client = FakeRestClient(
+            {
+                "/clips/list": {"clipList": [CLIP_1_BODY]},
+                FORMAT_PROPERTY: CURRENT_FORMAT_BODY,
+            }
+        )
+        session = make_session(make_select_clip_profile(format_names={}), client=client)
+
+        with pytest.raises(BMDUnsupportedError, match="format_names"):
+            await session.select_clip(1)
+
+        assert client.put_calls == []
+
+    @pytest.mark.asyncio
+    async def test_raises_bmd_unsupported_when_resolution_not_in_profile(self):
+        """Mismatched current format forces the reverse resolution lookup;
+        the profile's resolutions table has no 4096x2160 entry at all."""
+        client = FakeRestClient(
+            {
+                "/clips/list": {"clipList": [CLIP_1_BODY]},
+                FORMAT_PROPERTY: CURRENT_FORMAT_BODY,
+            }
+        )
+        session = make_session(make_select_clip_profile(resolutions={}), client=client)
+
+        with pytest.raises(BMDUnsupportedError, match="resolutions"):
+            await session.select_clip(1)
+
+        assert client.put_calls == []
+
+    @pytest.mark.asyncio
+    async def test_raises_bmd_unsupported_when_timeline_endpoint_not_confirmed(self):
+        """Format already matches (no set_camera_format call needed), so
+        this exercises the TIMELINE_PATH capability check on its own."""
+        client = FakeRestClient(
+            {
+                "/clips/list": {"clipList": [CLIP_1_BODY]},
+                FORMAT_PROPERTY: MATCHING_FORMAT_BODY,
+            }
+        )
+        session = make_session(make_select_clip_profile(timeline_confirmed=False), client=client)
 
         with pytest.raises(BMDUnsupportedError, match="timelines/0"):
-            await session.set_timeline([1, 2])
+            await session.select_clip(1)
 
     @pytest.mark.asyncio
-    async def test_clears_then_adds_all_clips_in_one_post(self):
+    async def test_skips_format_switch_when_already_matching(self):
         client = FakeRestClient(
-            {TIMELINE_PATH: {"clips": [{"clipUniqueId": 1}, {"clipUniqueId": 2}]}}
+            {
+                "/clips/list": {"clipList": [CLIP_1_BODY]},
+                FORMAT_PROPERTY: MATCHING_FORMAT_BODY,
+                TIMELINE_PATH: {"clips": [{"clipUniqueId": 1}]},
+            }
         )
-        session = make_session(make_playback_profile(), client=client)
+        session = make_session(make_select_clip_profile(), client=client)
 
-        await session.set_timeline([1, 2])
+        await session.select_clip(1)
 
+        assert client.put_calls == []
+        # Exactly one GET /system/format — select_clip's own comparison
+        # read. set_camera_format's internal read never happens because
+        # it's never called.
+        assert client.calls.count(FORMAT_PROPERTY) == 1
         assert client.delete_calls == [TIMELINE_PATH]
-        assert client.post_calls == [
-            (
-                TIMELINE_ADD_PATH,
-                {"clips": [{"clipUniqueId": 1}, {"clipUniqueId": 2}]},
-            ),
-        ]
+        assert client.post_calls == [(TIMELINE_ADD_PATH, {"clips": [{"clipUniqueId": 1}]})]
+
+    @pytest.mark.asyncio
+    async def test_switches_format_before_syncing_timeline(self):
+        """Current format is CURRENT_FORMAT_BODY's 1920x1080 — mismatched
+        with clip 1's 4096x2160p24 — so select_clip must call
+        set_camera_format("ProRes", "Proxy", "4K DCI", "24") before
+        touching /timelines/0 at all."""
+        client = FakeRestClient(
+            {
+                "/clips/list": {"clipList": [CLIP_1_BODY]},
+                FORMAT_PROPERTY: CURRENT_FORMAT_BODY,
+                "/system/supportedFormats": SUPPORTED_FORMATS_BODY_PRORES_PROXY_4K_DCI,
+                TIMELINE_PATH: {"clips": [{"clipUniqueId": 1}]},
+            }
+        )
+        session = make_session(make_select_clip_profile(), client=client)
+
+        async def deliver_event():
+            await asyncio.sleep(0.01)
+            session._router.handle_event(
+                {
+                    "type": "event",
+                    "data": {
+                        "action": "propertyValueChanged",
+                        "property": FORMAT_PROPERTY,
+                        "value": {
+                            "codec": "ProRes:Proxy",
+                            "frameRate": "24",
+                            "recordResolution": {"width": 4096, "height": 2160},
+                            "sensorResolution": {"width": 5744, "height": 3024},
+                        },
+                    },
+                }
+            )
+
+        asyncio.create_task(deliver_event())
+        await session.select_clip(1)
+
+        expected_format_body = {
+            **CURRENT_FORMAT_BODY,
+            "codec": "ProRes:Proxy",
+            "frameRate": "24",
+            "recordResolution": {"width": 4096, "height": 2160},
+            "sensorResolution": {"width": 5744, "height": 3024},
+        }
+        assert client.put_calls == [(FORMAT_PROPERTY, expected_format_body)]
+        assert client.delete_calls == [TIMELINE_PATH]
+        assert client.post_calls == [(TIMELINE_ADD_PATH, {"clips": [{"clipUniqueId": 1}]})]
 
     @pytest.mark.asyncio
     async def test_readback_extra_fields_do_not_block_a_match(self):
         """Real GET /timelines/0 body, POCKET_6K_PRO v8.6, 2026-08-04 (operator
         Postman debugging): {"clips": [{"clipUniqueId": 12, "frameCount": 5020}]}
         — an extra "frameCount" field alongside "clipUniqueId" that
-        _parse_timeline_clip_ids() must simply ignore."""
+        _parse_timeline_clip_ids() must simply ignore. Also confirms
+        membership (not exact-list equality): the real timeline holds six
+        other clips too, not just the one requested."""
+        clip_body = {**CLIP_1_BODY, "clipUniqueId": 12}
         client = FakeRestClient(
-            {TIMELINE_PATH: {"clips": [{"clipUniqueId": 12, "frameCount": 5020}]}}
+            {
+                "/clips/list": {"clipList": [clip_body]},
+                FORMAT_PROPERTY: {**MATCHING_FORMAT_BODY},
+                TIMELINE_PATH: {
+                    "clips": [
+                        {"clipUniqueId": 10, "frameCount": 118},
+                        {"clipUniqueId": 12, "frameCount": 5020},
+                        {"clipUniqueId": 9, "frameCount": 119},
+                    ]
+                },
+            }
         )
-        session = make_session(make_playback_profile(), client=client)
+        session = make_session(make_select_clip_profile(), client=client)
 
-        await session.set_timeline([12])
+        await session.select_clip(12)
 
     @pytest.mark.asyncio
     async def test_polls_until_readback_matches(self):
-        client = FakeRestClient({})
-        session = make_session(make_playback_profile(), client=client)
+        client = FakeRestClient(
+            {
+                "/clips/list": {"clipList": [CLIP_1_BODY]},
+                FORMAT_PROPERTY: MATCHING_FORMAT_BODY,
+            }
+        )
+        session = make_session(make_select_clip_profile(), client=client)
         session.verify_timeout_s = 1.0
 
         bodies = iter(
             [
                 {"clips": []},
-                {"clips": [{"clipUniqueId": 7}]},
+                {"clips": [{"clipUniqueId": 1}]},
             ]
         )
 
         async def get(path, *, api_prefixed: bool = True):
             client.calls.append(path)
-            return next(bodies)
+            if path == TIMELINE_PATH:
+                return next(bodies)
+            return client.responses[path]
 
         client.get = get
 
-        await session.set_timeline([7], poll_interval_s=0.01)
+        await session.select_clip(1, poll_interval_s=0.01)
 
     @pytest.mark.asyncio
     async def test_raises_verification_error_on_timeout(self):
-        client = FakeRestClient({TIMELINE_PATH: {"clips": []}})
-        session = make_session(make_playback_profile(), client=client)
+        client = FakeRestClient(
+            {
+                "/clips/list": {"clipList": [CLIP_1_BODY]},
+                FORMAT_PROPERTY: MATCHING_FORMAT_BODY,
+                TIMELINE_PATH: {"clips": []},
+            }
+        )
+        session = make_session(make_select_clip_profile(), client=client)
         session.verify_timeout_s = 0.1
 
-        with pytest.raises(BMDVerificationError, match="set_timeline"):
-            await session.set_timeline([7])
+        with pytest.raises(BMDVerificationError, match="select_clip"):
+            await session.select_clip(1)
 
     @pytest.mark.asyncio
     async def test_continues_to_post_when_delete_returns_501(self):
@@ -1717,16 +1959,22 @@ class TestSetTimeline:
         first run): DELETE /timelines/0 returns 501 on this firmware. A
         confirmed 501 from the DELETE specifically must not block the
         POST that follows."""
-        client = FakeRestClient({TIMELINE_PATH: {"clips": [{"clipUniqueId": 1}]}})
+        client = FakeRestClient(
+            {
+                "/clips/list": {"clipList": [CLIP_1_BODY]},
+                FORMAT_PROPERTY: MATCHING_FORMAT_BODY,
+                TIMELINE_PATH: {"clips": [{"clipUniqueId": 1}]},
+            }
+        )
 
         async def delete(path):
             client.delete_calls.append(path)
             raise BMDUnsupportedError(f"[cam.local] DELETE {path} — not implemented (501)")
 
         client.delete = delete
-        session = make_session(make_playback_profile(), client=client)
+        session = make_session(make_select_clip_profile(), client=client)
 
-        await session.set_timeline([1])
+        await session.select_clip(1)
 
         assert client.delete_calls == [TIMELINE_PATH]
         assert client.post_calls == [
@@ -1735,13 +1983,18 @@ class TestSetTimeline:
 
     @pytest.mark.asyncio
     async def test_other_delete_errors_still_propagate(self):
-        client = FakeRestClient({})
+        client = FakeRestClient(
+            {
+                "/clips/list": {"clipList": [CLIP_1_BODY]},
+                FORMAT_PROPERTY: MATCHING_FORMAT_BODY,
+            }
+        )
 
         async def delete(path):
             raise BMDRestError(f"[cam.local] DELETE {path} -> 500", status=500, body=None)
 
         client.delete = delete
-        session = make_session(make_playback_profile(), client=client)
+        session = make_session(make_select_clip_profile(), client=client)
 
         with pytest.raises(BMDRestError):
-            await session.set_timeline([1])
+            await session.select_clip(1)
