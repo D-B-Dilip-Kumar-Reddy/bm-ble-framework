@@ -48,6 +48,7 @@ increasing filenames (`..._S009.braw`, then `..._S010.braw`) instead of repeatin
 `set_timeline()`, `enter_playback()`/`exit_playback()`, `play()`/`pause()`/`stop()`, and
 `shuttle()`/`seek()` (Phase 7 — playback and gallery, entirely new capability BLE never
 reached) are implemented, unit-tested, and have a new `examples/rest_playback.py`.
+
 **First real-hardware run, `POCKET_6K_G2 v8.6`, 2026-08-04:** `set_timeline()` hit two real
 defects back to back on its very first call. `DELETE /timelines/0` returns `501` on this
 firmware, not just theoretically unswept but actually confirmed unimplemented — fixed by
@@ -55,22 +56,33 @@ catching that specific `501` and proceeding straight to `POST`ing. The `POST` it
 came back `400 {"error": "Invalid clips data"}` against the original one-request-per-clip,
 bare-`{"clipUniqueId": id}` body — fixed by switching to one request carrying all clips
 under a `"clips"` key, matching `GET /timelines/0`'s own confirmed response shape (see
-`set_timeline()`'s own section below for both findings). The run stopped there this time,
-so whether the new body is accepted, and whether `enter_playback()` onward work at all,
-remain unexercised.
+`set_timeline()`'s own section below for both findings). The run stopped there, so
+`enter_playback()` onward remained unexercised by this run.
+
+**Second real-hardware evidence, `POCKET_6K_PRO v8.6`, same day, gathered by operator
+testing directly rather than through this script:** `PUT /transports/0/playback`'s real
+body is `{"type": "Play", "loop": bool, "singleClip": bool, "speed": float,
+"position": int}` — the migration plan's `"speed"`-only hypothesis was incomplete, and its
+`"Shuttle"`/`"Jog"` guess for `type` and `"timecode"`/`"clip"` guess for the position field
+were both wrong. `shuttle()`/`seek()`/`_put_playback()` are rewritten around the real
+shape as a read-modify-write (see "`shuttle(speed)` / `seek(position)`" below). The same
+session also surfaced an operational precondition observed on the camera body: playback
+only works when the camera's current format matches the clip's recorded format — see
+`enter_playback()`'s section below. Neither finding came from `set_timeline()`'s own
+blocked run, so whether `set_timeline()`'s new `POST` body is itself accepted remains
+unconfirmed.
+
 Two of the four endpoints Phase 7 needs
 (`/transports/0` and `/transports/0/playback`) have a real same-value-`PUT`-confirmed
-`204` from the Phase 0 sweep (`docs/rest/transport.md`); the other two
+`204` from the Phase 0 sweep (`docs/rest/transport.md`), and `/transports/0/playback` now
+also has a real changing-write sample (above); the other two
 (`/timelines/0`/`/timelines/0/add`, needed by `set_timeline()`) were never even
 same-value-probed — `probe_endpoints.py`'s `NEVER_WRITE` list skips them entirely, the same
 position `/transports/0/record` was in before Phase 4 proved it out. `play()`/`stop()` are
 deliberately built as aliases (`shuttle(1.0)`/`exit_playback()`) rather than touching the
 dedicated `/transports/0/play`/`/transports/0/stop` triggers, which have the same
 zero-write-evidence problem as the timeline endpoints — see "`play()`/`pause()`/`stop()`"
-below for the full reasoning. `shuttle()`/`seek()`'s request-body field names
-(`"speed"`, `"timecode"`/`"clip"`) are this migration's own plan-derived hypotheses, not
-independently captured samples the way `/system/format`'s or `/transports/0/record`'s were
-— see "`shuttle(speed)`/`seek(timecode)`" below.
+below for the full reasoning.
 
 ## Overview
 
@@ -608,6 +620,15 @@ doesn't special-case that itself, since the camera's own rejection of an invalid
 already the actual guard — it just surfaces as a failed verification rather than a
 `ValueError`.
 
+**Format precondition, observed physically on the camera body (`POCKET_6K_PRO v8.6`,
+2026-08-04):** a clip only plays if the camera's *current* codec/quality/resolution/fps
+matches the format the clip was recorded with — a mismatch requires switching format
+(`set_camera_format()`, Phase 5) to the clip's own format first, observed by operating the
+camera directly rather than through this REST surface. Nothing in `enter_playback()` or
+`set_timeline()` checks this yet: `Clip.codec`/`Clip.video_format` (Phase 3) are not
+mapped onto `get_format()`'s vocabulary, so a mismatched `play()`/`shuttle()` is expected
+to simply dual-check-fail with a `BMDVerificationError` rather than naming the mismatch.
+
 ### `play()` / `pause()` / `stop()`
 
 Thin aliases: `play()` is `shuttle(1.0)`, `pause()` is `shuttle(0.0)`, `stop()` is
@@ -620,15 +641,16 @@ read sweep) but sit in `probe_endpoints.py`'s `NEVER_WRITE` list — meaning, un
 `/transports/0` and `/transports/0/playback`, **neither has ever had its `PUT` exercised at
 all**, not even a same-value probe. Their request body (a void trigger needs *some* body —
 `{}`? nothing?) and what a successful call would even look like on readback are both
-unknown. `/transports/0/playback`'s `PUT` is confirmed writable (`204`, same-value probe),
-so `play()`/`pause()` route through it instead — trading a small amount of fidelity to the
-plan's original API shape for a write path with real, if partial, evidence behind it.
-`stop()` uses `exit_playback()` for the identical reason, since `_set_transport_mode`'s body
-is sweep-confirmed real. This is a considered scope reduction, not a silent one — if a real
+unknown. `/transports/0/playback`'s `PUT` is confirmed writable (`204`, same-value probe,
+and now a real changing-write sample too — see `shuttle()`/`seek()` below), so
+`play()`/`pause()` route through it instead — trading a small amount of fidelity to the
+plan's original API shape for a write path with real evidence behind it. `stop()` uses
+`exit_playback()` for the identical reason, since `_set_transport_mode`'s body is
+sweep-confirmed real. This is a considered scope reduction, not a silent one — if a real
 hardware run shows `/transports/0/play`/`/transports/0/stop` behave differently from
 "speed 1.0" / "leave playback mode," these aliases will need revisiting.
 
-### `shuttle(speed)` / `seek(timecode, clip=0)`
+### `shuttle(speed)` / `seek(position)`
 
 Both `PUT /transports/0/playback`, dual-check verified via the generic `_put_playback()`
 helper: a WS `propertyValueChanged` event on `/transports/0/playback` primary, a `GET`
@@ -636,22 +658,38 @@ readback secondary, checked with `_contains()` — a structural "does the report
 contain every key/value pair I just sent" match, not a named-field parser like
 `_recording_flag`/`_format_matches`.
 
-`shuttle(speed)` sends `{"speed": speed}` — positive shuttles forward, negative backward,
-magnitude sets the rate (the migration plan's own hypothesis: `2.0`/`-1.0` for
-forward/backward, `0` for pause). `seek(timecode, clip=0)` sends
-`{"timecode": timecode, "clip": clip}`, reusing the exact field names `GET
-/transports/0/timecode` already confirmed real (`{"clip": 0, "timecode": 274153986}`,
-`docs/rest/transport.md`) rather than inventing a `"position"` field the plan never pinned
-down.
+**Real body, `POCKET_6K_PRO v8.6`, 2026-08-04 (operator testing directly on real
+hardware — this endpoint's first captured *changing* write, distinct from
+`probe_endpoints.py`'s own same-value sweep):**
+`{"type": "Play", "loop": bool, "singleClip": bool, "speed": float, "position": int}`.
+`type: "Play"` covered both a paused view (`speed=0.0` — the playback view opens, nothing
+moves) and normal forward playback (`speed=1.0`); no other `type` value has been observed,
+which retires the migration plan's earlier `"Shuttle"`/`"Jog"` guess for this field as
+unconfirmed. `position` is the playback position on the timeline, in video frames — this
+also disproves an earlier hypothesis that `/playback` reused `GET /transports/0/timecode`'s
+own `{"timecode": ..., "clip": ...}` field names; the real field is `"position"`, with no
+separate `"clip"` field at all. `seek()` was renamed from `seek(timecode, clip=0)` to
+`seek(position)` to match.
 
-**Why `_contains()` instead of a named parser.** Unlike `/system/format` or
-`/transports/0/record`, `docs/rest/transport.md` never captured a real sample of
-`/transports/0/playback`'s body — only that `GET` returns `200` and `PUT` returns `204` on
-a same-value probe. `"speed"`/`"timecode"`/`"clip"` are this migration's plan-derived
-hypotheses about the field names, not sniffed samples. `_contains()` doesn't pretend to
-know more than that: if the real field is spelled differently, the reported body simply
-won't contain the expected key/value pair, verification correctly fails, and
-`BMDVerificationError` is raised — never a false "confirmed."
+**`_put_playback()` is now a read-modify-write**, not a bare partial `PUT`: it `GET`s the
+current body, overlays only the fields the caller is changing, and `PUT`s the merged
+result — the same discipline `set_camera_format` uses for `/system/format` (design
+principle 1), so `shuttle()` doesn't reset `loop`/`singleClip`/`position` to some invented
+default, and `seek()` doesn't reset `type`/`loop`/`singleClip`/`speed`. `type`, `loop`, and
+`singleClip` are not yet exposed as their own parameters; every write through `shuttle()`/
+`seek()` leaves them at whatever the preceding `GET` reported.
+
+`shuttle(speed)` sends `{"speed": speed}` as its overlay — positive shuttles forward,
+negative backward, magnitude sets the rate; `0.0`/`1.0` are real-hardware-confirmed, other
+magnitudes are an unconfirmed extrapolation from the same field. `seek(position)` sends
+`{"position": position}`.
+
+**Why `_contains()` instead of a named parser.** Even with a real sample now in hand, the
+confirmed body was never independently captured as a `GET /transports/0/playback` response
+shape on its own (only through the request/observed-behavior pairing above) — `_contains()`
+checks the reported body contains every key/value pair the call actually changed, not the
+full merged body, so a field this call didn't touch can't cause a false failure or a false
+"confirmed" either way.
 
 ---
 
@@ -739,13 +777,17 @@ Phase 7's writes (`TestEnterExitPlayback`, `TestShuttleAndSeek`, `TestPlayPauseS
 `make_profile_with_record_confirmed()`'s shape for a `NEVER_WRITE` endpoint).
 `FakeRestClient` gained `.delete()`/`.post()` for `set_timeline()`'s tests. Coverage
 includes: the capability-check `BMDUnsupportedError`s for all four write paths; both
-dual-check paths for `enter_playback`/`exit_playback`/`shuttle`/`seek`; that `seek()`
-defaults `clip` to `0` but respects an explicit override; that `play()`/`pause()`/`stop()`
-send exactly the bodies their docstrings claim (`{"speed": 1.0}`/`{"speed":
-0.0}`/`{"mode": "InputPreview"}`); `set_timeline()`'s delete-then-post-per-id sequencing,
-its poll-until-match behavior (a custom `client.get` returning a different body each call,
-the same technique `set_camera_format`'s own GET-readback tests use), and its
-`BMDVerificationError` on a poll that never matches within `verify_timeout_s`.
+dual-check paths for `enter_playback`/`exit_playback`/`shuttle`/`seek`; that `shuttle()`/
+`seek()` merge their one changed field into whatever `_put_playback()`'s initial `GET`
+returned rather than sending a bare partial body — `test_shuttle_merges_speed_into_current_body`/
+`test_seek_merges_position_into_current_body` assert the full merged body reaches `PUT`,
+confirmed via a delivered WS event since `FakeRestClient`'s canned `GET` can't reflect a
+write it never actually applied; that `play()`/`pause()`/`stop()` send exactly the bodies
+their docstrings claim (`{"speed": 1.0}`/`{"speed": 0.0}`/`{"mode": "InputPreview"}`);
+`set_timeline()`'s delete-then-single-post sequencing (one `POST` carrying every clip under
+`"clips"`, not one per clip), its poll-until-match behavior (a custom `client.get` returning
+a different body each call, the same technique `set_camera_format`'s own GET-readback tests
+use), and its `BMDVerificationError` on a poll that never matches within `verify_timeout_s`.
 
 `tests/unit/tools/rest/test_rest_sweep_camera_format.py` covers
 `tools/rest/sweep_camera_format.py` separately, since it's a standalone script rather than
@@ -802,3 +844,11 @@ timestamp, rather than the first one found in ascending order.
   endpoints — see "`play()`/`pause()`/`stop()`" above for why. If a real hardware run shows
   the dedicated triggers behave meaningfully differently, this is the first place to
   revisit.
+- **No `type`/`loop`/`singleClip` parameters, and no format-precondition check.**
+  `/transports/0/playback`'s real body carries `type`/`loop`/`singleClip` fields beyond
+  `speed`/`position` (see "`shuttle(speed)` / `seek(position)`" above); this session
+  doesn't expose them yet, and every write preserves whatever the preceding `GET` reported.
+  Separately, the camera body itself refuses to play a clip whose format doesn't match the
+  camera's current format — `enter_playback()`'s docstring documents this, but nothing
+  checks it before `set_timeline()`/`play()` are called, since `Clip`'s format fields
+  aren't yet mapped onto `get_format()`'s vocabulary.

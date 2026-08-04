@@ -54,7 +54,8 @@
       "status": 200,
       "supported": true,
       "put_status": 204,
-      "put_supported": true
+      "put_supported": true,
+      "notes": "Body shape not independently confirmed on this camera — this is POCKET_6K_PRO v8.6's own real-hardware finding (operator testing, 2026-08-04), carried here only because both cameras share firmware v8.6: {\"type\": \"Play\", \"loop\": bool, \"singleClip\": bool, \"speed\": float, \"position\": int}. See the POCKET_6K_PRO v8.6 rest profile's own note on this same path for the full evidentiary record, and design principle 6 on why this still isn't the same as verifying on this camera directly."
     },
     "/transports/0/record": {
       "status": 200,

@@ -1447,9 +1447,11 @@ class TestEnterExitPlayback:
 
 
 class TestShuttleAndSeek:
-    """shuttle()/seek() -> _put_playback(), the generic structural dual-check
-    (_contains) rather than a named-field parser — see PLAYBACK_PROPERTY's
-    own docstring for why."""
+    """shuttle()/seek() -> _put_playback(), a read-modify-write over the
+    real confirmed body ({"type", "loop", "singleClip", "speed",
+    "position"}, POCKET_6K_PRO v8.6, 2026-08-04) verified via the generic
+    structural dual-check (_contains) against only the fields each call
+    asked to change — see _put_playback's own docstring for why."""
 
     @pytest.mark.asyncio
     async def test_raises_bmd_unsupported_when_endpoint_not_confirmed(self):
@@ -1460,7 +1462,7 @@ class TestShuttleAndSeek:
 
     @pytest.mark.asyncio
     async def test_shuttle_confirmed_by_ws_event_primary(self):
-        client = FakeRestClient({})
+        client = FakeRestClient({PLAYBACK_PROPERTY: {"speed": 1.0}})
         session = make_session(make_playback_profile(), client=client)
 
         async def deliver_event():
@@ -1480,7 +1482,60 @@ class TestShuttleAndSeek:
         await session.shuttle(2.0)
 
         assert client.put_calls == [(PLAYBACK_PROPERTY, {"speed": 2.0})]
-        assert PLAYBACK_PROPERTY not in client.calls
+        # One GET — the initial read used to build the merged body — and no
+        # second (secondary readback), since the WS event already confirmed.
+        assert client.calls == [PLAYBACK_PROPERTY]
+
+    @pytest.mark.asyncio
+    async def test_shuttle_merges_speed_into_current_body(self):
+        """The fix for the real 400 this endpoint's sibling (set_timeline)
+        hit: never send a bare partial body. shuttle() must preserve
+        type/loop/singleClip/position from the preceding GET, changing only
+        speed. FakeRestClient's GET is a static canned value, so the
+        secondary readback below would never itself reflect the merged
+        write — confirmation comes via a WS event instead, same as
+        test_shuttle_confirmed_by_ws_event_primary."""
+        client = FakeRestClient(
+            {
+                PLAYBACK_PROPERTY: {
+                    "type": "Play",
+                    "loop": True,
+                    "singleClip": False,
+                    "speed": 1.0,
+                    "position": 0,
+                }
+            }
+        )
+        session = make_session(make_playback_profile(), client=client)
+
+        async def deliver_event():
+            await asyncio.sleep(0.01)
+            session._router.handle_event(
+                {
+                    "type": "event",
+                    "data": {
+                        "action": "propertyValueChanged",
+                        "property": PLAYBACK_PROPERTY,
+                        "value": {"speed": 2.0},
+                    },
+                }
+            )
+
+        asyncio.create_task(deliver_event())
+        await session.shuttle(2.0)
+
+        assert client.put_calls == [
+            (
+                PLAYBACK_PROPERTY,
+                {
+                    "type": "Play",
+                    "loop": True,
+                    "singleClip": False,
+                    "speed": 2.0,
+                    "position": 0,
+                },
+            )
+        ]
 
     @pytest.mark.asyncio
     async def test_shuttle_backward_confirmed_by_get_readback_secondary(self):
@@ -1493,24 +1548,52 @@ class TestShuttleAndSeek:
         assert client.put_calls == [(PLAYBACK_PROPERTY, {"speed": -1.0})]
 
     @pytest.mark.asyncio
-    async def test_seek_sends_timecode_and_clip(self):
-        client = FakeRestClient({PLAYBACK_PROPERTY: {"timecode": 12345, "clip": 0}})
+    async def test_seek_sends_position(self):
+        client = FakeRestClient({PLAYBACK_PROPERTY: {"position": 12345}})
         session = make_session(make_playback_profile(), client=client)
         session.verify_timeout_s = 0.05
 
         await session.seek(12345)
 
-        assert client.put_calls == [(PLAYBACK_PROPERTY, {"timecode": 12345, "clip": 0})]
+        assert client.put_calls == [(PLAYBACK_PROPERTY, {"position": 12345})]
 
     @pytest.mark.asyncio
-    async def test_seek_respects_explicit_clip(self):
-        client = FakeRestClient({PLAYBACK_PROPERTY: {"timecode": 500, "clip": 2}})
+    async def test_seek_merges_position_into_current_body(self):
+        client = FakeRestClient(
+            {
+                PLAYBACK_PROPERTY: {
+                    "type": "Play",
+                    "loop": False,
+                    "singleClip": True,
+                    "speed": 0.0,
+                    "position": 0,
+                }
+            }
+        )
         session = make_session(make_playback_profile(), client=client)
-        session.verify_timeout_s = 0.05
 
-        await session.seek(500, clip=2)
+        async def deliver_event():
+            await asyncio.sleep(0.01)
+            session._router.handle_event(
+                {
+                    "type": "event",
+                    "data": {
+                        "action": "propertyValueChanged",
+                        "property": PLAYBACK_PROPERTY,
+                        "value": {"position": 500},
+                    },
+                }
+            )
 
-        assert client.put_calls == [(PLAYBACK_PROPERTY, {"timecode": 500, "clip": 2})]
+        asyncio.create_task(deliver_event())
+        await session.seek(500)
+
+        assert client.put_calls == [
+            (
+                PLAYBACK_PROPERTY,
+                {"type": "Play", "loop": False, "singleClip": True, "speed": 0.0, "position": 500},
+            )
+        ]
 
     @pytest.mark.asyncio
     async def test_raises_verification_error_when_readback_missing_expected_fields(self):

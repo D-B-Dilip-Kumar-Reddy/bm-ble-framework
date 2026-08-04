@@ -987,7 +987,25 @@ class RestCameraSession:
     async def enter_playback(self) -> None:
         """Switch the camera into playback mode — `PUT /transports/0
         {"mode": "Output"}`. `set_timeline()` should be called first; there
-        is nothing to show otherwise."""
+        is nothing to show otherwise.
+
+        **Format precondition, observed physically on the camera body
+        (`POCKET_6K_PRO v8.6`, 2026-08-04):** a clip only plays if the
+        camera's *current* codec/quality/resolution/fps matches the format
+        the clip was recorded with. If they differ, the camera body
+        requires switching format (`set_camera_format()`, Phase 5) to match
+        the clip *before* playback will do anything. This was observed by
+        operating the camera directly, not yet through this REST surface,
+        but there's no reason to expect a physical-media constraint like
+        this to depend on which control surface issued the command.
+        **Not enforced here** — `Clip.codec`/`Clip.video_format` (Phase 3)
+        are not yet mapped onto `get_format()`'s vocabulary, so this
+        session cannot check the precondition for you. A mismatched
+        `play()`/`shuttle()` call is expected to dual-check-fail with a
+        `BMDVerificationError` (nothing observably changes) rather than a
+        clearer diagnosis naming the mismatch. See docs/rest/session.md's
+        Phase 7 section.
+        """
         await self._set_transport_mode("Output")
 
     async def exit_playback(self) -> None:
@@ -1062,39 +1080,68 @@ class RestCameraSession:
         await self.shuttle(0.0)
 
     async def shuttle(self, speed: float) -> None:
-        """`PUT /transports/0/playback {"speed": speed}` — positive shuttles
-        forward, negative shuttles backward, magnitude sets the rate (the
-        migration plan's own hypothesis: `2.0`/`-1.0` for forward/backward,
-        `0` for pause). Dual-check verified: a WS `propertyValueChanged`
-        event on `PLAYBACK_PROPERTY` primary, a `GET` readback secondary,
-        checking the reported body contains `{"speed": speed}` via the
-        generic `_contains` helper.
-
-        **Unconfirmed field name.** `docs/rest/transport.md` never captured
-        a real sample of this endpoint's body — only that `GET` returns
-        `200` and `PUT` returns `204` on a same-value probe (design
-        principle 6's REST sibling: existence and same-value-accepted are
-        confirmed, a *changing* write's actual field names are not, the
-        same gap `/system/format` had before Phase 5's first real
-        retarget). If the real field is spelled differently, this
-        correctly raises `BMDVerificationError` instead of reporting a
-        success it cannot attest to.
+        """`PUT /transports/0/playback` with `speed` merged into the current
+        body (see `_put_playback` for the confirmed shape and the
+        read-modify-write discipline) — positive shuttles forward, negative
+        shuttles backward, magnitude sets the rate; `0.0` pauses at the
+        current position. `speed` and its `0.0`/`1.0` behaviour are
+        real-hardware-confirmed (`POCKET_6K_PRO v8.6`, 2026-08-04); other
+        magnitudes (e.g. `2.0`, `-1.0`) are an unconfirmed extrapolation
+        from the same field. Dual-check verified: a WS
+        `propertyValueChanged` event on `PLAYBACK_PROPERTY` primary, a
+        `GET` readback secondary, checking the reported body contains
+        `{"speed": speed}` via the generic `_contains` helper.
         """
         await self._put_playback({"speed": speed}, action=f"shuttle(speed={speed})")
 
-    async def seek(self, timecode: int, *, clip: int = 0) -> None:
-        """`PUT /transports/0/playback {"timecode": timecode, "clip": clip}`
-        — reuses the exact field names `GET /transports/0/timecode`
-        already confirmed real (`{"clip": 0, "timecode": 274153986}`,
-        `docs/rest/transport.md`), on the hypothesis that seeking within
-        `/playback` shares timecode's own vocabulary rather than a new
-        `"position"` field the migration plan never pinned down. Same
-        dual-check, and same unconfirmed-field-name caveat, as `shuttle()`.
-        """
-        body = {"timecode": timecode, "clip": clip}
-        await self._put_playback(body, action=f"seek(timecode={timecode}, clip={clip})")
+    async def seek(self, position: int) -> None:
+        """`PUT /transports/0/playback` with `position` — playback position
+        on the timeline, in video frames — merged into the current body
+        (see `_put_playback`). Field name and units are
+        real-hardware-confirmed (`POCKET_6K_PRO v8.6`, 2026-08-04). Same
+        dual-check as `shuttle()`.
 
-    async def _put_playback(self, body: dict[str, Any], *, action: str) -> None:
+        Supersedes an earlier, now-disproven hypothesis that this endpoint
+        reused `GET /transports/0/timecode`'s own
+        `{"timecode": ..., "clip": ...}` field names — the real field is
+        `"position"`, an integer frame count, with no separate `clip`
+        field at all.
+        """
+        await self._put_playback({"position": position}, action=f"seek(position={position})")
+
+    async def _put_playback(self, changes: dict[str, Any], *, action: str) -> None:
+        """Read-modify-write `/transports/0/playback`: `GET` the current
+        body, overlay only `changes`, `PUT` the merged result — mirroring
+        `set_camera_format`'s merge discipline (design principle 1) rather
+        than sending a bare partial body, so fields this call isn't asked
+        to touch keep their last-known value instead of being reset to an
+        invented default.
+
+        **Confirmed real body, `POCKET_6K_PRO v8.6`, 2026-08-04**
+        (operator testing directly against real hardware — this endpoint's
+        first captured *changing* write, distinct from
+        `tools/rest/probe_endpoints.py`'s own same-value sweep which only
+        proved the endpoint exists):
+        `{"type": "Play", "loop": bool, "singleClip": bool,
+        "speed": float, "position": int}`. `type: "Play"` covered both a
+        paused view (`speed=0.0` — playback view opens, nothing moves) and
+        normal forward playback (`speed=1.0`); no other `type` value has
+        been observed. This retires the migration plan's earlier
+        `"Shuttle"`/`"Jog"` guess for this field as unconfirmed —
+        superseded by this real sample, which used `"Play"` for both
+        tested speeds. `loop` toggles looping the whole timeline;
+        `singleClip` toggles looping just the current clip; `position` is
+        documented (by the same real-hardware source) as the playback
+        position on the timeline in video frames. `type`/`loop`/
+        `singleClip` are not yet exposed as their own parameters here —
+        every write through this method leaves them at whatever the
+        preceding `GET` reported, via the merge above.
+
+        Verification checks the reported body contains `changes` (the
+        fields this call actually asked to change), not the full merged
+        body — the initial `GET`'s other fields are context, not something
+        this call attests to.
+        """
         endpoint = self.profile.rest_endpoint(PLAYBACK_PROPERTY)
         if endpoint is None or not endpoint.put_supported:
             raise BMDUnsupportedError(
@@ -1102,15 +1149,17 @@ class RestCameraSession:
                 f"{self.profile.model_key} {self.profile.firmware} rest/ profile — run "
                 "tools/rest/probe_endpoints.py --probe-writes against this camera first."
             )
+        current = await self._rest_client.get(PLAYBACK_PROPERTY)
+        body = {**current, **changes} if isinstance(current, dict) else dict(changes)
         self._router.arm(PLAYBACK_PROPERTY)
         await self._rest_client.put(PLAYBACK_PROPERTY, body)
         event_value = await self._router.wait_for(PLAYBACK_PROPERTY, timeout=self.verify_timeout_s)
-        confirmed = _contains(event_value, body)
+        confirmed = _contains(event_value, changes)
         if not confirmed:
             readback = await self._rest_client.get(PLAYBACK_PROPERTY)
-            confirmed = _contains(readback, body)
+            confirmed = _contains(readback, changes)
         if not confirmed:
             raise BMDVerificationError(
                 f"{action}: neither a WS '{PLAYBACK_PROPERTY}' propertyValueChanged event "
-                f"nor a GET readback confirmed {body} within {self.verify_timeout_s}s"
+                f"nor a GET readback confirmed {changes} within {self.verify_timeout_s}s"
             )

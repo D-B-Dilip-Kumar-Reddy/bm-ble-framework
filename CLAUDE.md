@@ -186,9 +186,19 @@ src/bmd_camera/
                               # under a "clips" key, matching GET /timelines/0's own
                               # confirmed shape) — but stopped there, so that new body
                               # shape and everything past set_timeline() remain
-                              # not-yet-real-hardware-confirmed; see docs/rest/session.md
-                              # for exactly which endpoints/field names are sweep-confirmed
-                              # vs. this migration's own plan-derived hypotheses
+                              # not-yet-real-hardware-confirmed. Separately, operator
+                              # testing directly on POCKET_6K_PRO v8.6 the same day found
+                              # /transports/0/playback's real body ({"type", "loop",
+                              # "singleClip", "speed", "position"} — not just "speed"),
+                              # retiring the plan's "Shuttle"/"Jog" type guess and
+                              # "timecode"/"clip" position guess; shuttle()/seek()/
+                              # _put_playback() now read-modify-write that real shape, and
+                              # seek() takes position (frames) instead of timecode/clip.
+                              # Also observed physically: playback requires the camera's
+                              # current format to match the clip's own format, not yet
+                              # checked in code — see docs/rest/session.md for exactly
+                              # which endpoints/field names are sweep-confirmed vs. this
+                              # migration's own plan-derived hypotheses
     mapping.py                 # Codec name derivation between the BLE profile's vocabulary
                               # and REST's own spelling — confirmed strings always win
                               # (design principle 1); this is a fallback seed only

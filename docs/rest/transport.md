@@ -701,6 +701,23 @@ never got past the (then-rejected) `POST` to find out. Both remain open until a 
 far enough to observe them. See docs/rest/session.md's `set_timeline()` section for the
 full evidentiary writeup.
 
+**Third real-hardware evidence, `POCKET_6K_PRO v8.6`, same day, gathered by operator
+testing directly (`PUT`/`GET` by hand, not through this repo's own tooling):**
+`/transports/0/playback`'s real body is `{"type": "Play", "loop": bool,
+"singleClip": bool, "speed": float, "position": int}` — richer than the migration plan's
+`"speed"`-only guess, and it disproves two more of the plan's hypotheses outright: `type`
+was `"Play"` for both a paused view (`speed=0.0`) and normal playback (`speed=1.0`), never
+`"Shuttle"`/`"Jog"` as the plan guessed, and the position field is `"position"` (an integer
+frame count), not `"timecode"`/`"clip"` borrowed from `/transports/0/timecode`.
+`RestCameraSession.shuttle()`/`seek()`/`_put_playback()` are rewritten around this real
+shape as a read-modify-write, matching `set_camera_format`'s own merge discipline; `seek()`
+now takes `position` instead of `timecode`/`clip`. The same session also surfaced an
+operational precondition observed directly on the camera body: a clip only plays when the
+camera's current codec/quality/resolution/fps matches the clip's own recorded format — see
+docs/rest/session.md's `enter_playback()` section. Neither finding came from a run of
+`set_timeline()` itself, so whether `set_timeline()`'s new `POST` body from the previous
+finding is accepted remains a separate, still-open question.
+
 ---
 
 ## Library surface (Phase 2)

@@ -13,17 +13,24 @@ VERIFICATION IS BY EYE, NOT BY THIS SCRIPT — read this before running
 --------------------------------------------------------------------------------
 Every write here is verified the same dual-check way as every other
 RestCameraSession write (a WS propertyValueChanged event primary, a GET
-readback secondary, BMDVerificationError if neither confirms) — but unlike
-record_start/record_stop or set_camera_format, Phase 7's exact field
-shapes (/transports/0/playback's body, /timelines/0's own response shape)
-have never been captured on real hardware. `set_timeline`/`enter_playback`/
-`exit_playback`/`play`/`pause`/`stop`/`shuttle`/`seek` all say so in their
-own docstrings — read those before trusting a "confirmed" line from this
-script as more than "the write and this session's best guess at
-verification both went through." Watch the camera's own screen for the
+readback secondary, BMDVerificationError if neither confirms). Two field
+shapes are now real-hardware-confirmed (POCKET_6K_PRO v8.6, 2026-08-04):
+/transports/0/playback's body ({"type", "loop", "singleClip", "speed",
+"position"}, see RestCameraSession._put_playback's docstring) and
+/timelines/0/add's POST body ({"clips": [{"clipUniqueId": ...}, ...]}, see
+set_timeline's docstring). Everything else in Phase 7 — whether that POST
+body is itself accepted, and every step from enter_playback() onward — is
+still unexercised by a real run. Watch the camera's own screen for the
 real ground truth, the same way docs/rest/transport.md's own Phase 7 note
 says to (`python examples/rest_playback.py` — operator watches the camera
 screen).
+
+FORMAT PRECONDITION — observed physically on the camera body
+(POCKET_6K_PRO v8.6, 2026-08-04): a clip only plays if the camera's
+*current* codec/quality/resolution/fps matches the format the clip was
+recorded with. If this script's chosen clip doesn't match, switch the
+camera's format first (RestCameraSession.set_camera_format, Phase 5) —
+this script does not do that for you. See enter_playback()'s docstring.
 
 Usage:
     python examples/rest_playback.py

@@ -54,7 +54,8 @@
       "status": 200,
       "supported": true,
       "put_status": 204,
-      "put_supported": true
+      "put_supported": true,
+      "notes": "Real changing-write body captured by operator testing directly on real hardware, 2026-08-04 (not tools/rest/probe_endpoints.py's own same-value sweep, which only proved this endpoint exists): {\"type\": \"Play\", \"loop\": bool, \"singleClip\": bool, \"speed\": float, \"position\": int}. type=\"Play\" with speed=0.0 opened the playback view without playing; type=\"Play\" with speed=1.0 played forward at normal speed. No other type value observed. position is the playback position on the timeline in video frames. Also observed physically on the camera body, same session: a clip only plays if the camera's current codec/quality/resolution/fps matches the clip's own recorded format — mismatched format requires switching format first. See src/bmd_camera/rest/session.py's _put_playback()/enter_playback() and docs/rest/session.md's Phase 7 section."
     },
     "/transports/0/record": {
       "status": 200,
