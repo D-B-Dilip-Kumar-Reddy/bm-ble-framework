@@ -1001,7 +1001,14 @@ timestamp, rather than the first one found in ascending order.
   that still raises `BMDUnsupportedError`. Whether `PUT /system/format` can set a sensor
   resolution *other than* one already paired with the requested codec/resolution/fps (the
   original "Sensor Area" selector question, docs/rest/transport.md) remains a separate,
-  still-open question this method doesn't attempt to answer.
+  still-open question this method doesn't attempt to answer. `select_clip()` inherits this
+  gap directly and has no `sensor_resolution` parameter of its own to work around it —
+  confirmed real, `POCKET_6K_G2 v8.6`, 2026-08-04: `select_clip()` on a clip whose own
+  `ProRes:Proxy @ 1920x1080p23.98` format is exactly this ambiguous combination raised the
+  same `BMDUnsupportedError`, since `Clip` (from `clips()`) carries no `sensorResolution`
+  field to disambiguate with even if `select_clip()` wanted to pass one through. A clip
+  recorded at one of this ambiguous combination's resolutions cannot currently be selected
+  unless the camera already happens to be at a matching format.
 - **No storage precondition on `record_stop()`.** Only `record_start()` checks
   `storage_state()` — matching CLAUDE.md design principle 10's wording ("before recording
   or photo capture"), which names starting an operation, not ending one.

@@ -35,6 +35,16 @@ examples/rest_read_state.py first, or check a prior rest_playback.py run's
 have different codec/resolution/fps (Clip.codec / Clip.video_format from
 clips()) — the script warns if they don't, since the test is meaningless
 otherwise.
+
+PICK CLIPS select_clip() CAN ACTUALLY SWITCH TO: some (codec, resolution,
+fps) combinations pair with more than one sensorResolution in
+GET /system/supportedFormats (real case, POCKET_6K_G2 v8.6: ProRes at
+1920x1080 pairs with three) — select_clip() has no way to disambiguate
+these (see its own docstring) and raises BMDUnsupportedError rather than
+guess. Avoid clips recorded at a known-ambiguous resolution; a clip whose
+resolution/codec pairs with exactly one sensorResolution (most BRAW
+resolutions, per the real sweep in docs/rest/transport.md) switches
+cleanly.
 """
 
 import asyncio

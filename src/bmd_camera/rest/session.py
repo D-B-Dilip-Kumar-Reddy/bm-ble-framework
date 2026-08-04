@@ -1045,6 +1045,19 @@ class RestCameraSession:
         profile `resolutions` entry. Both are real gaps this method
         surfaces loudly rather than papering over, not proof against them.
 
+        **A third, confirmed-real gap inherited from `set_camera_format()`
+        itself, `POCKET_6K_G2 v8.6`, 2026-08-04:** some `(codec,
+        recordResolution, fps)` combinations pair with more than one
+        `sensorResolution` in `supported_formats()` (real case: `ProRes` at
+        `1920x1080` pairs with three). `set_camera_format()` refuses to
+        guess and raises `BMDUnsupportedError` unless its own
+        `sensor_resolution` parameter disambiguates — but this method has
+        no `sensor_resolution` parameter of its own to pass one through,
+        and `Clip` (`clips()`, Phase 3) carries no `sensorResolution` field
+        to disambiguate with even if it did. A clip recorded at one of
+        these ambiguous resolutions cannot be selected via this method
+        unless the camera already happens to be at a matching format.
+
         Verified by polling `GET /timelines/0` (default every 0.5s,
         `poll_interval_s`) until `_parse_timeline_clip_ids()`'s reading
         contains `clip_unique_id`, or `verify_timeout_s` elapses
