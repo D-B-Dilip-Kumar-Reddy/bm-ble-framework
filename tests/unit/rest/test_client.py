@@ -165,6 +165,67 @@ class TestStatusHandling:
             await client.get("/system")
 
 
+class TestExists:
+    """exists() never touches the response body — see its docstring for
+    why a plain get() risks a decode error on a real binary still file.
+    FakeResponse(200) here carries no json_body/text_body on purpose: if
+    exists() ever regressed to calling .json()/.text(), FakeResponse.json()
+    would raise ValueError("no JSON body"), failing these tests loudly."""
+
+    @pytest.mark.asyncio
+    async def test_2xx_returns_true_without_reading_body(self):
+        session = FakeSession(FakeResponse(200))
+        client = RestClient("cam.local", session=session)
+
+        assert await client.exists("/mounts/A001-sd1/Stills/A001_0001_S001.dng") is True
+
+    @pytest.mark.asyncio
+    async def test_204_returns_true(self):
+        session = FakeSession(FakeResponse(204))
+        client = RestClient("cam.local", session=session)
+
+        assert await client.exists("/system/format") is True
+
+    @pytest.mark.asyncio
+    async def test_404_returns_false(self):
+        session = FakeSession(FakeResponse(404))
+        client = RestClient("cam.local", session=session)
+
+        assert await client.exists("/mounts/A001-sd1/Stills/A001_0001_S999.dng") is False
+
+    @pytest.mark.asyncio
+    async def test_501_raises_bmd_unsupported_error(self):
+        session = FakeSession(FakeResponse(501))
+        client = RestClient("cam.local", session=session)
+
+        with pytest.raises(BMDUnsupportedError, match="501"):
+            await client.exists("/system/videoFormat")
+
+    @pytest.mark.asyncio
+    async def test_500_raises_bmd_rest_error(self):
+        session = FakeSession(FakeResponse(500))
+        client = RestClient("cam.local", session=session)
+
+        with pytest.raises(BMDRestError, match="500"):
+            await client.exists("/mounts/A001-sd1/Stills/A001_0001_S001.dng")
+
+    @pytest.mark.asyncio
+    async def test_no_session_raises_bmd_connection_error(self):
+        client = RestClient("cam.local", session=None)
+        client._session = None
+
+        with pytest.raises(BMDConnectionError, match="no open session"):
+            await client.exists("/system")
+
+    @pytest.mark.asyncio
+    async def test_connection_error_raises_bmd_connection_error(self):
+        session = FakeSession(raises=aiohttp.ClientConnectionError("refused"))
+        client = RestClient("cam.local", session=session)
+
+        with pytest.raises(BMDConnectionError, match="cam.local"):
+            await client.exists("/system")
+
+
 class TestWriteVerbs:
     @pytest.mark.asyncio
     async def test_put_sends_json_body(self):

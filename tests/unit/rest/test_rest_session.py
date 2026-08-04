@@ -143,12 +143,15 @@ class FakeRestClient:
         *,
         errors: dict[str, Exception] | None = None,
         put_responses: dict[str, object] | None = None,
+        exists_responses: dict[str, bool] | None = None,
     ):
         self.responses = responses
         self.errors = errors or {}
         self.put_responses = put_responses or {}
+        self.exists_responses = exists_responses or {}
         self.calls: list[str] = []
         self.put_calls: list[tuple[str, object]] = []
+        self.exists_calls: list[str] = []
 
     async def get(self, path: str):
         self.calls.append(path)
@@ -161,6 +164,12 @@ class FakeRestClient:
         if path in self.errors:
             raise self.errors[path]
         return self.put_responses.get(path)
+
+    async def exists(self, path: str) -> bool:
+        self.exists_calls.append(path)
+        if path in self.errors:
+            raise self.errors[path]
+        return self.exists_responses.get(path, False)
 
 
 def make_session(
@@ -432,6 +441,60 @@ class TestTimecode:
         tc = await session.timecode()
 
         assert (tc.hours, tc.minutes, tc.seconds, tc.frames) == (10, 57, 42, 2)
+
+
+class TestMountNames:
+    @pytest.mark.asyncio
+    async def test_parses_real_shape(self):
+        """GET /mounts/ real shape (docs/rest/transport.md): a list of
+        {"name": ..., "type": ...} entries — only directories count."""
+        client = FakeRestClient(
+            {
+                "/mounts/": [
+                    {"name": "A001-sd1", "type": "directory", "mtime": "Fri, 31 Jul 2026 12:54:20"}
+                ]
+            }
+        )
+        session = make_session(make_profile(), client=client)
+
+        assert await session.mount_names() == ("A001-sd1",)
+
+    @pytest.mark.asyncio
+    async def test_ignores_non_directory_entries(self):
+        client = FakeRestClient(
+            {
+                "/mounts/": [
+                    {"name": "A001-sd1", "type": "directory"},
+                    {"name": "readme.txt", "type": "file"},
+                ]
+            }
+        )
+        session = make_session(make_profile(), client=client)
+
+        assert await session.mount_names() == ("A001-sd1",)
+
+    @pytest.mark.asyncio
+    async def test_empty_when_no_mounts(self):
+        client = FakeRestClient({"/mounts/": []})
+        session = make_session(make_profile(), client=client)
+
+        assert await session.mount_names() == ()
+
+
+class TestPathExists:
+    @pytest.mark.asyncio
+    async def test_delegates_to_client_exists(self):
+        client = FakeRestClient(
+            {}, exists_responses={"/mounts/A001-sd1/Stills/A001_0001_S001.dng": True}
+        )
+        session = make_session(make_profile(), client=client)
+
+        assert await session.path_exists("/mounts/A001-sd1/Stills/A001_0001_S001.dng") is True
+        assert await session.path_exists("/mounts/A001-sd1/Stills/A001_0001_S999.dng") is False
+        assert client.exists_calls == [
+            "/mounts/A001-sd1/Stills/A001_0001_S001.dng",
+            "/mounts/A001-sd1/Stills/A001_0001_S999.dng",
+        ]
 
 
 class TestNotConnected:

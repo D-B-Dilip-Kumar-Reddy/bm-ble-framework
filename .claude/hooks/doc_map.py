@@ -37,6 +37,7 @@ DOC_MAP: list[tuple[str, list[str]]] = [
     ("src/bmd_camera/ble/protocol/categories/recording.py", ["docs/ble/recording.md"]),
     ("src/bmd_camera/ble/protocol/categories/storage.py", ["docs/ble/recording.md"]),
     ("src/bmd_camera/ble/protocol/categories/settings.py", ["docs/ble/settings.md"]),
+    ("src/bmd_camera/ble/protocol/categories/media.py", ["docs/ble/photo_capture.md"]),
     (
         "src/bmd_camera/ble/camera_controller.py",
         [
@@ -61,6 +62,7 @@ DOC_MAP: list[tuple[str, list[str]]] = [
     ("src/bmd_camera/rest/session.py", ["docs/rest/session.md"]),
     ("src/bmd_camera/rest/mapping.py", ["docs/rest/session.md"]),
     ("src/bmd_camera/rest/timecode.py", ["docs/rest/session.md"]),
+    ("src/bmd_camera/rest/media.py", ["docs/ble/photo_capture.md"]),
     ("src/bmd_camera/rest/*", ["docs/rest/transport.md"]),
     ("tools/common/capture.py", ["docs/ble/sniffer_capture_engine.md"]),
     ("tools/common/discovery.py", ["docs/ble/command_discovery.md"]),

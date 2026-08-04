@@ -403,12 +403,23 @@ BLE) doesn't cover at all, and explicitly not assumed to exist on the G2.
   `CameraSession` doesn't wrap them yet.
 - **Reconnect wiring beyond `camera_controller.connect()`'s own behavior** —
   no additional session-level retry/backoff logic.
-- **Any category other than recording (and one CANDIDATE storage signal)** —
-  `CameraSession` only has `record_start`/`record_stop` today.
 - **Confirmed causation for an unexpected stop.** `last_stop_signal ==
   "low_write_margin"` reports a correlated CANDIDATE signal, not a decoded
   "reason code" — it hasn't been isolated from other possible autostop
   causes (card full, card removed, power loss). See `docs/ble/recording.md`.
+
+## `capture_photo()` — a deliberate, documented exception to design principle 3
+
+`CameraSession.capture_photo()` (`docs/ble/photo_capture.md` §7, §11) cannot verify
+anything over BLE — no echo, no `CAMERA_STATUS` movement, confirmed absent on two
+cameras. Unlike every other write this session makes, it never arms/waits on
+`NotificationRouter` and never raises `BMDVerificationError`; its docstring states plainly
+that "success" here means only "the trigger was written," never "a photo was confirmed."
+Real confirmation is a REST-side concern entirely (`rest/media.py`,
+`examples/capture_photo.py`) — outside what this BLE-only session can compose with
+directly (design principle 5). This is the one write in the codebase that doesn't follow
+this doc's dual-check discipline, and it's an intentional, evidence-driven exception, not
+an oversight — see `docs/ble/photo_capture.md` §7.3/§11 for the full reasoning.
 
 ---
 

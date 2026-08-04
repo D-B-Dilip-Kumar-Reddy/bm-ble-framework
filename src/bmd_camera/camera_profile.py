@@ -295,6 +295,11 @@ class CameraProfile:
     gap_metadata_readable: bool
     device_info_metadata_readable: bool
 
+    # Explicit capability model (design principle 7), e.g. {"supports_photo": True}.
+    # Populated only once confirmed on real hardware — see
+    # docs/ble/photo_capture.md §7.1 for supports_photo's own evidentiary record.
+    capabilities: dict[str, bool] = field(default_factory=dict)
+
     # Sniffer-confirmed command families, keyed by command name.
     commands: dict[str, CommandSpec] = field(default_factory=dict)
 
@@ -585,6 +590,11 @@ class CameraProfile:
         meta = raw.get("_meta", {})
         ble = raw.get("ble", {})
         gap_meta_data = raw.get("gap_meta_data", {})
+        capabilities = {
+            key: value
+            for key, value in raw.get("capabilities", {}).items()
+            if not key.startswith("_")
+        }
         device_info_meta_data = raw.get("device_info_meta_data", {})
 
         commands: dict[str, CommandSpec] = {}
@@ -679,6 +689,7 @@ class CameraProfile:
             incoming_uuid=ble.get("characteristic_incoming", CHARACTERISTIC_INCOMING),
             gap_metadata_readable=gap_meta_data.get("readable", False),
             device_info_metadata_readable=device_info_meta_data.get("readable", False),
+            capabilities=capabilities,
             commands=commands,
             storage=storage,
             codecs=codecs,

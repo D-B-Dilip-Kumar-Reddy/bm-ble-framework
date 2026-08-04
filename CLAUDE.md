@@ -64,7 +64,7 @@ Both checks carry configurable timeouts. If neither confirms the state change, r
 
 *Current implementation status:* BLE recording verification is **echo-only** — none of the known `CAMERA_STATUS` bits encode recording state, so there is no meaningful secondary cross-check for it yet. See `docs/ble/session_and_verification.md`. REST's dual-check is implemented for `RestCameraSession.record_start`/`record_stop` (Phase 4) — event primary, `GET /transports/0/record` readback secondary — and confirmed 6/6 on real hardware (`POCKET_6K_G2` and `POCKET_6K_PRO v8.6`, 2026-08-03), since `tools/rest/probe_endpoints.py` deliberately never exercises this endpoint itself (it would start/stop a real recording) — this session's own verification was always going to be the only confirmation channel it gets. See `docs/rest/session.md`.
 
-Photo capture is a harder case still unresolved over BLE: the trigger command is confirmed on real hardware on both cameras, but no BLE channel — neither echo nor `CAMERA_STATUS` — has ever been observed to move in response to it. This is why `CameraSession.capture_photo()` isn't built yet. `POCKET_6K_G2 v8.6`'s USB/HTTP interface is the leading candidate for the out-of-band confirmation channel BLE never had — see `docs/ble/photo_capture.md` §7/§9 for the full evidentiary record and open decision.
+Photo capture is a harder case still: the trigger command is confirmed on real hardware on both cameras, but no BLE channel — neither echo nor `CAMERA_STATUS` — has ever been observed to move in response to it. `CameraSession.capture_photo()` (Phase 6) is built anyway, as a deliberate, loudly-documented exception to this principle: it sends the trigger and nothing else, never claims verification it structurally cannot perform, and never raises `BMDVerificationError`. Real confirmation is REST's job — `rest/media.py` polls for a new still file appearing on the SD card, composed with the BLE trigger in `examples/capture_photo.py`. Implemented and unit-tested; no real-hardware run reported yet — see `docs/ble/photo_capture.md` §7/§11 for the full evidentiary record and the reasoning behind this exception.
 
 ### 4. Observable state model *(planned)*
 A `CameraState` object reflects the last-known camera state. It is updated **only** from incoming BLE notifications — never inferred from "I sent command X therefore state is now Y". On connect, read the current state before any automation begins. *(The full `state.py` / `CameraState` / `StorageState` object is not yet implemented. A small, notification-driven slice of this already exists directly on `CameraSession` — `is_recording`/`last_stop_reason`, updated only from decoded recording-category notifications, used to detect a camera-initiated stop (e.g. on a slow SD card) without waiting on a command's own echo; `last_known_codec_variant`, updated only from decoded codec_quality-category notifications; and `last_known_recording_format`, updated only from decoded recording_format-category notifications (including `set_video_format`'s own mode-notify confirmations, which share that same category/parameter). All three no-op guards — `set_codec_quality`, `set_video_format`, and `set_recording_format` — use these fields to recognize an already-satisfied write and skip it instead of waiting on an echo the camera won't send for a no-op (real-hardware-confirmed for all three families, 2026-07-21) — see `docs/ble/session_and_verification.md`, `docs/ble/recording.md`, and `docs/ble/settings.md`. `RestCameraSession` holds the same discipline on the REST side: its `is_recording` updates only from `/transports/0/record` `propertyValueChanged` events, never from a request the session itself made — see `docs/rest/session.md`.)*
@@ -152,7 +152,9 @@ src/bmd_camera/
                               # recording format (resolution + FPS) — values from
                               # an external RE doc, all VERIFIED on real
                               # POCKET_6K_G2 v7.9 hardware, see docs/ble/settings.md
-        media.py              # (planned) Photo capture, playback controls
+        media.py              # Photo capture trigger encoding (encode_photo_trigger,
+                              # Phase 6) — no echo/decode, none exists on the wire; see
+                              # docs/ble/photo_capture.md §11. Playback controls (planned)
         metadata.py           # (planned) Video / photo metadata reads
   rest/
     constants.py             # API base path, WS path, default timeouts (fixed by spec)
@@ -179,7 +181,11 @@ src/bmd_camera/
     timecode.py                # REST TIMECODE decode — BCD HH:MM:SS:FF, big-endian,
                               # byte-reversed relative to BLE; reuses ble/timecode.py's
                               # Timecode dataclass and duration_seconds() as-is
-    media.py                  # (planned) Photo-capture confirmation, playback controls
+    media.py                  # Photo-capture confirmation (Phase 6) — resolve_active_mount,
+                              # find_highest_still_index, wait_for_new_still; a per-photo
+                              # signal BLE structurally cannot provide (no echo/CAMERA_STATUS
+                              # movement on a photo trigger, on either camera — see
+                              # docs/ble/photo_capture.md §11). Playback controls (planned)
 
 tools/
   common/                   # Shared BLE capture/decode engine (tools/common/capture.py)
@@ -234,7 +240,10 @@ examples/
   rest_change_format.py     # BRAW <-> ProRes round trip via RestCameraSession.set_camera_format
                             # (Phase 5, single PUT /system/format vs BLE's up-to-three
                             # packets); see docs/rest/session.md
-  capture_photo.py          # (planned)
+  capture_photo.py          # Phase 6 — BLE trigger (CameraSession.capture_photo()) +
+                            # REST confirmation (rest/media.py); the first script in this
+                            # codebase to hold a BLE and a REST session open concurrently
+                            # against the same camera. See docs/ble/photo_capture.md §11
   playback.py               # (planned)
 
 tests/
@@ -274,7 +283,7 @@ added, a new `docs/<feature>.md` must be created alongside the code change.
 | `docs/ble/command_discovery.md` | Guided command discovery (`tools/control/discover_command.py`) |
 | `docs/ble/timecode.md` | `TIMECODE` wire format, BCD decode, clip-duration math |
 | `docs/ble/settings.md` | Settings families (codec/quality, video format, recording format) — byte layouts, verification runbook |
-| `docs/ble/photo_capture.md` | Photo-capture reverse engineering — trigger confirmed on both cameras, no BLE-observable confirmation signal found; Sensor Area BLE investigation (closed, unwritable) |
+| `docs/ble/photo_capture.md` | Photo-capture reverse engineering — trigger confirmed on both cameras, no BLE-observable confirmation signal found; Sensor Area BLE investigation (closed, unwritable); Phase 6 — `capture_photo()` built, confirmation moved to REST (`rest/media.py`) |
 | `docs/ble/reverse_engineering.md` | Tool-by-tool procedure for bringing up a new `(MODEL_KEY, FIRMWARE)` pair, and for adding a single new command |
 | `docs/ble/camera_registry.md` | Full evidentiary notes behind the Camera Registry table above |
 | `docs/rest/transport.md` | REST/WebSocket transport (8.6) — addressing the camera over USB, scheme discovery, `tools/rest/probe_endpoints.py`, sweep results for both cameras, the `RestClient`/`RestEventRouter` library surface |

@@ -98,6 +98,21 @@ class TestKnownProfiles:
         assert profile.firmware == firmware
         assert profile.ble_name  # real advertisement name, never empty
 
+    def test_g2_v79_and_pro_v86_confirm_supports_photo(self):
+        """docs/ble/photo_capture.md §7.1/§9.1 — the photo trigger is
+        confirmed on exactly these two profiles, not POCKET_6K_G2 v8.6."""
+        assert CameraProfile.for_model("POCKET_6K_G2", "v7.9").capabilities == {
+            "supports_photo": True
+        }
+        assert CameraProfile.for_model("POCKET_6K_PRO", "v8.6").capabilities == {
+            "supports_photo": True
+        }
+
+    def test_g2_v86_does_not_confirm_supports_photo(self):
+        """No photo command block exists for this profile yet — see
+        CameraSession.capture_photo()'s docstring."""
+        assert CameraProfile.for_model("POCKET_6K_G2", "v8.6").capabilities == {}
+
 
 class TestProfileLoading:
     def test_loads_valid_profile(self, tmp_path, monkeypatch):
@@ -261,12 +276,28 @@ class TestFromRawLeniency:
         assert profile.ble_name == ""
         assert profile.commands == {}
         assert profile.storage == {}
+        assert profile.capabilities == {}
 
     def test_uses_partial_meta_defaults(self):
         profile = CameraProfile._from_raw("POCKET_6K_G2", "v7.9", {"_meta": {"model": "P6K G2"}})
 
         assert profile.model_name == "P6K G2"
         assert profile.status == "UNKNOWN"
+
+    def test_resolves_capabilities_block(self):
+        raw = {"_meta": {"model": "P6K G2"}, "capabilities": {"supports_photo": True}}
+        profile = CameraProfile._from_raw("POCKET_6K_G2", "v7.9", raw)
+
+        assert profile.capabilities == {"supports_photo": True}
+
+    def test_capabilities_comment_keys_are_skipped(self):
+        raw = {
+            "_meta": {"model": "P6K G2"},
+            "capabilities": {"supports_photo": True, "_comment": "note"},
+        }
+        profile = CameraProfile._from_raw("POCKET_6K_G2", "v7.9", raw)
+
+        assert profile.capabilities == {"supports_photo": True}
 
 
 class TestCommandResolution:

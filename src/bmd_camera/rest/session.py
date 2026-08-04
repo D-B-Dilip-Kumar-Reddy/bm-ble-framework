@@ -52,7 +52,7 @@ from ..exceptions import (
     BMDVerificationError,
 )
 from .client import RestClient, require_aiohttp
-from .constants import WS_PATH
+from .constants import MOUNTS_PATH, WS_PATH
 from .events import RestEventRouter
 from .exceptions import BMDRestError
 from .mapping import resolve_rest_codec_name
@@ -486,6 +486,27 @@ class RestCameraSession:
     async def timecode(self) -> Timecode:
         body = await self._rest_client.get("/transports/0/timecode")
         return decode_rest_timecode(body["timecode"])
+
+    async def mount_names(self) -> tuple[str, ...]:
+        """`GET /mounts/`'s own real directory listing — the mount names
+        actually available over HTTP (e.g. `("A001-sd1",)`), confirmed on
+        real hardware to return `[{"name": ..., "type": "directory"}, ...]`
+        (`docs/rest/transport.md`). Never derived from `deviceName`/`volume`
+        by string transformation — see `rest/media.py`'s module docstring
+        for why that mapping isn't trusted as a rule."""
+        body = await self._rest_client.get(MOUNTS_PATH)
+        entries = body if isinstance(body, list) else []
+        return tuple(
+            entry["name"]
+            for entry in entries
+            if isinstance(entry, dict) and entry.get("type") == "directory"
+        )
+
+    async def path_exists(self, path: str) -> bool:
+        """Whether `path` (e.g. a `/mounts/<name>/Stills/<file>` still)
+        exists, without ever decoding its content — see `RestClient.exists()`
+        for why a plain `GET` isn't safe for probing binary media files."""
+        return await self._rest_client.exists(path)
 
     # ── Writes (Phase 4) ─────────────────────────────────────────────────
 

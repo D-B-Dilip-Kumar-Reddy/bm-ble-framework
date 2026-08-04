@@ -1470,3 +1470,75 @@ class TestSetCameraFormatKnownUnreachable:
         session.set_video_format.assert_awaited_once_with("HD", "ProRes", "25")
         session.set_codec_quality.assert_awaited_once_with("ProRes", "HQ")
         session.set_recording_format.assert_awaited_once_with("HD", "25")
+
+
+def _make_photo_profile(*, supports_photo: bool = True, with_command: bool = True) -> CameraProfile:
+    """A real CameraProfile carrying the confirmed photo trigger coordinates
+    (category=0x0A/parameter=0x03/VOID/reserved=0x00 — docs/ble/photo_capture.md
+    §7.1) and, unless overridden, capabilities.supports_photo=True."""
+    raw: dict = {"_meta": {"model": "Pocket 6K G2", "ble_name": "A:TEST"}}
+    if supports_photo:
+        raw["capabilities"] = {"supports_photo": True}
+    if with_command:
+        raw["commands"] = {
+            "photo": {
+                "category": 0x0A,
+                "parameter": 0x03,
+                "data_type": "VOID",
+                "reserved": 0x00,
+            }
+        }
+    return CameraProfile._from_raw(MODEL_KEY, FIRMWARE, raw)
+
+
+class TestCapturePhoto:
+    """docs/ble/photo_capture.md §7's confirmed-but-unverifiable trigger —
+    capture_photo() sends the write and nothing else, since no BLE channel
+    (echo or CAMERA_STATUS) has ever been observed to move in response on
+    either camera tested. See the method's own docstring for the deliberate,
+    loudly-documented exception to design principle 3 this represents."""
+
+    @pytest.mark.asyncio
+    async def test_raises_bmd_unsupported_when_capability_not_confirmed(self):
+        session = make_session(_make_photo_profile(supports_photo=False))
+
+        with pytest.raises(BMDUnsupportedError, match="supports_photo"):
+            await session.capture_photo()
+
+        session._controller.write_outgoing_control.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_raises_value_error_when_profile_has_no_photo_block(self):
+        """POCKET_6K_G2 v8.6 as of this writing — supports_photo could in
+        principle be set without the command block existing yet; the block
+        lookup must still fail loudly rather than encode nothing."""
+        session = make_session(_make_photo_profile(with_command=False))
+
+        with pytest.raises(ValueError, match="photo"):
+            await session.capture_photo()
+
+        session._controller.write_outgoing_control.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_sends_the_confirmed_trigger_bytes(self):
+        """FF 04 00 00 0A 03 00 00 — the exact TX confirmed independently on
+        POCKET_6K_G2 v7.9 and POCKET_6K_PRO v8.6 (docs/ble/photo_capture.md
+        §7.1, §9.1)."""
+        session = make_session(_make_photo_profile())
+
+        await session.capture_photo()
+
+        session._controller.write_outgoing_control.assert_awaited_once()
+        (sent,) = session._controller.write_outgoing_control.await_args.args
+        assert bytes(sent) == bytes.fromhex("FF0400000A030000")
+
+    @pytest.mark.asyncio
+    async def test_never_arms_or_waits_on_the_router(self):
+        """No echo exists for this trigger — capture_photo() must not arm()
+        or wait_for() anything, unlike every other write in this module."""
+        session = make_session(_make_photo_profile())
+
+        await session.capture_photo()
+
+        session._router.arm.assert_not_called()
+        session._router.wait_for.assert_not_awaited()

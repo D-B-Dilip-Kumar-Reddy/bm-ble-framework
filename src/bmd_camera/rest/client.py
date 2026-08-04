@@ -110,6 +110,51 @@ class RestClient:
     async def delete(self, path: str) -> Any:
         return await self._request("DELETE", path)
 
+    async def exists(self, path: str) -> bool:
+        """Whether `GET path` returns a successful status, without ever
+        attempting to parse or decode the response body.
+
+        `get()`'s body handling (`_read_body`) tries `.json()` then falls
+        back to `.text()` — fine for every endpoint this client has talked
+        to so far, all of which return JSON or empty bodies, but a real
+        still image (`.dng`/`.braw`) is binary content `.text()` could
+        raise decoding. `exists()` exists specifically for probing whether
+        a media file is present under `/mounts/...` (`rest/media.py`)
+        without ever touching its content.
+
+        Returns `True` for `2xx`, `False` for `404`. Still raises
+        `BMDUnsupportedError` for `501` and `BMDRestError` for any other
+        non-2xx — the same status contract `get()` has, minus the body.
+        """
+        if self._session is None:
+            raise BMDConnectionError(
+                "RestClient has no open session — use 'async with RestClient(...)' "
+                "or pass an existing session to the constructor"
+            )
+        url = f"{self.base_url}{API_BASE}{path}"
+        self._log.debug("[%s] HEAD-style GET %s", self.host, path)
+        try:
+            async with self._session.request(
+                "GET", url, timeout=aiohttp.ClientTimeout(total=self.timeout_s)
+            ) as resp:
+                status = resp.status
+        except aiohttp.ClientError as exc:
+            raise BMDConnectionError(f"[{self.host}] GET {path} failed: {exc}") from exc
+        except TimeoutError as exc:
+            raise BMDConnectionError(
+                f"[{self.host}] GET {path} timed out after {self.timeout_s}s"
+            ) from exc
+
+        self._log.debug("[%s] GET %s -> %s", self.host, path, status)
+
+        if status == 404:
+            return False
+        if status == 501:
+            raise BMDUnsupportedError(f"[{self.host}] GET {path} — not implemented (501)")
+        if 200 <= status < 300:
+            return True
+        raise BMDRestError(f"[{self.host}] GET {path} -> {status}", status=status, body=None)
+
     async def _request(self, method: str, path: str, *, json_body: Any = None) -> Any:
         if self._session is None:
             raise BMDConnectionError(

@@ -82,6 +82,7 @@ from ..camera_profile import CameraProfile
 from ..exceptions import BMDUnsupportedError, BMDVerificationError
 from .camera_controller import BMDCameraController
 from .notification_router import NotificationRouter
+from .protocol.categories.media import encode_photo_trigger
 from .protocol.categories.recording import (
     decode_recording_state,
     encode_record_start,
@@ -413,6 +414,48 @@ class CameraSession:
         else:
             self.last_stop_timecode = self._latest_timecode
             self.last_stop_reason = "requested"
+
+    async def capture_photo(self) -> None:
+        """Trigger a still photo capture, raising `BMDUnsupportedError`
+        immediately unless the profile confirms `capabilities.supports_photo`.
+
+        **Deliberate, loudly-documented exception to design principle 3**
+        ("every write command must be verified before reporting success"):
+        this method cannot verify anything. `docs/ble/photo_capture.md` §7
+        confirms — independently, on `POCKET_6K_G2 v7.9` and
+        `POCKET_6K_PRO v8.6` — that this trigger produces zero
+        `INCOMING_CONTROL` footprint. Not a weak signal that needs a longer
+        timeout: no signal exists at all. No echo, no `CAMERA_STATUS`
+        movement, nothing this session's own transport could ever wait on.
+        The one storage lead that does exist (`0x09/0x02`, §5.3) is far too
+        coarse to attribute to *this* trigger specifically.
+
+        This method's "success" therefore means exactly one thing: the
+        trigger command was written to `OUTGOING_CONTROL`. It never means "a
+        photo was confirmed taken" — this method never raises
+        `BMDVerificationError`, because there is nothing here to time out on.
+        Real confirmation is a REST-side concern, entirely outside what
+        `CameraSession` (BLE-only, design principle 5) can compose with
+        directly — see `rest/media.py` and `examples/capture_photo.py`,
+        which poll for a new still file over REST after calling this method.
+
+        Raises `ValueError` if the profile has no `photo` command block at
+        all (e.g. `POCKET_6K_G2 v8.6` as of this writing — only `v7.9` and
+        `POCKET_6K_PRO v8.6` have one; see `docs/ble/photo_capture.md` §7/§9
+        and design principle 6 for why it cannot simply be copied from a
+        sibling profile without re-verifying on this exact firmware).
+        """
+        if not self.profile.capabilities.get("supports_photo", False):
+            raise BMDUnsupportedError(
+                f"{self.profile.model_key} {self.profile.firmware} does not confirm "
+                "photo capture support (capabilities.supports_photo) — see "
+                "docs/ble/photo_capture.md"
+            )
+        spec = self.profile.require_command("photo")
+        command = encode_photo_trigger(
+            category=spec.category, parameter=spec.parameter, reserved=spec.reserved
+        )
+        await self._controller.write_outgoing_control(command)
 
     # ── Settings writes (CANDIDATE packet families — see docs/ble/settings.md) ──
 

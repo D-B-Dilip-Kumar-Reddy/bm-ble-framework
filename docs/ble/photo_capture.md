@@ -6,22 +6,25 @@
 (§7) and `payloads/models/POCKET_6K_PRO_v8.6.json` (§9), each
 independently confirmed on its own hardware — a void ASSIGN to that
 coordinate reliably fires a real photo capture on both, confirmed by
-inspecting the SD card's contents on a PC after each send. What's still
-missing, on both cameras: **no BLE-observable signal (echo or otherwise)
-confirms a photo was taken** — every capture window around a
-confirmed-successful trigger shows only ambient telemetry, matching the
-passive finding (§5) that a body-triggered still produces no report
-either. That leaves an open verification-strategy question (§7's closing
-section, now applying identically to both cameras — §9.2) blocking
-`protocol/categories/media.py`, `CameraSession.capture_photo()`, and
-`examples/capture_photo.py` — all still planned (CLAUDE.md package
-structure) — since CLAUDE.md design principle 3 requires every write to
-be confirmed before reporting success, and no BLE channel currently does
-that for this command. **TODO, not yet started:** the operator's proposed
-path for verification is out-of-band, over USB rather than BLE —
-`POCKET_6K_PRO v8.6` exposes clip/photo playback over an HTTP-over-USB
-interface, explicitly noted as v8.6-only, not assumed to exist on the G2.
-See §7.3's closing bullet. Picked up in a future session.
+inspecting the SD card's contents on a PC after each send. **No
+BLE-observable signal (echo or otherwise) confirms a photo was taken** on
+either camera — every capture window around a confirmed-successful trigger
+shows only ambient telemetry, matching the passive finding (§5) that a
+body-triggered still produces no report either.
+
+**Phase 6 (2026-08-04) built on top of that instead of waiting for a BLE
+signal that structurally doesn't exist**, closing §7.3's open architectural
+question — see §11 for the full write-up. `CameraSession.capture_photo()`
+(`protocol/categories/media.py`) sends the trigger and, explicitly, nothing
+else: it never claims a photo is confirmed, because it cannot. Real
+confirmation is `rest/media.py`, the out-of-band REST channel the operator
+proposed in §7.3 — it watches for a new still file to appear on the SD
+card after the trigger fires. `examples/capture_photo.py` composes both,
+holding a BLE session and a REST session open to the same camera at once.
+**Implemented and unit-tested; no real-hardware run has been reported
+yet** — several of its design choices (§11.3) are still awaiting that
+confirmation, most notably the filename-prefix pattern and the concurrent-
+BLE-and-REST combination itself.
 
 Path so far: passive sniffing (§5) found no report at all on either
 camera; a first active INT8 sweep on the G2 (§6) came back inconclusive
@@ -1319,3 +1322,81 @@ Two things this does **not** establish, and must not be read as establishing:
 If the write does turn out to work, it resolves the gap §8 describes for ProRes stills
 (which use sensor area rather than the video resolution) — over a transport this
 investigation never had. See `docs/rest/transport.md`.
+
+---
+
+## 11. Phase 6 — `capture_photo()` built, verified over REST (2026-08-04)
+
+§7.3 left an open architectural question: how to reconcile "no BLE channel confirms a
+photo was taken" with CLAUDE.md design principle 3's "every write command must be
+verified before reporting success." Four options were on the table; this section records
+which was chosen and what was built.
+
+### 11.1 The chosen resolution: an explicit, loudly-documented exception
+
+`CameraSession.capture_photo()` (`src/bmd_camera/ble/session.py`) exists now — it sends
+the confirmed trigger (§7.1's `FF 04 00 00 0A 03 00 00`, via a new
+`protocol/categories/media.py`) and nothing else. It never arms or waits on the
+`NotificationRouter`, because there is nothing to wait on, and it never raises
+`BMDVerificationError` — there is no timeout to fail. Its own docstring states this
+explicitly, in the terms §7.3's third option proposed: this method's "success" means only
+"the trigger was written to `OUTGOING_CONTROL`," never "a photo was confirmed taken." Real
+confirmation is pushed entirely to the REST side (§11.2) — `CameraSession` stays BLE-only
+(design principle 5) and never reaches into REST itself.
+
+`capture_photo()` is capability-gated: it raises `BMDUnsupportedError` immediately unless
+`profile.capabilities.get("supports_photo")` is `True`, and raises `ValueError` if the
+profile has no `photo` command block at all (`POCKET_6K_G2 v8.6`'s current state — see
+§11.4). This closed a real, separate gap while it was being touched: `capabilities` was
+schema-validated (`payloads/ble_schema.json`) and populated (`supports_photo: true`,
+§7.1/§9.1) but `CameraProfile` never actually *parsed* it into anything code could check —
+design principle 7's capability model existed on paper for this field, not in practice.
+Now it does (`docs/ble/payload_profiles.md`).
+
+### 11.2 REST confirmation — `rest/media.py`
+
+The out-of-band channel §7.3's TODO proposed, built now: `find_highest_still_index()`
+reads a baseline still count before the BLE trigger fires, `wait_for_new_still()` polls
+for the next index afterward — a real per-photo signal, not the too-coarse `0x09/0x02`
+storage lead (§5.3) that moves roughly once per three photos. Full design rationale
+(mount-path resolution deliberately not derived from `deviceName`, the still-listing `500`
+that forces filename probing instead of a directory listing, the `.dng`/`.braw` format
+split) lives in `rest/media.py`'s own module docstring and `docs/rest/session.md` rather
+than duplicated here — this section is the cross-transport index pointing at both halves.
+
+`examples/capture_photo.py` is the composition: one script holding a BLE `CameraSession`
+and a REST `RestCameraSession` open to the same physical camera at once — the first thing
+in this codebase to do that. The plan's own risk list flagged this combination as
+untested ("concurrent BLE + REST is unverified... Phase 6 needs both open at once —
+confirm on hardware"); no run has been reported yet.
+
+### 11.3 What's still genuinely unconfirmed
+
+Being explicit about evidentiary weight, per this codebase's own discipline:
+
+- **The trigger itself** (§7.1, §9.1) is real-hardware-confirmed, independently, on two
+  cameras. Nothing about Phase 6 changes that.
+- **The filename-prefix pattern** (`derive_still_prefix()` — a still shares a clip's
+  `<reel>_<date>` stem) is inherited from the original planning document's operator-
+  provided sample, not yet independently re-confirmed by any tool run in this codebase.
+- **The mount-path resolution** deliberately avoids the one unconfirmed rule
+  (`docs/rest/transport.md`'s `sd0`→`sd1` mapping, explicitly "not something to encode as
+  a rule") by reading `GET /mounts/`'s own real listing instead — but the *fallback*
+  disambiguation-by-volume-prefix logic (`resolve_mount_path()`, for the case of more than
+  one mount) has no real-hardware test behind it yet, only unit tests against a fake.
+- **Concurrent BLE + REST sessions** (§11.2) — untested on real hardware.
+
+None of this is a defect — it's the accurate confirmation status of a feature built ahead
+of its first real run, recorded honestly rather than glossed over, the same way every
+other phase in this migration was.
+
+### 11.4 `POCKET_6K_G2 v8.6` still needs its own trigger discovery
+
+`capabilities.supports_photo` and `commands.photo` are confirmed only for
+`POCKET_6K_G2 v7.9` and `POCKET_6K_PRO v8.6` (§7, §9) — not for `POCKET_6K_G2 v8.6`, this
+codebase's usual primary reference. Design principle 6 forbids copying the v7.9 trigger
+coordinates onto v8.6 without re-verifying: `tools/control/discover_command.py
+--data-type VOID` needs to run against that specific firmware first, the same way every
+other v8.6 command family was independently re-sniffed rather than inherited (e.g.
+`docs/ble/recording.md`'s reserved-byte difference between v7.9 and v8.6). Until then,
+`examples/capture_photo.py` defaults to `POCKET_6K_PRO v8.6`.
