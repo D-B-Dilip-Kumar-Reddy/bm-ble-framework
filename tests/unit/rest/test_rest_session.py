@@ -1885,6 +1885,68 @@ class TestSelectClip:
         assert client.post_calls == [(TIMELINE_ADD_PATH, {"clips": [{"clipUniqueId": 1}]})]
 
     @pytest.mark.asyncio
+    async def test_logs_format_mismatch_and_switch_at_info_level(self, caplog):
+        """Real-world gap this closes: RestClient's own PUT/GET logging is
+        DEBUG-only (client.py), so a format switch buried inside
+        select_clip() was invisible at the INFO level examples/
+        rest_playback.py's logging.basicConfig uses — an operator running
+        the example against a genuinely mismatched clip saw playback
+        succeed but no indication a PUT /system/format ever happened."""
+        client = FakeRestClient(
+            {
+                "/clips/list": {"clipList": [CLIP_1_BODY]},
+                FORMAT_PROPERTY: CURRENT_FORMAT_BODY,
+                "/system/supportedFormats": SUPPORTED_FORMATS_BODY_PRORES_PROXY_4K_DCI,
+                TIMELINE_PATH: {"clips": [{"clipUniqueId": 1}]},
+            }
+        )
+        session = make_session(make_select_clip_profile(), client=client)
+
+        async def deliver_event():
+            await asyncio.sleep(0.01)
+            session._router.handle_event(
+                {
+                    "type": "event",
+                    "data": {
+                        "action": "propertyValueChanged",
+                        "property": FORMAT_PROPERTY,
+                        "value": {
+                            "codec": "ProRes:Proxy",
+                            "frameRate": "24",
+                            "recordResolution": {"width": 4096, "height": 2160},
+                            "sensorResolution": {"width": 5744, "height": 3024},
+                        },
+                    },
+                }
+            )
+
+        asyncio.create_task(deliver_event())
+        with caplog.at_level(logging.INFO):
+            await session.select_clip(1)
+
+        messages = [record.message for record in caplog.records]
+        assert any("does not match the camera's current format" in m for m in messages)
+        assert any("Setting camera format" in m and "ProRes" in m for m in messages)
+
+    @pytest.mark.asyncio
+    async def test_no_format_switch_log_when_already_matching(self, caplog):
+        client = FakeRestClient(
+            {
+                "/clips/list": {"clipList": [CLIP_1_BODY]},
+                FORMAT_PROPERTY: MATCHING_FORMAT_BODY,
+                TIMELINE_PATH: {"clips": [{"clipUniqueId": 1}]},
+            }
+        )
+        session = make_session(make_select_clip_profile(), client=client)
+
+        with caplog.at_level(logging.INFO):
+            await session.select_clip(1)
+
+        messages = [record.message for record in caplog.records]
+        assert not any("does not match the camera's current format" in m for m in messages)
+        assert not any("Setting camera format" in m for m in messages)
+
+    @pytest.mark.asyncio
     async def test_readback_extra_fields_do_not_block_a_match(self):
         """Real GET /timelines/0 body, POCKET_6K_PRO v8.6, 2026-08-04 (operator
         Postman debugging): {"clips": [{"clipUniqueId": 12, "frameCount": 5020}]}

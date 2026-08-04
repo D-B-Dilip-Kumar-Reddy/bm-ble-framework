@@ -692,6 +692,19 @@ extra `"frameCount"` field simply ignored. The flat-int-list branch the parser a
 predates this confirmation and has never actually been observed; it's kept only as a
 defensive fallback.
 
+**Format-switch logging gap, found immediately after the sixth finding above.** A
+follow-up run against a genuinely mismatched clip played back correctly, but nothing in
+the console indicated a `PUT /system/format` had happened — `RestClient`'s own
+`GET`/`PUT`/`DELETE`/`POST` logging (`client.py`) is `DEBUG`-only, below
+`examples/rest_playback.py`'s `logging.basicConfig(level=logging.INFO)`, and neither
+`select_clip()` nor `set_camera_format()` logged anything of their own at `INFO` to fill
+the gap. Fixed: `select_clip()` now logs at `INFO` when it detects a mismatch (naming both
+the clip's format and the camera's current one) before calling `set_camera_format()`,
+which itself now logs the requested `codec`/`variant`/`resolution`/`fps` right before its
+own `PUT`. Silence at `INFO` during `select_clip()` now reliably means the format already
+matched, per design principle for logging ("Operation boundaries" at `INFO`) that this
+path had been missing.
+
 ### `enter_playback()` / `exit_playback()`
 
 `PUT /transports/0 {"mode": "Output"}` / `{"mode": "InputPreview"}`, via the shared
@@ -890,7 +903,11 @@ already matches the clip (asserting zero `PUT`s to `FORMAT_PROPERTY`) but calls 
 right `(family, variant, resolution, fps)` when it doesn't, and the `ValueError`/
 `BMDUnsupportedError` cases for an unknown clip id, a clip missing its codec/videoFormat, an
 unparseable `videoFormat`, a codec absent from `format_names`, and a resolution absent from
-the profile's `resolutions` table.
+the profile's `resolutions` table. Two `caplog`-based tests (mirroring the pattern
+`tests/unit/test_camera_profile.py` already uses) cover the format-switch logging fix
+above: `test_logs_format_mismatch_and_switch_at_info_level` asserts both the mismatch and
+the `set_camera_format` `INFO` lines appear when a switch happens,
+`test_no_format_switch_log_when_already_matching` asserts neither does when it doesn't.
 
 `tests/unit/tools/rest/test_rest_sweep_camera_format.py` covers
 `tools/rest/sweep_camera_format.py` separately, since it's a standalone script rather than

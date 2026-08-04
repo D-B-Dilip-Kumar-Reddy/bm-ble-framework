@@ -847,6 +847,15 @@ class RestCameraSession:
             "height": matched.sensor_resolution[1],
         }
 
+        self._log.info(
+            "[%s] Setting camera format -> codec=%s variant=%s resolution=%s fps=%s (PUT %s)",
+            self.host,
+            codec,
+            variant,
+            resolution,
+            fps,
+            FORMAT_PROPERTY,
+        )
         self._router.arm(FORMAT_PROPERTY)
         await self._rest_client.put(FORMAT_PROPERTY, body)
         event_value = await self._router.wait_for(FORMAT_PROPERTY, timeout=self.verify_timeout_s)
@@ -1040,6 +1049,20 @@ class RestCameraSession:
             and current.frame_rate == fps_str
         )
         if not format_matches:
+            self._log.info(
+                "[%s] clip_unique_id=%s format (%s @ %sx%sp%s) does not match the camera's "
+                "current format (%s @ %sx%sp%s) — switching before syncing the timeline",
+                self.host,
+                clip_unique_id,
+                clip.codec,
+                width,
+                height,
+                fps_str,
+                current.codec,
+                current.record_resolution[0],
+                current.record_resolution[1],
+                current.frame_rate,
+            )
             ble_pair = resolve_ble_codec_name(self.profile.rest.format_names, clip.codec)
             if ble_pair is None:
                 raise BMDUnsupportedError(
