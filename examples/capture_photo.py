@@ -19,14 +19,14 @@ confirm on hardware"). This run is that confirmation.
 
 WHICH CAMERA/FIRMWARE
 -------------------------
-The photo trigger is only confirmed in the profile for `POCKET_6K_PRO v8.6`
-and `POCKET_6K_G2 v7.9` — **not** `POCKET_6K_G2 v8.6`, this codebase's usual
-primary reference, which has no `photo` command block yet (needs
-`tools/control/discover_command.py --data-type VOID` run against it first;
-see `CameraSession.capture_photo()`'s docstring). Defaults to
-`POCKET_6K_PRO v8.6` for this reason — BLE_MODEL_KEY/BLE_FIRMWARE and
-HOST/REST_MODEL_KEY/REST_FIRMWARE all target the same physical camera, just
-over two different transports.
+The photo trigger is confirmed in the profile for all three currently-verified
+profiles: `POCKET_6K_G2 v7.9`, `POCKET_6K_PRO v8.6`, and — as of 2026-08-04,
+via `tools/control/verify_photo_trigger.py`'s REST cross-check — `POCKET_6K_G2
+v8.6` (`docs/ble/photo_capture.md` §11.4), this codebase's usual primary
+reference. Defaults to `POCKET_6K_G2 v8.6` for that reason, matching CLAUDE.md's
+"start all new features with POCKET_6K_G2 v8.6" convention — BLE_MODEL_KEY/
+BLE_FIRMWARE and HOST/REST_MODEL_KEY/REST_FIRMWARE all target the same
+physical camera, just over two different transports.
 
 WHAT THIS SCRIPT CHANGES ON THE CAMERA: takes one real photo.
 
@@ -65,16 +65,16 @@ from bmd_camera.rest.media import (
     wait_for_new_still,
 )
 
-HOST = "pocket-cinema-camera-6k-pro.local"
-REST_MODEL_KEY = "POCKET_6K_PRO"
+HOST = "pocket-cinema-camera-6k-g2.local"
+REST_MODEL_KEY = "POCKET_6K_G2"
 REST_FIRMWARE = "v8.6"
-BLE_MODEL_KEY = "POCKET_6K_PRO"
+BLE_MODEL_KEY = "POCKET_6K_G2"
 BLE_FIRMWARE = "v8.6"
-# HOST = "pocket-cinema-camera-6k-g2.local"
-# REST_MODEL_KEY = "POCKET_6K_G2"
+# HOST = "pocket-cinema-camera-6k-pro.local"
+# REST_MODEL_KEY = "POCKET_6K_PRO"
 # REST_FIRMWARE = "v8.6"
-# BLE_MODEL_KEY = "POCKET_6K_G2"
-# BLE_FIRMWARE = "v7.9"  # v8.6 has no confirmed photo trigger yet
+# BLE_MODEL_KEY = "POCKET_6K_PRO"
+# BLE_FIRMWARE = "v8.6"
 
 CONFIRM_TIMEOUT_S = 15.0
 

@@ -98,20 +98,21 @@ class TestKnownProfiles:
         assert profile.firmware == firmware
         assert profile.ble_name  # real advertisement name, never empty
 
-    def test_g2_v79_and_pro_v86_confirm_supports_photo(self):
-        """docs/ble/photo_capture.md §7.1/§9.1 — the photo trigger is
-        confirmed on exactly these two profiles, not POCKET_6K_G2 v8.6."""
+    def test_all_three_verified_profiles_confirm_supports_photo(self):
+        """docs/ble/photo_capture.md §7.1/§9.1/§11.4 — the photo trigger is
+        confirmed on all three currently-verified profiles. POCKET_6K_G2
+        v8.6 was the last to be confirmed (2026-08-04), via
+        tools/control/verify_photo_trigger.py's REST cross-check after the
+        first discover_command.py sweep left the reserved byte ambiguous."""
         assert CameraProfile.for_model("POCKET_6K_G2", "v7.9").capabilities == {
             "supports_photo": True
         }
         assert CameraProfile.for_model("POCKET_6K_PRO", "v8.6").capabilities == {
             "supports_photo": True
         }
-
-    def test_g2_v86_does_not_confirm_supports_photo(self):
-        """No photo command block exists for this profile yet — see
-        CameraSession.capture_photo()'s docstring."""
-        assert CameraProfile.for_model("POCKET_6K_G2", "v8.6").capabilities == {}
+        assert CameraProfile.for_model("POCKET_6K_G2", "v8.6").capabilities == {
+            "supports_photo": True
+        }
 
 
 class TestProfileLoading:

@@ -1509,7 +1509,9 @@ class TestCapturePhoto:
 
     @pytest.mark.asyncio
     async def test_raises_value_error_when_profile_has_no_photo_block(self):
-        """POCKET_6K_G2 v8.6 as of this writing — supports_photo could in
+        """A profile that has never had this happen for real (all three
+        currently-verified profiles carry a photo block as of
+        docs/ble/photo_capture.md §11.4) — but supports_photo could in
         principle be set without the command block existing yet; the block
         lookup must still fail loudly rather than encode nothing."""
         session = make_session(_make_photo_profile(with_command=False))
@@ -1522,8 +1524,8 @@ class TestCapturePhoto:
     @pytest.mark.asyncio
     async def test_sends_the_confirmed_trigger_bytes(self):
         """FF 04 00 00 0A 03 00 00 — the exact TX confirmed independently on
-        POCKET_6K_G2 v7.9 and POCKET_6K_PRO v8.6 (docs/ble/photo_capture.md
-        §7.1, §9.1)."""
+        POCKET_6K_G2 v7.9, POCKET_6K_PRO v8.6, and POCKET_6K_G2 v8.6
+        (docs/ble/photo_capture.md §7.1, §9.1, §11.4)."""
         session = make_session(_make_photo_profile())
 
         await session.capture_photo()

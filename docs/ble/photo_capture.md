@@ -1346,8 +1346,9 @@ confirmation is pushed entirely to the REST side (§11.2) — `CameraSession` st
 
 `capture_photo()` is capability-gated: it raises `BMDUnsupportedError` immediately unless
 `profile.capabilities.get("supports_photo")` is `True`, and raises `ValueError` if the
-profile has no `photo` command block at all (`POCKET_6K_G2 v8.6`'s current state — see
-§11.4). This closed a real, separate gap while it was being touched: `capabilities` was
+profile has no `photo` command block at all (no currently-verified profile is in that
+state as of §11.4's resolution, but the guard stays — a future camera or firmware could be).
+This closed a real, separate gap while it was being touched: `capabilities` was
 schema-validated (`payloads/ble_schema.json`) and populated (`supports_photo: true`,
 §7.1/§9.1) but `CameraProfile` never actually *parsed* it into anything code could check —
 design principle 7's capability model existed on paper for this field, not in practice.
@@ -1489,29 +1490,44 @@ onward, then caught and fixed a third defect in its own follow-up filename-looku
 on runs four and five — recorded honestly rather than glossed over, the same way every
 other phase in this migration was.
 
-### 11.4 `POCKET_6K_G2 v8.6` still needs its own trigger discovery
+### 11.4 `POCKET_6K_G2 v8.6` — trigger discovery, resolved
 
-`capabilities.supports_photo` and `commands.photo` are confirmed only for
-`POCKET_6K_G2 v7.9` and `POCKET_6K_PRO v8.6` (§7, §9) — not for `POCKET_6K_G2 v8.6`, this
-codebase's usual primary reference. Design principle 6 forbids copying the v7.9 trigger
-coordinates onto v8.6 without re-verifying: `tools/control/discover_command.py
---data-type VOID` needs to run against that specific firmware first, the same way every
-other v8.6 command family was independently re-sniffed rather than inherited (e.g.
-`docs/ble/recording.md`'s reserved-byte difference between v7.9 and v8.6). Until then,
-`examples/capture_photo.py` defaults to `POCKET_6K_PRO v8.6`.
+`capabilities.supports_photo` and `commands.photo` are now confirmed on all three
+currently-verified profiles: `POCKET_6K_G2 v7.9`, `POCKET_6K_PRO v8.6` (§7, §9), and, as of
+2026-08-04, `POCKET_6K_G2 v8.6`, this codebase's usual primary reference. Design principle
+6 forbade copying the v7.9 trigger coordinates onto v8.6 without re-verifying — the same
+requirement every other v8.6 command family met independently (e.g. `docs/ble/recording.md`'s
+reserved-byte difference between v7.9 and v8.6) — so this section records how v8.6 earned
+its own confirmation rather than inheriting it.
 
 **First discovery run, `POCKET_6K_G2 v8.6`, 2026-08-04: the trigger fires (both
 candidates), but the sweep can't resolve which reserved byte on its own.** The seeded
-sweep (`category=0x0A parameter=0x03 VOID`, `--reserved 0,1`) confirmed `photo_taken` for
-*both* `reserved=0x00` and `reserved=0x01`, exactly as expected from the trigger byte
-sequence already confirmed on the other two cameras (`FF 04 00 00 0A 03 00 00`,
-`reserved=0x00`). No BLE echo arrived for either candidate — expected, consistent with
-every other trigger attempt on any camera (§7, §9) — so `discover_command.py`'s own
-"disagreeing candidates" warning applies at full strength here: with no echo to
-cross-check against, the operator's own read is the *only* evidence, and confirming two
-different byte values identically, seconds apart, is indistinguishable from a habitual
-"yes" without more. `tools/control/verify_photo_trigger.py` was built for exactly this gap
-(`docs/ble/command_discovery.md`'s "When an outcome has no echo to cross-check" section) —
-it replaces the glance with `rest/media.py`'s real per-photo `mtime` signal. Not yet run;
-this is the next step before a `commands.photo` block can be written for `POCKET_6K_G2
-v8.6` with real confidence.
+sweep (`category=0x0A parameter=0x03 VOID`, `--reserved 0,1`,
+`tools/control/discover_command.py`) confirmed `photo_taken` for *both* `reserved=0x00`
+and `reserved=0x01`, exactly as expected from the trigger byte sequence already confirmed
+on the other two cameras (`FF 04 00 00 0A 03 00 00`, `reserved=0x00`). No BLE echo arrived
+for either candidate — expected, consistent with every other trigger attempt on any camera
+(§7, §9) — so `discover_command.py`'s own "disagreeing candidates" warning applied at full
+strength: with no echo to cross-check against, the operator's own read was the *only*
+evidence, and confirming two different byte values identically, seconds apart, is
+indistinguishable from a habitual "yes" without more.
+
+**Second run, same day: `tools/control/verify_photo_trigger.py` resolved it — genuinely,
+not by chance.** Built for exactly this gap
+(`docs/ble/command_discovery.md`'s "When an outcome has no echo to cross-check" section),
+it replaced the glance with `rest/media.py`'s real per-photo `mtime` signal: for each
+candidate it recorded an independent REST Stills-directory baseline, sent that one
+candidate over BLE, and polled for a genuine confirmation. **Both `reserved=0x00` and
+`reserved=0x01` were independently REST-confirmed** — each via its own baseline+trigger+poll
+cycle in the same run. Unlike the first run's identical-glance ambiguity, this really is
+evidence the camera ignores the reserved byte for this command: the two confirmations came
+from two independent on-card signals, not two readings of the same impression.
+`reserved=0x00` was written into the profile as canonical, matching `POCKET_6K_G2 v7.9`'s
+and `POCKET_6K_PRO v8.6`'s identical blocks (both of which found the same reserved-byte
+indifference and also settled on `0x00` for consistency, not because it was distinguished
+from `0x01` on the wire). `capabilities.supports_photo` and `commands.photo` are now
+written into `payloads/models/POCKET_6K_G2/ble/v8.6.json` — see that block's own
+`provenance` for the full evidentiary write-up, including the three capture files this
+section's two runs produced. `examples/capture_photo.py` now defaults to
+`POCKET_6K_G2 v8.6`, matching CLAUDE.md's primary-reference convention, with
+`POCKET_6K_PRO v8.6` as the commented alternative.
