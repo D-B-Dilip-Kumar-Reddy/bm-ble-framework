@@ -199,13 +199,17 @@ src/bmd_camera/
                               # timeline) is now real-hardware-confirmed too: the full Phase
                               # 7 sequence (select_clip through exit_playback) ran clean on
                               # both POCKET_6K_G2 and POCKET_6K_PRO v8.6, 2026-08-04, via
-                              # examples/rest_playback.py — though that run's clip already
-                              # matched the camera's current format, so the
-                              # set_camera_format() switch branch inside select_clip()
-                              # itself remains unexercised — see docs/rest/session.md for
-                              # the full trail and exactly which endpoints/field names are
-                              # sweep-confirmed vs. this migration's own plan-derived
-                              # hypotheses
+                              # examples/rest_playback.py. A later run (POCKET_6K_G2 v8.6,
+                              # same day) finally exercised the set_camera_format() switch
+                              # branch itself (earlier runs' clips already matched) and
+                              # surfaced something unexpected: after exit_playback(), the
+                              # camera's format had reverted to what it was before
+                              # select_clip() ran, though nothing explicitly requested that
+                              # — one data point, not yet isolated to a specific call (stop()
+                              # is currently exit_playback() itself) — see
+                              # docs/rest/session.md for the full trail and exactly which
+                              # endpoints/field names are sweep-confirmed vs. this
+                              # migration's own plan-derived hypotheses
     mapping.py                 # Codec name derivation between the BLE profile's vocabulary
                               # and REST's own spelling — confirmed strings always win
                               # (design principle 1); this is a fallback seed only.
@@ -298,12 +302,20 @@ examples/
                             # clip and confirms it's a member of the resulting group. This
                             # full script (all nine steps, select_clip through
                             # exit_playback) is now real-hardware-confirmed end to end on
-                            # both cameras — though that run's clip already matched the
-                            # camera's current format, so select_clip()'s own
-                            # set_camera_format() switch branch remains unexercised.
-                            # Confirmation here is via this session's own dual-checks;
-                            # watching the camera screen is still the independent ground
-                            # truth, see docs/rest/session.md and docs/rest/transport.md
+                            # both cameras. A later run finally exercised select_clip()'s
+                            # own set_camera_format() switch branch and surfaced an
+                            # unexpected finding: the camera's format reverted to its
+                            # pre-select_clip() value after exit_playback(), unrequested by
+                            # anything in this script — one data point, not yet isolated to
+                            # a specific call. Now brackets its run with GET /system/format
+                            # snapshots (before select_clip, after exit_playback) to make
+                            # this visible, and gives stop() (currently an alias for
+                            # exit_playback()) a longer dedicated pause so an operator can
+                            # actually look at the camera before the redundant
+                            # exit_playback step re-fires the same call. Confirmation here
+                            # is via this session's own dual-checks; watching the camera
+                            # screen is still the independent ground truth, see
+                            # docs/rest/session.md and docs/rest/transport.md
   playback.py               # (planned)
 
 tests/

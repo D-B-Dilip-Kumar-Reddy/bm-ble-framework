@@ -767,6 +767,25 @@ what remains open (a clip whose format doesn't match, forcing the switch; and wh
 skipping the DELETE clear leaves stale entries, still untested since this card only ever
 held one format group at a time).
 
+**Seventh real-hardware evidence, `POCKET_6K_G2 v8.6`, 2026-08-04, the run that finally
+exercised `select_clip()`'s format-switch branch — and surfaced something unexpected:**
+with `examples/rest_playback.py` now bracketing its run with `GET /system/format`
+snapshots, this run's camera started at `BRaw:8_1 @ 4096x2160p29.97`; `select_clip()`
+correctly detected the mismatch against the requested clip's own `BRaw:5_1 @
+6144x3456p25`, logged it, and switched format via `set_camera_format()` — the first real
+confirmation of that branch (the sixth finding's run never exercised it, since its clip
+already matched). But the run's closing snapshot, taken after `stop()`/`exit_playback()`,
+reported the format back at the *original* `BRaw:8_1 @ 4096x2160p29.97` — a switch nothing
+in the script explicitly requested. `stop()` and `exit_playback()` send the identical `PUT`
+right now (`stop()` is a direct alias), so this one run can't attribute the revert to
+either specifically, or rule out some other cause tied to the same sequence. Leading,
+unconfirmed hypothesis: leaving playback mode (`PUT /transports/0 {"mode":
+"InputPreview"}`) restores whatever format preceded `select_clip()`'s switch. See
+docs/rest/session.md's `enter_playback()` / `exit_playback()` section for the full
+writeup and the suggested follow-up test (call `select_clip()` alone, skip the playback
+steps entirely, to see whether the switch itself — not anything playback-related — is
+what triggers it).
+
 ---
 
 ## Library surface (Phase 2)

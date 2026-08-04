@@ -1150,7 +1150,28 @@ class RestCameraSession:
         """Leave playback mode, back to live view — `PUT /transports/0
         {"mode": "InputPreview"}`. Real-hardware-confirmed as part of the
         full Phase 7 sequence (`POCKET_6K_G2` and `POCKET_6K_PRO v8.6`,
-        2026-08-04, `examples/rest_playback.py`)."""
+        2026-08-04, `examples/rest_playback.py`).
+
+        **Possible auto-revert of the camera's format on exit — one data
+        point, `POCKET_6K_G2 v8.6`, 2026-08-04.** A run that had
+        `select_clip()` switch the camera from `BRaw:8_1 @
+        4096x2160p29.97` to a requested clip's own `BRaw:5_1 @
+        6144x3456p25` ended with `GET /system/format` reporting
+        `BRaw:8_1 @ 4096x2160p29.97` again — the exact pre-`select_clip()`
+        format — even though nothing in the script ever requested that
+        switch back. This method (and `stop()`, which calls it directly)
+        are the only candidates in that run's call sequence for what
+        triggered it, but `stop()` *is* this method right now (see
+        `stop()`'s own docstring), so this single run cannot distinguish
+        "leaving playback mode reverts format" from some other cause tied
+        to the same request. Not yet confirmed to repeat, not yet isolated
+        to this call specifically, and not relied on anywhere in this
+        session — a caller who needs the pre-`select_clip()` format
+        restored should not assume this happens and should call
+        `set_camera_format()` explicitly instead. See
+        docs/rest/session.md's `enter_playback()` / `exit_playback()`
+        section for the full writeup.
+        """
         await self._set_transport_mode("InputPreview")
 
     async def _set_transport_mode(self, mode: str) -> None:
