@@ -48,11 +48,16 @@ increasing filenames (`..._S009.braw`, then `..._S010.braw`) instead of repeatin
 `set_timeline()`, `enter_playback()`/`exit_playback()`, `play()`/`pause()`/`stop()`, and
 `shuttle()`/`seek()` (Phase 7 — playback and gallery, entirely new capability BLE never
 reached) are implemented, unit-tested, and have a new `examples/rest_playback.py`.
-**First real-hardware run, `POCKET_6K_G2 v8.6`, 2026-08-04:** `set_timeline()` hit a real
-defect on its very first call — `DELETE /timelines/0` returns `501` on this firmware, not
-just theoretically unswept but actually confirmed unimplemented. Fixed by catching that
-specific `501` and proceeding straight to `POST`ing (see `set_timeline()`'s own section
-below); the run stopped there this time, so `enter_playback()` onward remain unexercised.
+**First real-hardware run, `POCKET_6K_G2 v8.6`, 2026-08-04:** `set_timeline()` hit two real
+defects back to back on its very first call. `DELETE /timelines/0` returns `501` on this
+firmware, not just theoretically unswept but actually confirmed unimplemented — fixed by
+catching that specific `501` and proceeding straight to `POST`ing. The `POST` itself then
+came back `400 {"error": "Invalid clips data"}` against the original one-request-per-clip,
+bare-`{"clipUniqueId": id}` body — fixed by switching to one request carrying all clips
+under a `"clips"` key, matching `GET /timelines/0`'s own confirmed response shape (see
+`set_timeline()`'s own section below for both findings). The run stopped there this time,
+so whether the new body is accepted, and whether `enter_playback()` onward work at all,
+remain unexercised.
 Two of the four endpoints Phase 7 needs
 (`/transports/0` and `/transports/0/playback`) have a real same-value-`PUT`-confirmed
 `204` from the Phase 0 sweep (`docs/rest/transport.md`); the other two
@@ -536,37 +541,46 @@ Entirely new capability BLE never reached (`docs/rest/transport.md`'s "New capab
 REST brings"). Built to the same dual-check discipline as every other write in this
 session, but with a materially weaker evidentiary base than Phases 4/5 had going in — see
 each method's own docstring for exactly what is and isn't confirmed. **First real-hardware
-run, `POCKET_6K_G2 v8.6`, 2026-08-04:** `set_timeline()` hit a real defect immediately —
-see its own section below. The rest of the sequence (`enter_playback()` onward) has not
+run, `POCKET_6K_G2 v8.6`, 2026-08-04:** `set_timeline()` hit two real defects back to back
+— see its own section below. The rest of the sequence (`enter_playback()` onward) has not
 yet been reached by a real run.
 
 ### `set_timeline(clip_unique_ids)`
 
 `DELETE /timelines/0` (clears whatever timeline exists) then one `POST /timelines/0/add`
-per id, in order — `Clip.clip_unique_id` values from `clips()` (Phase 3). Required before
-`enter_playback()`/`play()` can show anything.
+carrying every clip — `Clip.clip_unique_id` values from `clips()` (Phase 3). Required
+before `enter_playback()`/`play()` can show anything.
 
 **The one Phase 7 write with zero prior sweep evidence of any kind.** `/timelines/0`
 (DELETE) and `/timelines/0/add` (POST) are both in `tools/rest/probe_endpoints.py`'s
 `NEVER_WRITE` list — a delete or add is destructive regardless of value, so even the
 idempotent same-value-probe method that confirmed `/transports/0`/`/transports/0/playback`
 writable can't touch them. This is the same position `/transports/0/record` was in before
-Phase 4's own writes were the first real evidence either way. The `POST` body
-(`{"clipUniqueId": id}`) reuses the field name `/clips/list` already confirmed real
-(`docs/rest/transport.md`), on the hypothesis the two endpoints share a vocabulary — not an
-independently captured `/timelines/0/add` sample.
+Phase 4's own writes were the first real evidence either way.
 
-**Real-hardware finding, `POCKET_6K_G2 v8.6`, 2026-08-04 (Phase 7's first run):**
+**Real-hardware finding #1, `POCKET_6K_G2 v8.6`, 2026-08-04 (Phase 7's first run):**
 `DELETE /timelines/0` returned `501` — the DELETE *method* on this path is genuinely not
 implemented on this firmware, a different and more specific answer than the read sweep's
 confirmed `GET`. Since a `BMDUnsupportedError` propagating from the DELETE would have
 blocked every subsequent `POST` from ever being attempted, and whether this camera even
 needs an explicit clear before adding is itself unconfirmed, `set_timeline()` now catches a
 `501` from the DELETE specifically, logs it, and proceeds straight to `POST`ing — any other
-error from the DELETE still propagates normally. This got the method further, but the run
-stopped there for this session; whether `POST /timelines/0/add` itself works, and whether
-skipping the clear leaves stale entries in the timeline, are both still open until a run
-reaches that step.
+error from the DELETE still propagates normally.
+
+**Real-hardware finding #2, same run, immediately after:** the original `POST` body — one
+request per clip, each a bare `{"clipUniqueId": id}` reusing `/clips/list`'s field name on
+the hypothesis the two endpoints share a vocabulary — was rejected: `400
+{"error": "Invalid clips data"}`. The error names `"clips"` (plural) specifically, which
+reads as "the body needs a top-level `clips` key", not "the field name inside it is
+wrong". `_parse_timeline_clip_ids()` already established that `GET /timelines/0`'s own
+confirmed response carries exactly that shape — `{"clips": [{"clipUniqueId": ...}, ...]}`
+— so the fix sends the same shape back: **one** `POST /timelines/0/add` carrying every id
+in `clip_unique_ids` under `"clips"`, instead of one bare-object `POST` per id. This is
+still a hypothesis — reusing the GET response's own shape for the POST body is a
+reasonable next guess, not an independently confirmed sample — and remains open until a
+run gets far enough to see whether it's accepted. Also still open, from finding #1:
+whether skipping the DELETE clear leaves stale entries in the timeline, since the run
+never got past the (then-rejected) `POST` to find out.
 
 No WS event shape is known for this resource, so verification here isn't the usual
 primary/secondary dual-check — it's a poll: `GET /timelines/0` repeatedly (default every

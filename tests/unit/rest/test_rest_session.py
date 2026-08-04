@@ -1569,7 +1569,7 @@ class TestSetTimeline:
             await session.set_timeline([1, 2])
 
     @pytest.mark.asyncio
-    async def test_clears_then_adds_each_clip_in_order(self):
+    async def test_clears_then_adds_all_clips_in_one_post(self):
         client = FakeRestClient(
             {TIMELINE_PATH: {"clips": [{"clipUniqueId": 1}, {"clipUniqueId": 2}]}}
         )
@@ -1579,8 +1579,10 @@ class TestSetTimeline:
 
         assert client.delete_calls == [TIMELINE_PATH]
         assert client.post_calls == [
-            (TIMELINE_ADD_PATH, {"clipUniqueId": 1}),
-            (TIMELINE_ADD_PATH, {"clipUniqueId": 2}),
+            (
+                TIMELINE_ADD_PATH,
+                {"clips": [{"clipUniqueId": 1}, {"clipUniqueId": 2}]},
+            ),
         ]
 
     @pytest.mark.asyncio
@@ -1618,7 +1620,7 @@ class TestSetTimeline:
         """Real-hardware finding, POCKET_6K_G2 v8.6, 2026-08-04 (Phase 7's
         first run): DELETE /timelines/0 returns 501 on this firmware. A
         confirmed 501 from the DELETE specifically must not block the
-        POSTs that follow."""
+        POST that follows."""
         client = FakeRestClient({TIMELINE_PATH: {"clips": [{"clipUniqueId": 1}]}})
 
         async def delete(path):
@@ -1631,7 +1633,9 @@ class TestSetTimeline:
         await session.set_timeline([1])
 
         assert client.delete_calls == [TIMELINE_PATH]
-        assert client.post_calls == [(TIMELINE_ADD_PATH, {"clipUniqueId": 1})]
+        assert client.post_calls == [
+            (TIMELINE_ADD_PATH, {"clips": [{"clipUniqueId": 1}]}),
+        ]
 
     @pytest.mark.asyncio
     async def test_other_delete_errors_still_propagate(self):

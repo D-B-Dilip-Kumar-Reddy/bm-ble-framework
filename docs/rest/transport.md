@@ -684,17 +684,22 @@ code runs — the same position `/transports/0/record` was in before Phase 4. Se
 docs/rest/session.md's Phase 7 section for which parts of the request/response shapes are
 sweep-confirmed and which are this migration's own plan-derived hypotheses.
 
-That first real-hardware run (`POCKET_6K_G2 v8.6`, 2026-08-04) answered one of those two
-`NEVER_WRITE` unknowns immediately: `DELETE /timelines/0` returns `501 Not Implemented` —
-the DELETE method specifically, not the resource generally, since this doc's own sweep
-never probed it (DELETE was excluded as destructive, not merely because it might be
-unsupported). `set_timeline()` now catches that specific `BMDUnsupportedError`, logs a
-warning, and proceeds straight to the `POST /timelines/0/add` loop it would have run
-anyway. Still unanswered by that run: whether `POST /timelines/0/add` itself is
-implemented on this firmware (the run stopped at the DELETE failure before reaching it),
-and whether skipping the clear leaves stale entries in the timeline or `POST` replaces it
-outright. Both remain open until a run gets far enough to observe them. See
-docs/rest/session.md's `set_timeline()` section for the full evidentiary writeup.
+That first real-hardware run (`POCKET_6K_G2 v8.6`, 2026-08-04) answered both `NEVER_WRITE`
+unknowns in quick succession — neither answer was the happy path. `DELETE /timelines/0`
+returns `501 Not Implemented` — the DELETE method specifically, not the resource
+generally, since this doc's own sweep never probed it (DELETE was excluded as destructive,
+not merely because it might be unsupported). `set_timeline()` now catches that specific
+`BMDUnsupportedError`, logs a warning, and proceeds straight to `POST /timelines/0/add`.
+That `POST`, in its original one-request-per-clip form with a bare `{"clipUniqueId": id}`
+body, was then rejected outright: `400 {"error": "Invalid clips data"}`. Reading "clips"
+in the error as naming the required top-level key, `set_timeline()` now sends a single
+`POST` carrying every clip under `"clips"` — reusing the shape `GET /timelines/0`'s own
+confirmed response already carries, per `_parse_timeline_clip_ids()`. Still a hypothesis,
+not an independently confirmed sample. Still unanswered: whether that body is accepted,
+and whether skipping the DELETE clear leaves stale entries in the timeline — the run
+never got past the (then-rejected) `POST` to find out. Both remain open until a run gets
+far enough to observe them. See docs/rest/session.md's `set_timeline()` section for the
+full evidentiary writeup.
 
 ---
 

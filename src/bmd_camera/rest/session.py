@@ -892,8 +892,9 @@ class RestCameraSession:
     ) -> None:
         """Build the active timeline from `clip_unique_ids` (`Clip.clip_unique_id`,
         from `clips()`, Phase 3) — `DELETE /timelines/0` clears whatever
-        timeline exists, then one `POST /timelines/0/add` per id, in order.
-        Required before `enter_playback()`/`play()` can show anything.
+        timeline exists, then one `POST /timelines/0/add` carrying every
+        clip. Required before `enter_playback()`/`play()` can show
+        anything.
 
         **Unswept — this method is the first real evidence either way.**
         `/timelines/0` (DELETE) and `/timelines/0/add` (POST) are both in
@@ -902,11 +903,7 @@ class RestCameraSession:
         same-value probe that proved `/system/format`/`/transports/0`/
         `/transports/0/playback` writable structurally cannot touch them
         (design principle 6's REST sibling — the same position
-        `/transports/0/record` was in before Phase 4 proved it out). The
-        `POST` body shape (`{"clipUniqueId": id}`) reuses the field name
-        `/clips/list` already confirmed real (`docs/rest/transport.md`), on
-        the hypothesis the two endpoints share a vocabulary — not an
-        independently captured `/timelines/0/add` sample.
+        `/transports/0/record` was in before Phase 4 proved it out).
 
         **Real-hardware finding, `POCKET_6K_G2 v8.6`, 2026-08-04 (first
         Phase 7 run):** `DELETE /timelines/0` returns `501` — the DELETE
@@ -924,6 +921,24 @@ class RestCameraSession:
         timeline, or whether `POST /timelines/0/add` itself replaces rather
         than appends, remains unconfirmed until a real run reaches the
         `POST` step.
+
+        **Second real-hardware finding, same run, immediately after the
+        first:** the original body shape — one `POST` per clip, each body a
+        bare `{"clipUniqueId": id}` (a hypothesis borrowed from
+        `/clips/list`'s confirmed field name, not an independently captured
+        `/timelines/0/add` sample) — was rejected outright:
+        `400 {"error": "Invalid clips data"}`. The error names "clips"
+        (plural) specifically, not "clipUniqueId", which reads as the body
+        needing a top-level `clips` key rather than a bare clip object.
+        `_parse_timeline_clip_ids()` already established that `GET
+        /timelines/0`'s own confirmed response carries exactly that shape —
+        `{"clips": [{"clipUniqueId": ...}, ...]}` — so the fix sends the
+        same shape back: **one** `POST /timelines/0/add` carrying all of
+        `clip_unique_ids` under `"clips"`, instead of one bare-object `POST`
+        per id. This is still a hypothesis, not an independently confirmed
+        sample — reusing the GET response's own shape for the POST body is
+        a reasonable next guess, not a proven one — and remains open until a
+        run gets far enough to see whether it's accepted.
 
         Verified by polling `GET /timelines/0` until its reported clip ids
         match `clip_unique_ids` exactly, or `verify_timeout_s` elapses
@@ -951,8 +966,8 @@ class RestCameraSession:
                 TIMELINE_PATH,
                 TIMELINE_ADD_PATH,
             )
-        for clip_id in clip_unique_ids:
-            await self._rest_client.post(TIMELINE_ADD_PATH, {"clipUniqueId": clip_id})
+        clips_body = {"clips": [{"clipUniqueId": clip_id} for clip_id in clip_unique_ids]}
+        await self._rest_client.post(TIMELINE_ADD_PATH, clips_body)
 
         deadline = time.monotonic() + self.verify_timeout_s
         current_ids: list[int] = []
