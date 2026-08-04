@@ -196,10 +196,16 @@ src/bmd_camera/
                               # resolve_ble_codec_name), and confirms the clip is a member
                               # of whatever timeline comes back — not that it's alone. This
                               # exact combination (reverse-map, switch format, sync
-                              # timeline) has not itself been run against real hardware —
-                              # see docs/rest/session.md for the full five-round trail and
-                              # exactly which endpoints/field names are sweep-confirmed vs.
-                              # this migration's own plan-derived hypotheses
+                              # timeline) is now real-hardware-confirmed too: the full Phase
+                              # 7 sequence (select_clip through exit_playback) ran clean on
+                              # both POCKET_6K_G2 and POCKET_6K_PRO v8.6, 2026-08-04, via
+                              # examples/rest_playback.py — though that run's clip already
+                              # matched the camera's current format, so the
+                              # set_camera_format() switch branch inside select_clip()
+                              # itself remains unexercised — see docs/rest/session.md for
+                              # the full trail and exactly which endpoints/field names are
+                              # sweep-confirmed vs. this migration's own plan-derived
+                              # hypotheses
     mapping.py                 # Codec name derivation between the BLE profile's vocabulary
                               # and REST's own spelling — confirmed strings always win
                               # (design principle 1); this is a fallback seed only.
@@ -290,11 +296,14 @@ examples/
                             # on-screen playback view agreeing on the same seven-clip
                             # group). select_clip() switches format to match the requested
                             # clip and confirms it's a member of the resulting group. This
-                            # exact combination has not itself been run against real
-                            # hardware; every step from select_clip() onward remains
-                            # not-yet-real-hardware-confirmed. Verification is by eye
-                            # (operator watches the camera screen), see
-                            # docs/rest/session.md and docs/rest/transport.md
+                            # full script (all nine steps, select_clip through
+                            # exit_playback) is now real-hardware-confirmed end to end on
+                            # both cameras — though that run's clip already matched the
+                            # camera's current format, so select_clip()'s own
+                            # set_camera_format() switch branch remains unexercised.
+                            # Confirmation here is via this session's own dual-checks;
+                            # watching the camera screen is still the independent ground
+                            # truth, see docs/rest/session.md and docs/rest/transport.md
   playback.py               # (planned)
 
 tests/
@@ -338,7 +347,7 @@ added, a new `docs/<feature>.md` must be created alongside the code change.
 | `docs/ble/reverse_engineering.md` | Tool-by-tool procedure for bringing up a new `(MODEL_KEY, FIRMWARE)` pair, and for adding a single new command |
 | `docs/ble/camera_registry.md` | Full evidentiary notes behind the Camera Registry table above |
 | `docs/rest/transport.md` | REST/WebSocket transport (8.6) — addressing the camera over USB, scheme discovery, `tools/rest/probe_endpoints.py`, sweep results for both cameras, the `RestClient`/`RestEventRouter` library surface |
-| `docs/rest/session.md` | `RestCameraSession` — the REST state/control surface: read verbs (Phase 3 — format, storage, clips, timecode, notification-driven `is_recording`); `record_start`/`record_stop` (Phase 4 — dual-check verification, storage precondition, real-hardware-confirmed); `set_camera_format` (Phase 5 — one `PUT /system/format`, live-capability-gated via `supported_formats()`); photo-capture confirmation primitives (Phase 6 — `list_mount`/`mount_names`/`path_exists`/`guess_new_still_path`, real-hardware-confirmed); playback/gallery writes (Phase 7 — `select_clip`/`enter_playback`/`play`/`pause`/`seek`/`shuttle`/`stop`, built, not yet real-hardware-confirmed — `select_clip` replaced an earlier `set_timeline` design real hardware disproved outright); codec name mapping and REST timecode decode |
+| `docs/rest/session.md` | `RestCameraSession` — the REST state/control surface: read verbs (Phase 3 — format, storage, clips, timecode, notification-driven `is_recording`); `record_start`/`record_stop` (Phase 4 — dual-check verification, storage precondition, real-hardware-confirmed); `set_camera_format` (Phase 5 — one `PUT /system/format`, live-capability-gated via `supported_formats()`); photo-capture confirmation primitives (Phase 6 — `list_mount`/`mount_names`/`path_exists`/`guess_new_still_path`, real-hardware-confirmed); playback/gallery writes (Phase 7 — `select_clip`/`enter_playback`/`play`/`pause`/`seek`/`shuttle`/`stop`, real-hardware-confirmed end to end on both cameras — `select_clip` replaced an earlier `set_timeline` design real hardware disproved outright); codec name mapping and REST timecode decode |
 
 ---
 

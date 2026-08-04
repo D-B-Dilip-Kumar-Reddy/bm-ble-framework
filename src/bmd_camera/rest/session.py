@@ -10,16 +10,19 @@ boundary, held here for REST.
 STATUS: read verbs, record start/stop (Phase 4), format writes (Phase 5), photo
 confirmation primitives (Phase 6), and playback/gallery writes (Phase 7) — the
 REST dual-check design principle 3 has always specified: a WS
-`propertyValueChanged` event primary, a `GET` readback secondary.
-`enter_playback()`/`play()`/`pause()`/`stop()`/`shuttle()`/`seek()` have real
-hardware evidence behind their bodies (POCKET_6K_PRO v8.6, 2026-08-04).
-`select_clip()` replaces an earlier `set_timeline(clip_unique_ids: list[int])`
-design that real hardware disproved outright — this camera has no concept of
-a caller-curated playlist; the playable set is always every clip matching
-the camera's current format, confirmed on real hardware two independent
-ways (a REST readback and the camera's own on-screen playback view both
-agreeing on the same seven-clip group) — see `select_clip()`'s own
-docstring for the full real-hardware debugging trail.
+`propertyValueChanged` event primary, a `GET` readback secondary. Phase 7's
+entire sequence — `select_clip()` -> `enter_playback()` -> `play()` ->
+`pause()` -> `seek()` -> `shuttle()` (forward and backward) -> `stop()` ->
+`exit_playback()` — is real-hardware-confirmed end to end on both
+`POCKET_6K_G2` and `POCKET_6K_PRO v8.6` (2026-08-04, `examples/rest_playback.py`,
+every step's own dual-check passing on both cameras). `select_clip()` itself
+replaces an earlier `set_timeline(clip_unique_ids: list[int])` design that
+real hardware disproved outright — this camera has no concept of a
+caller-curated playlist; the playable set is always every clip matching the
+camera's current format, confirmed on real hardware two independent ways (a
+REST readback and the camera's own on-screen playback view both agreeing on
+the same seven-clip group) — see `select_clip()`'s own docstring for the
+full real-hardware debugging trail.
 
     async with RestCameraSession("172.27.97.141", "POCKET_6K_PRO", "v8.6") as session:
         fmt = await session.get_format()
@@ -982,16 +985,19 @@ class RestCameraSession:
         equality `set_timeline()` used to check, since the real result is
         never just the one clip requested.
 
-        **This exact combination — reverse-mapping a clip's REST-reported
-        format back to a `set_camera_format()` call, then syncing the
-        timeline — has not itself been run against real hardware.** Each
-        piece has independent real-hardware evidence
-        (`set_camera_format` since Phase 5; the `DELETE`-then-`POST`
-        sequence and its body shape from the trail above), but this method
-        is the first thing to compose them. `resolve_ble_codec_name`
-        (`mapping.py`) can raise `BMDUnsupportedError` if a clip's REST
-        codec string isn't in the profile's confirmed `format_names` table
-        (no derivation fallback — see `mapping.py`'s own docstring for
+        **Real-hardware-confirmed, `POCKET_6K_G2` and `POCKET_6K_PRO v8.6`,
+        2026-08-04:** this exact combination — the format check, the
+        `set_camera_format()` switch when needed, and the `DELETE`-then-
+        `POST` timeline sync — ran clean end to end on both cameras via
+        `examples/rest_playback.py`, each step's own dual-check passing
+        (this method's readback poll included). The clip requested here
+        (`clip_unique_id=1`) already matched the camera's format on both
+        runs, so this specific run didn't exercise the `set_camera_format`
+        branch — that piece's own evidence is still Phase 5's, not new
+        from this run. `resolve_ble_codec_name` (`mapping.py`) can raise
+        `BMDUnsupportedError` if a clip's REST codec string isn't in the
+        profile's confirmed `format_names` table (no derivation fallback
+        — see `mapping.py`'s own docstring for
         why guessing backwards isn't safe); `_resolution_name_for_dimensions`
         can do the same if a clip's pixel dimensions don't match any
         profile `resolutions` entry. Both are real gaps this method
@@ -1095,7 +1101,9 @@ class RestCameraSession:
     async def enter_playback(self) -> None:
         """Switch the camera into playback mode — `PUT /transports/0
         {"mode": "Output"}`. `select_clip()` should be called first; there
-        is nothing to show otherwise.
+        is nothing to show otherwise. Real-hardware-confirmed as part of
+        the full Phase 7 sequence (`POCKET_6K_G2` and `POCKET_6K_PRO v8.6`,
+        2026-08-04, `examples/rest_playback.py`).
 
         **Format precondition, confirmed real on the camera body
         (`POCKET_6K_PRO v8.6`, 2026-08-04):** a clip only plays if the
@@ -1117,7 +1125,9 @@ class RestCameraSession:
 
     async def exit_playback(self) -> None:
         """Leave playback mode, back to live view — `PUT /transports/0
-        {"mode": "InputPreview"}`."""
+        {"mode": "InputPreview"}`. Real-hardware-confirmed as part of the
+        full Phase 7 sequence (`POCKET_6K_G2` and `POCKET_6K_PRO v8.6`,
+        2026-08-04, `examples/rest_playback.py`)."""
         await self._set_transport_mode("InputPreview")
 
     async def _set_transport_mode(self, mode: str) -> None:
@@ -1171,7 +1181,9 @@ class RestCameraSession:
         already has a confirmed `204` same-value `PUT` (design principle
         6's REST sibling) — routing through it here trades a small amount
         of API-surface fidelity to the original plan for a write path this
-        session already has real evidence works."""
+        session already has real evidence works. This alias itself is
+        real-hardware-confirmed (`POCKET_6K_G2` and `POCKET_6K_PRO v8.6`,
+        2026-08-04, `examples/rest_playback.py`)."""
         await self.shuttle(1.0)
 
     async def stop(self) -> None:
@@ -1179,11 +1191,15 @@ class RestCameraSession:
         `exit_playback()`, for the same reason `play()` isn't
         `/transports/0/play`: `/transports/0/stop`'s body and verification
         shape are equally unconfirmed, while `exit_playback()`'s body
-        (`{"mode": "InputPreview"}`) is sweep-confirmed real."""
+        (`{"mode": "InputPreview"}`) is sweep-confirmed real. This alias
+        itself is real-hardware-confirmed (`POCKET_6K_G2` and
+        `POCKET_6K_PRO v8.6`, 2026-08-04, `examples/rest_playback.py`)."""
         await self.exit_playback()
 
     async def pause(self) -> None:
-        """Halt playback at the current position — `shuttle(0.0)`."""
+        """Halt playback at the current position — `shuttle(0.0)`.
+        Real-hardware-confirmed (`POCKET_6K_G2` and `POCKET_6K_PRO v8.6`,
+        2026-08-04, `examples/rest_playback.py`)."""
         await self.shuttle(0.0)
 
     async def shuttle(self, speed: float) -> None:
@@ -1191,10 +1207,11 @@ class RestCameraSession:
         body (see `_put_playback` for the confirmed shape and the
         read-modify-write discipline) — positive shuttles forward, negative
         shuttles backward, magnitude sets the rate; `0.0` pauses at the
-        current position. `speed` and its `0.0`/`1.0` behaviour are
-        real-hardware-confirmed (`POCKET_6K_PRO v8.6`, 2026-08-04); other
-        magnitudes (e.g. `2.0`, `-1.0`) are an unconfirmed extrapolation
-        from the same field. Dual-check verified: a WS
+        current position. `0.0`/`1.0` (`POCKET_6K_PRO v8.6`, 2026-08-04) and
+        `2.0`/`-1.0` (`POCKET_6K_G2` and `POCKET_6K_PRO v8.6`, 2026-08-04,
+        `examples/rest_playback.py`'s forward/backward steps) are all
+        real-hardware-confirmed; other magnitudes remain an unconfirmed
+        extrapolation from the same field. Dual-check verified: a WS
         `propertyValueChanged` event on `PLAYBACK_PROPERTY` primary, a
         `GET` readback secondary, checking the reported body contains
         `{"speed": speed}` via the generic `_contains` helper.
@@ -1205,8 +1222,10 @@ class RestCameraSession:
         """`PUT /transports/0/playback` with `position` — playback position
         on the timeline, in video frames — merged into the current body
         (see `_put_playback`). Field name and units are
-        real-hardware-confirmed (`POCKET_6K_PRO v8.6`, 2026-08-04). Same
-        dual-check as `shuttle()`.
+        real-hardware-confirmed (`POCKET_6K_PRO v8.6`, 2026-08-04;
+        `seek(0)` itself real-hardware-confirmed on both cameras,
+        2026-08-04, `examples/rest_playback.py`). Same dual-check as
+        `shuttle()`.
 
         Supersedes an earlier, now-disproven hypothesis that this endpoint
         reused `GET /transports/0/timecode`'s own

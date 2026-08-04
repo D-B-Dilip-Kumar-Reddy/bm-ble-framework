@@ -12,7 +12,7 @@ different format than it started in) if a step raises partway through —
 press stop/exit on the camera body if that happens, and check the format
 before your next recording.
 
-VERIFICATION IS BY EYE, NOT BY THIS SCRIPT — read this before running
+VERIFICATION IS BY EYE, NOT ONLY BY THIS SCRIPT — read this before running
 --------------------------------------------------------------------------------
 Every write here is verified the same dual-check way as every other
 RestCameraSession write (a WS propertyValueChanged event primary, a GET
@@ -31,12 +31,20 @@ itself, and the camera's own on-screen playback view showing "CLIP 1/7" for
 the same group). select_clip() is built around that reality: it switches
 format to match the requested clip, then confirms the clip appears
 somewhere in the resulting (whole-format-group) timeline — not that it's
-alone there. This exact combination has not itself been run against real
-hardware yet; every step from select_clip() onward remains unexercised by
-a real run of this script. Watch the camera's own screen for the real
-ground truth, the same way docs/rest/transport.md's own Phase 7 note says
-to (`python examples/rest_playback.py` — operator watches the camera
-screen).
+alone there.
+
+This exact combination — the format check, the switch when needed, and the
+timeline sync — is now real-hardware-confirmed: a full run of this script
+(select_clip through exit_playback, all nine steps) passed clean on both
+POCKET_6K_G2 and POCKET_6K_PRO v8.6, 2026-08-04, every step's own
+dual-check confirming. That run's clip already matched the camera's
+current format on both cameras, so it didn't exercise select_clip()'s
+set_camera_format() branch specifically — a clip whose format doesn't
+match remains the next case to confirm. This script's own dual-check
+passing is real evidence the writes and their confirmation channels work;
+it is not the same as an operator watching the footage actually play, so
+still watch the camera's own screen for that ground truth, the same way
+docs/rest/transport.md's own Phase 7 note says to.
 
 Usage:
     python examples/rest_playback.py

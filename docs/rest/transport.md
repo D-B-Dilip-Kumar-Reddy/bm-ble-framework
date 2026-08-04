@@ -674,10 +674,11 @@ iris, zoom, focus and autofocus; per-channel audio input, level, phantom power, 
 low-cut filter; the full DaVinci-style colour corrector; and playback with a real
 timeline. All of it unverified until swept.
 
-**Playback and gallery (Phase 7, docs/rest/session.md) is built** —
+**Playback and gallery (Phase 7, docs/rest/session.md) is built and now
+real-hardware-confirmed end to end on both cameras** —
 `RestCameraSession.select_clip()`/`enter_playback()`/`exit_playback()`/`play()`/`pause()`/
-`stop()`/`shuttle()`/`seek()` — but sits on a thinner evidentiary base than any earlier
-phase. `/transports/0` and `/transports/0/playback` both have a real same-value-`PUT`-`204`
+`stop()`/`shuttle()`/`seek()` — though it started from a thinner evidentiary base than any
+earlier phase. `/transports/0` and `/transports/0/playback` both have a real same-value-`PUT`-`204`
 from this doc's own write probe (above); `/timelines/0` and `/timelines/0/add` are in the
 `NEVER_WRITE` list and have never had their write side exercised at all until Phase 7's own
 code runs — the same position `/transports/0/record` was in before Phase 4. See
@@ -747,11 +748,24 @@ real when the camera itself has no such concept. `RestCameraSession.select_clip
 (reusing `set_camera_format`, Phase 5, via a new reverse `Clip` -> profile-vocabulary
 mapping — `mapping.py`'s `resolve_ble_codec_name` plus a new pixel-dimension reverse
 lookup), then confirm the requested clip is a *member* of whatever `GET /timelines/0`
-reports rather than its sole entry. This exact combination — reverse-mapping a clip's
-format, switching to it, and syncing the timeline — has not itself been run against real
-hardware; each piece has independent evidence, but no run has yet composed them together
-through `select_clip()`. See docs/rest/session.md's `select_clip()` section for the full
-trail across all five findings and what remains open.
+reports rather than its sole entry.
+
+**Sixth real-hardware evidence, `POCKET_6K_G2` and `POCKET_6K_PRO v8.6`, 2026-08-04, the
+first run of `select_clip()` itself:** `python examples/rest_playback.py` ran the complete
+Phase 7 sequence — `select_clip()` -> `enter_playback()` -> `play()` -> `pause()` ->
+`seek(0)` -> `shuttle(2.0)` forward -> `shuttle(-1.0)` backward -> `stop()` ->
+`exit_playback()` — start to finish on **both** cameras, every step's own dual-check
+passing. This confirms the combination the fifth finding left untested: reverse-mapping a
+clip's format, switching to it via `set_camera_format()`, and syncing the timeline via
+`DELETE`-then-`POST` all compose correctly through `select_clip()` on real hardware — at
+least for the tested case, where the requested clip's format already matched the camera's
+current setting on both runs, so this run doesn't cover the `set_camera_format()` branch
+specifically (that piece's own evidence is still Phase 5's). `shuttle()`'s `2.0`/`-1.0`
+magnitudes and `seek(0)` are real-hardware-confirmed for the first time here too. See
+docs/rest/session.md's `select_clip()` section for the full trail across all findings and
+what remains open (a clip whose format doesn't match, forcing the switch; and whether
+skipping the DELETE clear leaves stale entries, still untested since this card only ever
+held one format group at a time).
 
 ---
 

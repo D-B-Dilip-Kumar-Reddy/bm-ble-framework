@@ -48,6 +48,8 @@ increasing filenames (`..._S009.braw`, then `..._S010.braw`) instead of repeatin
 `select_clip()`, `enter_playback()`/`exit_playback()`, `play()`/`pause()`/`stop()`, and
 `shuttle()`/`seek()` (Phase 7 — playback and gallery, entirely new capability BLE never
 reached) are implemented, unit-tested, and have a new `examples/rest_playback.py`.
+**The full sequence is now real-hardware-confirmed end to end on both cameras** — see the
+fourth finding below; the three findings before it are the debugging trail that got there.
 
 **First real-hardware run, `POCKET_6K_G2 v8.6`, 2026-08-04, against the original
 `set_timeline(clip_unique_ids: list[int])` design:** hit two real defects back to back on
@@ -82,10 +84,21 @@ in it.** `set_timeline(clip_unique_ids: list[int])`'s whole premise — pass an 
 ordered subset, get exactly that — doesn't describe how this camera works, so it's
 replaced outright by `select_clip(clip_unique_id: int)`: pick one clip, let its format
 define the resulting group, confirm the requested clip is a member of whatever comes back
-rather than the sole entry. See `select_clip()`'s own section below for the full trail and
-for what remains open (whether its new format-switch-then-sync combination itself works on
-real hardware — untested, since this finding came from a Postman session that never called
-this session's own code).
+rather than the sole entry. See `select_clip()`'s own section below for the full trail.
+
+**Fourth real-hardware run, `POCKET_6K_G2` and `POCKET_6K_PRO v8.6`, 2026-08-04, the first
+run of `select_clip()` itself:** `python examples/rest_playback.py` ran the entire Phase 7
+sequence — `select_clip()` -> `enter_playback()` -> `play()` -> `pause()` -> `seek(0)` ->
+`shuttle(2.0)` forward -> `shuttle(-1.0)` backward -> `stop()` -> `exit_playback()` — start
+to finish on **both** cameras, every step's own dual-check passing (`select_clip()`'s
+readback poll, `_set_transport_mode()`'s and `_put_playback()`'s WS-event/GET dual-checks).
+This answers the open question the third finding left behind: the format-switch-then-sync
+combination `select_clip()` composes does work on real hardware — at least for the tested
+case (`clip_unique_id=1`, whose format already matched the camera's current setting on
+both runs, so this specific run didn't exercise the `set_camera_format()` branch inside
+`select_clip()`; that piece's evidence is still Phase 5's own). `2.0`/`-1.0` `shuttle()`
+magnitudes and `seek(0)` are real-hardware-confirmed for the first time here too — see
+their own docstrings.
 
 Two of the four endpoints Phase 7 needs
 (`/transports/0` and `/transports/0/playback`) have a real same-value-`PUT`-confirmed
@@ -566,14 +579,14 @@ primary WS-event channel is genuinely winning the race now, not just theoretical
 
 Entirely new capability BLE never reached (`docs/rest/transport.md`'s "New capability
 REST brings"). Built to the same dual-check discipline as every other write in this
-session, but with a materially weaker evidentiary base than Phases 4/5 had going in — see
-each method's own docstring for exactly what is and isn't confirmed. The timeline write
-has now been debugged directly via Postman across four rounds, disproving its original
-`set_timeline(clip_unique_ids: list[int])` design outright and replacing it with
-`select_clip(clip_unique_id: int)` — see its own section below for the full trail; the new
-design's own real-hardware run is still pending. `enter_playback()` onward have
-real-hardware evidence behind their request bodies (from a separate operator test, also
-2026-08-04) but have not yet been exercised together in one successful run.
+session, though it started from a materially weaker evidentiary base than Phases 4/5 had
+going in — see each method's own docstring for exactly what is and isn't confirmed. The
+timeline write was debugged directly via Postman across four rounds, disproving its
+original `set_timeline(clip_unique_ids: list[int])` design outright and replacing it with
+`select_clip(clip_unique_id: int)` — see its own section below for the full trail. The
+entire sequence — `select_clip()` through `exit_playback()` — is now real-hardware-
+confirmed end to end on both `POCKET_6K_G2` and `POCKET_6K_PRO v8.6` (2026-08-04,
+`examples/rest_playback.py`).
 
 ### `select_clip(clip_unique_id)`
 
@@ -656,12 +669,17 @@ proof). `_resolution_name_for_dimensions` does the same for the clip's pixel dim
 against the profile's `resolutions` table. Either returning nothing raises
 `BMDUnsupportedError` naming the gap rather than guessing.
 
-**This exact combination — reverse-mapping a clip's format, calling `set_camera_format()`,
-then syncing the timeline — has not itself been run against real hardware.** Each piece
-has independent real-hardware evidence (`set_camera_format` since Phase 5; the
-`DELETE`-then-`POST` sequence and its body shape from findings #1-#4 above), but no run has
-yet composed them through `select_clip()` itself. Still open, from finding #1: whether
-skipping the DELETE clear leaves stale entries when adding does work.
+**Real-hardware finding #5, `POCKET_6K_G2` and `POCKET_6K_PRO v8.6`, 2026-08-04, the first
+run of `select_clip()` itself:** `python examples/rest_playback.py` composed the whole
+combination — format check, `DELETE`-then-`POST` timeline sync, membership poll — and it
+ran clean on both cameras, this method's own dual-check passing each time. The tested
+clip's format already matched the camera's current setting on both runs, so this
+specific evidence doesn't cover the `set_camera_format()` branch inside `select_clip()`
+(that piece's own evidence is still Phase 5's, not new here) — a clip whose format
+*doesn't* match, forcing the switch, remains the next real-hardware gap to close. Still
+open, from finding #1: whether skipping the DELETE clear leaves stale entries when adding
+does work — this run's card only ever held clips of the one format being requested, so it
+couldn't distinguish a clean add from one with leftover entries.
 
 No WS event shape is known for `/timelines/0`, so verification there isn't the usual
 primary/secondary dual-check — it's a poll: `GET /timelines/0` repeatedly (default every
@@ -756,9 +774,11 @@ default, and `seek()` doesn't reset `type`/`loop`/`singleClip`/`speed`. `type`, 
 `seek()` leaves them at whatever the preceding `GET` reported.
 
 `shuttle(speed)` sends `{"speed": speed}` as its overlay — positive shuttles forward,
-negative backward, magnitude sets the rate; `0.0`/`1.0` are real-hardware-confirmed, other
-magnitudes are an unconfirmed extrapolation from the same field. `seek(position)` sends
-`{"position": position}`.
+negative backward, magnitude sets the rate. `0.0`/`1.0` (`POCKET_6K_PRO v8.6`, operator
+Postman testing) and `2.0`/`-1.0` (both cameras, `examples/rest_playback.py`'s
+forward/backward steps) are all real-hardware-confirmed now; other magnitudes remain an
+unconfirmed extrapolation from the same field. `seek(position)` sends
+`{"position": position}` — `seek(0)` itself is real-hardware-confirmed on both cameras.
 
 **Why `_contains()` instead of a named parser.** Even with a real sample now in hand, the
 confirmed body was never independently captured as a `GET /transports/0/playback` response
