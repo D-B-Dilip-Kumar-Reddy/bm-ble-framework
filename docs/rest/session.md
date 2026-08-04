@@ -177,6 +177,24 @@ JSON-then-text fallback could raise decoding. This is what `rest/media.py`'s sti
 probing calls, since a directory listing isn't available (every subdirectory under a
 mount root — Stills included — `500`s).
 
+**Defect found and fixed on real hardware, 2026-08-04:** the first `examples/capture_photo.py`
+run against `POCKET_6K_PRO v8.6` got past `storage_state()` and `derive_still_prefix()`
+cleanly, then `mount_names()` raised `BMDRestError: GET /mounts/ -> 404`. Root cause:
+`RestClient._request`/`exists()` unconditionally prepended `API_BASE`
+(`/control/api/v1`) to every path, so the real request went to
+`/control/api/v1/mounts/` — a path that was never real. `/mounts/` is the Web Media
+Manager, a URL namespace at the host root, entirely separate from the control API;
+`tools/rest/probe_endpoints.py`'s own two request-building call sites already drew this
+distinction (`walk_mounts()` never adds `API_BASE`), but `RestClient` didn't carry the
+same rule. Fixed by adding `api_prefixed: bool = True` to `RestClient.get()`/`exists()`
+(and the shared `_request()`/`_url()` internals); `mount_names()` and `path_exists()` now
+pass `api_prefixed=False`. Regression tests assert the real constructed URL in both
+`test_client.py` (`TestStatusHandling.test_api_prefixed_false_omits_api_base`,
+`TestExists.test_api_prefixed_false_omits_api_base`) and `test_rest_session.py`
+(`FakeRestClient.api_prefixed_calls`), since the original tests only asserted status-code
+handling and never the URL a mounts call actually produced — which is exactly how this
+escaped review. Not yet re-confirmed on real hardware past this fix.
+
 ### `is_recording` / `wait_while_recording(timeout)`
 
 `is_recording` starts `None` and updates only from a well-formed

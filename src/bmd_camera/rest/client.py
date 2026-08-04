@@ -19,6 +19,20 @@ than raising. So:
   - other non-2xx (4xx/5xx) -> raises BMDRestError
   - connection failure / timeout -> raises BMDConnectionError
 
+TWO URL NAMESPACES ON ONE HOST
+─────────────────────────────────
+`/control/api/v1/...` (the control API `API_BASE` covers) is not the whole
+HTTP surface this camera serves. `/mounts/...` is the Web Media Manager —
+a separate namespace at the host root, confirmed by
+`tools/rest/probe_endpoints.py`'s own two request-building call sites:
+the endpoint catalog sweep builds `f"{base_url}{API_BASE}{endpoint.path}"`
+while `walk_mounts()` builds `f"{base_url}{path}"` with no `API_BASE` at
+all (`docs/rest/transport.md`'s mounts walk). `get()`/`exists()` default
+`api_prefixed=True` for every control-API call; callers addressing
+`/mounts/...` (`rest/media.py`, `RestCameraSession.mount_names()` /
+`path_exists()`) must pass `api_prefixed=False`, or the request 404s
+against `/control/api/v1/mounts/...` — a path that was never real.
+
 Every log line is prefixed `[<host>]`, mirroring CLAUDE.md's
 `[<ble_name> @ <address>]` convention for the BLE transport.
 """
@@ -98,8 +112,8 @@ class RestClient:
             await self._session.close()
             self._session = None
 
-    async def get(self, path: str) -> Any:
-        return await self._request("GET", path)
+    async def get(self, path: str, *, api_prefixed: bool = True) -> Any:
+        return await self._request("GET", path, api_prefixed=api_prefixed)
 
     async def put(self, path: str, body: Any) -> Any:
         return await self._request("PUT", path, json_body=body)
@@ -110,7 +124,7 @@ class RestClient:
     async def delete(self, path: str) -> Any:
         return await self._request("DELETE", path)
 
-    async def exists(self, path: str) -> bool:
+    async def exists(self, path: str, *, api_prefixed: bool = True) -> bool:
         """Whether `GET path` returns a successful status, without ever
         attempting to parse or decode the response body.
 
@@ -122,6 +136,9 @@ class RestClient:
         a media file is present under `/mounts/...` (`rest/media.py`)
         without ever touching its content.
 
+        `/mounts/...` paths live outside `API_BASE` — pass
+        `api_prefixed=False` for them, per this module's docstring.
+
         Returns `True` for `2xx`, `False` for `404`. Still raises
         `BMDUnsupportedError` for `501` and `BMDRestError` for any other
         non-2xx — the same status contract `get()` has, minus the body.
@@ -131,7 +148,7 @@ class RestClient:
                 "RestClient has no open session — use 'async with RestClient(...)' "
                 "or pass an existing session to the constructor"
             )
-        url = f"{self.base_url}{API_BASE}{path}"
+        url = self._url(path, api_prefixed=api_prefixed)
         self._log.debug("[%s] HEAD-style GET %s", self.host, path)
         try:
             async with self._session.request(
@@ -155,13 +172,19 @@ class RestClient:
             return True
         raise BMDRestError(f"[{self.host}] GET {path} -> {status}", status=status, body=None)
 
-    async def _request(self, method: str, path: str, *, json_body: Any = None) -> Any:
+    def _url(self, path: str, *, api_prefixed: bool) -> str:
+        prefix = API_BASE if api_prefixed else ""
+        return f"{self.base_url}{prefix}{path}"
+
+    async def _request(
+        self, method: str, path: str, *, json_body: Any = None, api_prefixed: bool = True
+    ) -> Any:
         if self._session is None:
             raise BMDConnectionError(
                 "RestClient has no open session — use 'async with RestClient(...)' "
                 "or pass an existing session to the constructor"
             )
-        url = f"{self.base_url}{API_BASE}{path}"
+        url = self._url(path, api_prefixed=api_prefixed)
         self._log.debug("[%s] %s %s", self.host, method, path)
         try:
             async with self._session.request(

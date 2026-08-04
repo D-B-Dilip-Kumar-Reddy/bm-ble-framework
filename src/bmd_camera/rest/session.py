@@ -493,8 +493,13 @@ class RestCameraSession:
         real hardware to return `[{"name": ..., "type": "directory"}, ...]`
         (`docs/rest/transport.md`). Never derived from `deviceName`/`volume`
         by string transformation — see `rest/media.py`'s module docstring
-        for why that mapping isn't trusted as a rule."""
-        body = await self._rest_client.get(MOUNTS_PATH)
+        for why that mapping isn't trusted as a rule.
+
+        `/mounts/` is the Web Media Manager, a separate URL namespace from
+        the `/control/api/v1` control API — `api_prefixed=False` is required
+        here or the request 404s against a `/control/api/v1/mounts/` path
+        that was never real. See `RestClient`'s module docstring."""
+        body = await self._rest_client.get(MOUNTS_PATH, api_prefixed=False)
         entries = body if isinstance(body, list) else []
         return tuple(
             entry["name"]
@@ -505,8 +510,10 @@ class RestCameraSession:
     async def path_exists(self, path: str) -> bool:
         """Whether `path` (e.g. a `/mounts/<name>/Stills/<file>` still)
         exists, without ever decoding its content — see `RestClient.exists()`
-        for why a plain `GET` isn't safe for probing binary media files."""
-        return await self._rest_client.exists(path)
+        for why a plain `GET` isn't safe for probing binary media files.
+        `path` is a `/mounts/...` path, outside `API_BASE` — see
+        `mount_names()`'s docstring."""
+        return await self._rest_client.exists(path, api_prefixed=False)
 
     # ── Writes (Phase 4) ─────────────────────────────────────────────────
 

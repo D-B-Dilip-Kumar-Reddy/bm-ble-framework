@@ -87,6 +87,31 @@ class TestStatusHandling:
         assert session.calls[0]["url"] == "http://cam.local/control/api/v1/system"
 
     @pytest.mark.asyncio
+    async def test_api_prefixed_false_omits_api_base(self):
+        """/mounts/... is the Web Media Manager, a separate URL namespace
+        from /control/api/v1 (docs/rest/transport.md; confirmed by
+        probe_endpoints.py's walk_mounts() building requests without
+        API_BASE). Regression test for the real-hardware 404 hit when
+        RestClient always prepended API_BASE regardless of destination."""
+        session = FakeSession(
+            FakeResponse(200, json_body=[{"name": "A001-sd1", "type": "directory"}])
+        )
+        client = RestClient("cam.local", session=session)
+
+        await client.get("/mounts/", api_prefixed=False)
+
+        assert session.calls[0]["url"] == "http://cam.local/mounts/"
+
+    @pytest.mark.asyncio
+    async def test_api_prefixed_true_is_the_default(self):
+        session = FakeSession(FakeResponse(200, json_body={"codec": "ProRes:HQ"}))
+        client = RestClient("cam.local", session=session)
+
+        await client.get("/system/format")
+
+        assert session.calls[0]["url"] == "http://cam.local/control/api/v1/system/format"
+
+    @pytest.mark.asyncio
     async def test_200_returns_parsed_json_body(self):
         body = {"codec": "ProRes:HQ", "frameRate": "24"}
         session = FakeSession(FakeResponse(200, json_body=body))
@@ -178,6 +203,20 @@ class TestExists:
         client = RestClient("cam.local", session=session)
 
         assert await client.exists("/mounts/A001-sd1/Stills/A001_0001_S001.dng") is True
+
+    @pytest.mark.asyncio
+    async def test_api_prefixed_false_omits_api_base(self):
+        """Same /mounts/ namespace concern as TestStatusHandling's
+        test_api_prefixed_false_omits_api_base — exists() is the primitive
+        rest/media.py's still-file probing uses against /mounts/... paths."""
+        session = FakeSession(FakeResponse(200))
+        client = RestClient("cam.local", session=session)
+
+        await client.exists("/mounts/A001-sd1/Stills/A001_0001_S001.dng", api_prefixed=False)
+
+        assert (
+            session.calls[0]["url"] == "http://cam.local/mounts/A001-sd1/Stills/A001_0001_S001.dng"
+        )
 
     @pytest.mark.asyncio
     async def test_204_returns_true(self):

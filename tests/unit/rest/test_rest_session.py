@@ -152,9 +152,11 @@ class FakeRestClient:
         self.calls: list[str] = []
         self.put_calls: list[tuple[str, object]] = []
         self.exists_calls: list[str] = []
+        self.api_prefixed_calls: dict[str, bool] = {}
 
-    async def get(self, path: str):
+    async def get(self, path: str, *, api_prefixed: bool = True):
         self.calls.append(path)
+        self.api_prefixed_calls[path] = api_prefixed
         if path in self.errors:
             raise self.errors[path]
         return self.responses[path]
@@ -165,8 +167,9 @@ class FakeRestClient:
             raise self.errors[path]
         return self.put_responses.get(path)
 
-    async def exists(self, path: str) -> bool:
+    async def exists(self, path: str, *, api_prefixed: bool = True) -> bool:
         self.exists_calls.append(path)
+        self.api_prefixed_calls[path] = api_prefixed
         if path in self.errors:
             raise self.errors[path]
         return self.exists_responses.get(path, False)
@@ -447,7 +450,10 @@ class TestMountNames:
     @pytest.mark.asyncio
     async def test_parses_real_shape(self):
         """GET /mounts/ real shape (docs/rest/transport.md): a list of
-        {"name": ..., "type": ...} entries — only directories count."""
+        {"name": ..., "type": ...} entries — only directories count.
+        Also asserts api_prefixed=False is passed through to the client —
+        /mounts/ is the Web Media Manager, outside /control/api/v1; a real
+        run without this flag 404s (see RestClient's module docstring)."""
         client = FakeRestClient(
             {
                 "/mounts/": [
@@ -458,6 +464,7 @@ class TestMountNames:
         session = make_session(make_profile(), client=client)
 
         assert await session.mount_names() == ("A001-sd1",)
+        assert client.api_prefixed_calls["/mounts/"] is False
 
     @pytest.mark.asyncio
     async def test_ignores_non_directory_entries(self):
@@ -495,6 +502,9 @@ class TestPathExists:
             "/mounts/A001-sd1/Stills/A001_0001_S001.dng",
             "/mounts/A001-sd1/Stills/A001_0001_S999.dng",
         ]
+        # /mounts/... is outside /control/api/v1 — see TestMountNames.test_parses_real_shape
+        assert client.api_prefixed_calls["/mounts/A001-sd1/Stills/A001_0001_S001.dng"] is False
+        assert client.api_prefixed_calls["/mounts/A001-sd1/Stills/A001_0001_S999.dng"] is False
 
 
 class TestNotConnected:
