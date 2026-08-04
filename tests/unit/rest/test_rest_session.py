@@ -1669,6 +1669,19 @@ class TestSetTimeline:
         ]
 
     @pytest.mark.asyncio
+    async def test_readback_extra_fields_do_not_block_a_match(self):
+        """Real GET /timelines/0 body, POCKET_6K_PRO v8.6, 2026-08-04 (operator
+        Postman debugging): {"clips": [{"clipUniqueId": 12, "frameCount": 5020}]}
+        — an extra "frameCount" field alongside "clipUniqueId" that
+        _parse_timeline_clip_ids() must simply ignore."""
+        client = FakeRestClient(
+            {TIMELINE_PATH: {"clips": [{"clipUniqueId": 12, "frameCount": 5020}]}}
+        )
+        session = make_session(make_playback_profile(), client=client)
+
+        await session.set_timeline([12])
+
+    @pytest.mark.asyncio
     async def test_polls_until_readback_matches(self):
         client = FakeRestClient({})
         session = make_session(make_playback_profile(), client=client)

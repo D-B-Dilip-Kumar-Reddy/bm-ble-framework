@@ -11,10 +11,12 @@ STATUS: read verbs, record start/stop (Phase 4), format writes (Phase 5), photo
 confirmation primitives (Phase 6), and playback/gallery writes (Phase 7) — the
 REST dual-check design principle 3 has always specified: a WS
 `propertyValueChanged` event primary, a `GET` readback secondary. Phase 7's
-`set_timeline()`/`play()`/`pause()`/`stop()`/`shuttle()`/`seek()` are built but
-not yet run against real hardware — see their own docstrings for exactly which
-parts are sweep-confirmed and which are this migration's own plan-derived
-hypotheses.
+`enter_playback()`/`play()`/`pause()`/`stop()`/`shuttle()`/`seek()` have real
+hardware evidence behind their bodies now (POCKET_6K_PRO v8.6, 2026-08-04).
+`set_timeline()` is the one holdout: its confirmed `POST` body returns `204`
+but can leave the timeline unchanged when the target clip's format doesn't
+match the camera's current format (unconfirmed hypothesis, not yet proven) —
+see its own docstring for the full real-hardware debugging trail.
 
     async with RestCameraSession("172.27.97.141", "POCKET_6K_PRO", "v8.6") as session:
         fmt = await session.get_format()
@@ -303,13 +305,15 @@ def _contains(value: Any, expected: dict[str, Any]) -> bool:
 
 
 def _parse_timeline_clip_ids(body: Any) -> list[int]:
-    """Best-effort extraction of the clip ids `GET /timelines/0` reports.
-    Shape unconfirmed (`docs/rest/session.md` — `/timelines/0` is in
-    `tools/rest/probe_endpoints.py`'s `NEVER_WRITE` list, so only its `GET`
-    side has ever been swept, not what a populated timeline's body looks
-    like). Tries a flat id list under `"clips"` first, then falls back to
-    `/clips/list`'s own confirmed `{"clipUniqueId": ...}` dict-list
-    convention, on the hypothesis the two endpoints share a vocabulary."""
+    """Extraction of the clip ids `GET /timelines/0` reports. Real shape
+    confirmed, `POCKET_6K_PRO v8.6`, 2026-08-04 (operator Postman
+    debugging): `{"clips": [{"clipUniqueId": int, "frameCount": int}]}` —
+    a dict-list under `"clips"`, matching `/clips/list`'s own
+    `{"clipUniqueId": ...}` convention rather than a flat id list; the
+    extra `"frameCount"` field is simply ignored here. The flat-int-list
+    branch below predates that confirmation and is kept only as a
+    defensive fallback in case a future firmware reports it that way — it
+    has never actually been observed on real hardware."""
     if not isinstance(body, dict):
         return []
     entries = body.get("clips")
@@ -939,6 +943,40 @@ class RestCameraSession:
         sample — reusing the GET response's own shape for the POST body is
         a reasonable next guess, not a proven one — and remains open until a
         run gets far enough to see whether it's accepted.
+
+        **Third real-hardware finding, `POCKET_6K_PRO v8.6`, 2026-08-04**
+        (operator debugging directly via Postman, isolating the request
+        from this session's own polling): the `{"clips": [{"clipUniqueId":
+        id}]}` body from finding #2 is confirmed the *only* accepted
+        shape — `{"clips": [id]}` and `{"clipUniqueIds": [id]}` both come
+        back `{"error": "Not implemented for this device"}`,
+        `{"clip": {"clipUniqueId": id}}` comes back the same
+        `{"error": "Invalid clips data"}` finding #2 already ruled out, and
+        `PUT /timelines/0` (tried as a possible full-replace alternative to
+        the broken `DELETE`) is flatly `405 Method Not Allowed`. But the one
+        working shape's `204` is a real trap: `POST`ing
+        `{"clips": [{"clipUniqueId": 1}]}` against a timeline that already
+        held a *different* clip (id `12`) returned `204` — accepted — yet a
+        `GET /timelines/0` immediately after still reported only `[12]`,
+        completely unchanged. The `POST` is not failing; it is succeeding
+        at nothing.
+
+        **Leading hypothesis, not yet confirmed:** clip `1` was
+        `ProRes:Proxy` at `4096x2160p24`; clip `12`, the one already
+        resident, was `BRaw:Q3` at `6144x2560p60` — a live example of
+        `enter_playback()`'s documented format precondition
+        (camera-current-format must match a clip's own recorded format),
+        possibly enforced one step earlier than expected, at *timeline
+        build* time rather than only at *playback start* time. If that
+        holds, `set_timeline()` needs `set_camera_format()` called first to
+        match the target clip's format before `add` will do anything — not
+        yet verified, since this debugging session didn't test adding a
+        clip whose format already matched the camera's then-current
+        format. Until confirmed, this method makes no attempt to detect or
+        route around it; a mismatched call is expected to reach exactly
+        this `204`-then-unchanged dead end and time out into
+        `BMDVerificationError`, which is at least an honest failure rather
+        than a false "confirmed."
 
         Verified by polling `GET /timelines/0` until its reported clip ids
         match `clip_unique_ids` exactly, or `verify_timeout_s` elapses

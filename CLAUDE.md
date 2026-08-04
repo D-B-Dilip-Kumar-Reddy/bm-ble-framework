@@ -196,8 +196,18 @@ src/bmd_camera/
                               # seek() takes position (frames) instead of timecode/clip.
                               # Also observed physically: playback requires the camera's
                               # current format to match the clip's own format, not yet
-                              # checked in code — see docs/rest/session.md for exactly
-                              # which endpoints/field names are sweep-confirmed vs. this
+                              # checked in code. A follow-up Postman debugging session on
+                              # the same camera confirmed the "clips" POST body is the
+                              # only accepted shape (four alternates all rejected) but
+                              # exposed a live trap: that same accepted body returns 204
+                              # yet leaves an existing timeline entry unchanged when the
+                              # requested clip's format differs from the resident one —
+                              # leading, unconfirmed hypothesis: the same format-match
+                              # constraint applies at timeline-build time, not just at
+                              # playback start. GET /timelines/0's real body is now
+                              # confirmed too ({"clips": [{"clipUniqueId", "frameCount"}]})
+                              # — see docs/rest/session.md for exactly which
+                              # endpoints/field names are sweep-confirmed vs. this
                               # migration's own plan-derived hypotheses
     mapping.py                 # Codec name derivation between the BLE profile's vocabulary
                               # and REST's own spelling — confirmed strings always win
@@ -280,7 +290,12 @@ examples/
                             # back — DELETE /timelines/0 returning 501 (fixed: degrades to
                             # POST-only) and the per-clip POST body rejected with 400
                             # (fixed: one POST, all clips under "clips") — but stopped
-                            # there; enter_playback() onward remain
+                            # there. A follow-up Postman debugging session (POCKET_6K_PRO
+                            # v8.6, same day) confirmed that "clips" body is the only
+                            # accepted shape yet found it can return 204 while leaving the
+                            # timeline unchanged — leading, unconfirmed hypothesis: a
+                            # format-match precondition enforced at timeline-build time,
+                            # not just at playback start. enter_playback() onward remain
                             # not-yet-real-hardware-confirmed. Verification is by eye
                             # (operator watches the camera screen), see
                             # docs/rest/session.md and docs/rest/transport.md

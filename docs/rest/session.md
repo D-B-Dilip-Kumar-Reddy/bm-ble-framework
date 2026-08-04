@@ -552,10 +552,11 @@ primary WS-event channel is genuinely winning the race now, not just theoretical
 Entirely new capability BLE never reached (`docs/rest/transport.md`'s "New capability
 REST brings"). Built to the same dual-check discipline as every other write in this
 session, but with a materially weaker evidentiary base than Phases 4/5 had going in — see
-each method's own docstring for exactly what is and isn't confirmed. **First real-hardware
-run, `POCKET_6K_G2 v8.6`, 2026-08-04:** `set_timeline()` hit two real defects back to back
-— see its own section below. The rest of the sequence (`enter_playback()` onward) has not
-yet been reached by a real run.
+each method's own docstring for exactly what is and isn't confirmed. `set_timeline()` has
+now been debugged directly via Postman across three rounds and is still not confirmed
+working end to end — see its own section below for the full trail. `enter_playback()`
+onward have real-hardware evidence behind their request bodies (from a separate operator
+test, also 2026-08-04) but have not yet been exercised together in one successful run.
 
 ### `set_timeline(clip_unique_ids)`
 
@@ -587,21 +588,43 @@ reads as "the body needs a top-level `clips` key", not "the field name inside it
 wrong". `_parse_timeline_clip_ids()` already established that `GET /timelines/0`'s own
 confirmed response carries exactly that shape — `{"clips": [{"clipUniqueId": ...}, ...]}`
 — so the fix sends the same shape back: **one** `POST /timelines/0/add` carrying every id
-in `clip_unique_ids` under `"clips"`, instead of one bare-object `POST` per id. This is
-still a hypothesis — reusing the GET response's own shape for the POST body is a
-reasonable next guess, not an independently confirmed sample — and remains open until a
-run gets far enough to see whether it's accepted. Also still open, from finding #1:
-whether skipping the DELETE clear leaves stale entries in the timeline, since the run
-never got past the (then-rejected) `POST` to find out.
+in `clip_unique_ids` under `"clips"`, instead of one bare-object `POST` per id.
+
+**Real-hardware finding #3, `POCKET_6K_PRO v8.6`, 2026-08-04, isolated via direct Postman
+requests (bypassing this session entirely):** finding #2's `{"clips":
+[{"clipUniqueId": id}]}` body is now confirmed the *only* accepted shape — `{"clips":
+[id]}` and `{"clipUniqueIds": [id]}` both come back `{"error": "Not implemented for this
+device"}`, `{"clip": {"clipUniqueId": id}}` reproduces finding #2's `400`, and
+`PUT /timelines/0` (tried as a hoped-for full-replace alternative to the broken `DELETE`)
+is flatly `405 Method Not Allowed`. But the confirmed shape's `204` turned out to be a
+trap: `POST`ing `{"clips": [{"clipUniqueId": 1}]}` against a timeline that already held a
+*different* clip (id `12`) returned `204` — accepted — and a `GET /timelines/0`
+immediately after still reported only `[12]`, completely unchanged. The write is not
+failing; it is succeeding at nothing.
+
+**Leading hypothesis for finding #3, not yet confirmed:** clip `1` was `ProRes:Proxy` at
+`4096x2160p24`; clip `12`, the one already resident, was `BRaw:Q3` at `6144x2560p60` — a
+live instance of `enter_playback()`'s documented format precondition (see below),
+possibly enforced one step earlier than expected, at *timeline build* time rather than
+only at *playback start* time. If that holds, `set_timeline()` needs
+`set_camera_format()` called first to match the target clip's format before `add` will do
+anything. Not yet verified — this debugging session never tried adding a clip whose
+format already matched the camera's then-current format, which is the one test that would
+confirm or kill the hypothesis. `set_timeline()` makes no attempt to detect or route
+around this yet; a mismatched call reaches exactly this `204`-then-unchanged dead end and
+correctly times out into `BMDVerificationError` rather than a false "confirmed." Also
+still open, from finding #1: whether skipping the DELETE clear leaves stale entries when
+adding *does* work.
 
 No WS event shape is known for this resource, so verification here isn't the usual
 primary/secondary dual-check — it's a poll: `GET /timelines/0` repeatedly (default every
 0.5s, `poll_interval_s`) until `_parse_timeline_clip_ids()`'s reading matches
-`clip_unique_ids` exactly, or `verify_timeout_s` elapses (`BMDVerificationError`). The
-parser itself is a guess two levels deep: it looks for a `"clips"` key holding either a
-flat id list or `/clips/list`'s own `{"clipUniqueId": ...}` dict-list shape — if the real
-`GET /timelines/0` body looks like neither, this will reliably time out and raise rather
-than falsely confirm, which is the correct failure mode for an unconfirmed guess.
+`clip_unique_ids` exactly, or `verify_timeout_s` elapses (`BMDVerificationError`).
+`_parse_timeline_clip_ids()`'s shape is now real-hardware-confirmed too (same Postman
+session): `{"clips": [{"clipUniqueId": int, "frameCount": int}]}` — a dict-list under
+`"clips"`, the extra `"frameCount"` field simply ignored. The flat-int-list branch the
+parser also accepts predates this confirmation and has never actually been observed; it's
+kept only as a defensive fallback.
 
 ### `enter_playback()` / `exit_playback()`
 

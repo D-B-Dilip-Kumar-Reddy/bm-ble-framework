@@ -18,12 +18,15 @@ shapes are now real-hardware-confirmed (POCKET_6K_PRO v8.6, 2026-08-04):
 /transports/0/playback's body ({"type", "loop", "singleClip", "speed",
 "position"}, see RestCameraSession._put_playback's docstring) and
 /timelines/0/add's POST body ({"clips": [{"clipUniqueId": ...}, ...]}, see
-set_timeline's docstring). Everything else in Phase 7 — whether that POST
-body is itself accepted, and every step from enter_playback() onward — is
-still unexercised by a real run. Watch the camera's own screen for the
-real ground truth, the same way docs/rest/transport.md's own Phase 7 note
-says to (`python examples/rest_playback.py` — operator watches the camera
-screen).
+set_timeline's docstring — confirmed via direct Postman testing to be the
+only accepted shape of five tried). That confirmed body is not the same as
+a working set_timeline(): a follow-up Postman session found it can return
+204 while leaving an existing timeline entry completely unchanged — see
+FORMAT PRECONDITION below for the leading hypothesis why. Every step from
+enter_playback() onward remains unexercised by a real run of this script.
+Watch the camera's own screen for the real ground truth, the same way
+docs/rest/transport.md's own Phase 7 note says to
+(`python examples/rest_playback.py` — operator watches the camera screen).
 
 FORMAT PRECONDITION — observed physically on the camera body
 (POCKET_6K_PRO v8.6, 2026-08-04): a clip only plays if the camera's
@@ -31,6 +34,14 @@ FORMAT PRECONDITION — observed physically on the camera body
 recorded with. If this script's chosen clip doesn't match, switch the
 camera's format first (RestCameraSession.set_camera_format, Phase 5) —
 this script does not do that for you. See enter_playback()'s docstring.
+A follow-up Postman session hit a live instance of this same constraint
+one step earlier than expected: adding a ProRes clip to a timeline that
+already held a BRAW clip silently did nothing (204, no change) — see
+set_timeline()'s docstring for the unconfirmed hypothesis that this
+precondition applies at timeline-build time too, not just at playback
+start. If this script's set_timeline() step fails, try picking a clip
+whose format matches whatever the camera is currently set to before
+assuming the request shape is wrong.
 
 Usage:
     python examples/rest_playback.py

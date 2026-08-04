@@ -718,6 +718,27 @@ docs/rest/session.md's `enter_playback()` section. Neither finding came from a r
 `set_timeline()` itself, so whether `set_timeline()`'s new `POST` body from the previous
 finding is accepted remains a separate, still-open question.
 
+**Fourth real-hardware evidence, `POCKET_6K_PRO v8.6`, same day, isolated via direct
+Postman requests against `/timelines/0`/`/timelines/0/add` (bypassing `set_timeline()`
+entirely):** the second finding's `{"clips": [{"clipUniqueId": id}]}` body is now the only
+one of five tried that the camera accepts at all — `{"clips": [id]}` and
+`{"clipUniqueIds": [id]}` both return `{"error": "Not implemented for this device"}`,
+`{"clip": {"clipUniqueId": id}}` reproduces the earlier `400`, and `PUT /timelines/0`
+(tried as a possible full-replace alternative to the broken `DELETE`) is `405 Method Not
+Allowed`. But the accepted shape's `204` doesn't mean applied: `POST`ing
+`{"clips": [{"clipUniqueId": 1}]}` against a timeline already holding a different clip
+(id `12`) returned `204`, and `GET /timelines/0` immediately after still reported only
+`[12]` — unchanged. The leading, still-unconfirmed explanation: clip `1` (`ProRes:Proxy`,
+`4096x2160p24`) didn't match the camera's likely-then-current format, while clip `12`
+(`BRaw:Q3`, `6144x2560p60`) apparently did — the same format-matching constraint the third
+finding observed for playback itself, possibly enforced one step earlier, at timeline-add
+time. Not yet proven; the debugging session never tried adding a clip whose format already
+matched. `GET /timelines/0`'s real body was also captured directly for the first time:
+`{"clips": [{"clipUniqueId": int, "frameCount": int}]}`, confirming
+`_parse_timeline_clip_ids()`'s dict-list branch and its extra-field tolerance. See
+docs/rest/session.md's `set_timeline()` section for the full trail across all four
+findings.
+
 ---
 
 ## Library surface (Phase 2)
