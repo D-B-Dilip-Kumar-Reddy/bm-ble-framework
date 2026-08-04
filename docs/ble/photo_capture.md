@@ -1438,7 +1438,13 @@ window highest-first unconditionally. This is the same shape of hazard CLAUDE.md
 principle 7 already names for `sweep_dimension_enum.py` — "a candidate that looked like a
 genuine MATCH turned out to be a false positive — leftover state from before the write,
 not a result the candidate caused" — now confirmed in a second, independent tool in this
-codebase. The fix itself has not yet had its own real-hardware run.
+codebase.
+
+**Sixth run, immediately after the fix: re-confirmed.** Two more back-to-back captures,
+again landing in the same clock-minute, correctly returned two distinct, increasing
+filenames — `A001_08041223_S009.braw`, then `A001_08041224_S010.braw` — no repeat.
+`guess_new_still_path()`'s highest-first fix is now real-hardware-confirmed under exactly
+the condition that broke it originally.
 
 ### 11.3 What's still genuinely unconfirmed
 
@@ -1458,9 +1464,11 @@ Being explicit about evidentiary weight, per this codebase's own discipline:
   card with no prior `Stills` directory are still open questions), but the mechanism has
   now proven itself repeatedly, including under back-to-back captures.
 - **`guess_new_still_path()`** (§11.2) found and fixed its own real defect on its first two
-  real-hardware runs (the highest-index-first fix) but has not yet had a real-hardware run
-  *past* that fix — whether the corrected version actually lands on the right filename in
-  practice, versus needing a caller-supplied hint, is still unconfirmed.
+  real-hardware runs (the highest-index-first fix), then confirmed the fix on a third and
+  fourth run — two more back-to-back same-minute captures correctly returned distinct,
+  increasing filenames. Confirmed under the specific condition that broke it (rapid
+  same-minute captures); a heavily-used card pushing the true index outside the default
+  `range(1, 11)` search window is still untested.
 - **The mount-path resolution** deliberately avoids the one unconfirmed rule
   (`docs/rest/transport.md`'s `sd0`→`sd1` mapping, explicitly "not something to encode as
   a rule") by reading `GET /mounts/`'s own real listing instead — the single-mount case is

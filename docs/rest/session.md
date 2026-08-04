@@ -38,10 +38,12 @@ same timestamp candidate, and the original ascending-index search returned the s
 *stale* (lower, already-existing) filename both times instead of the just-written one.
 Fixed by always checking the highest candidate index first — since the counter only
 grows, the highest matching index under a given timestamp is always the most recent
-capture. See "`list_mount(path)` → `tuple[dict, ...]` / `mount_names()` →
-`tuple[str, ...]`" and "`path_exists(path)` → `bool` and `guess_new_still_path()`" below,
-and `docs/ble/photo_capture.md` §11, for the full evidentiary record. This fix has not yet
-had its own real-hardware run.
+capture; (5) **re-confirmed on real hardware immediately after the fix** — two more
+back-to-back captures, again in the same clock-minute, correctly returned two distinct,
+increasing filenames (`..._S009.braw`, then `..._S010.braw`) instead of repeating. See
+"`list_mount(path)` → `tuple[dict, ...]` / `mount_names()` → `tuple[str, ...]`" and
+"`path_exists(path)` → `bool` and `guess_new_still_path()`" below, and
+`docs/ble/photo_capture.md` §11, for the full evidentiary record.
 
 ## Overview
 
@@ -260,8 +262,12 @@ own `mtime` check correctly confirmed a real new file each time. Not a confirmat
 `wait_for_new_still()` was right both times — but a guess bug: since the `_S<NNN>` counter
 only ever grows, the highest index that matches a given timestamp candidate is always the
 most recently captured one. Fixed by checking `index_candidates` highest-first,
-unconditionally, regardless of the order a caller passes them in. This fix itself has not
-yet had a real-hardware run.
+unconditionally, regardless of the order a caller passes them in.
+
+**Re-confirmed on real hardware immediately after the fix:** two more back-to-back
+captures, again landing in the same clock-minute, correctly returned two distinct,
+increasing filenames (`A001_08041223_S009.braw`, then `A001_08041224_S010.braw`) —
+no repeat.
 
 ### `is_recording` / `wait_while_recording(timeout)`
 
