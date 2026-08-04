@@ -68,6 +68,12 @@ PLAY_DURATION_S = 3.0
 PAUSE_BETWEEN_STEPS_S = 2.0
 
 
+async def _print_format(session: RestCameraSession, label: str) -> None:
+    fmt = await session.get_format()
+    width, height = fmt.record_resolution
+    print(f"{label}: {fmt.codec} @ {width}x{height}p{fmt.frame_rate}")
+
+
 async def _step(label: str, action) -> bool:
     try:
         await action()
@@ -96,6 +102,7 @@ async def main() -> int:
 
         target_clip = clips[0]
         print(f"Selecting clip_unique_id={target_clip.clip_unique_id} ({target_clip.file_path})")
+        await _print_format(session, "Format before select_clip")
 
         steps: list[tuple[str, object]] = [
             ("select_clip", lambda: session.select_clip(target_clip.clip_unique_id)),
@@ -125,6 +132,8 @@ async def main() -> int:
                 if not ok:
                     break
                 await asyncio.sleep(PAUSE_BETWEEN_STEPS_S)
+
+        await _print_format(session, "Format after exit_playback")
 
     print("\n=== Summary ===")
     for label, ok in results:
