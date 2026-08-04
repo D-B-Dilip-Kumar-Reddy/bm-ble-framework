@@ -1422,40 +1422,58 @@ now) and only the counter is genuinely unknowable without a listing. `rest/media
 `(minute offset, index, extension)` window via the reintroduced `path_exists()`/
 `RestClient.exists()` — that never gates `wait_for_new_still()`'s own pass/fail.
 `examples/capture_photo.py` calls it once, after confirmation, purely to print a likely
-name. This is new code as of this section's third hardware run and has not itself been
-exercised on real hardware yet.
+name.
+
+**Fourth and fifth real-hardware runs, same day, back to back: `guess_new_still_path()`
+found a real defect in itself.** Two photos taken about 30 seconds apart both landed in
+the same clock-minute (`12:12`), so both matched the same `(reel, timestamp)` candidate —
+`A001_08041212`. The function, checking its index window in ascending order, returned the
+same filename (`A001_08041212_S006.braw`) for *both* captures, even though
+`wait_for_new_still()`'s own `mtime` check correctly confirmed a genuinely new file each
+time. `wait_for_new_still()` was never wrong; the guess was. Since the `_S<NNN>` counter
+only ever grows, the highest index matching a given timestamp candidate is always the most
+recently captured one — the second photo really was `S007`, sitting right next to the
+stale `S006` match the ascending search stopped at first. Fixed by checking the index
+window highest-first unconditionally. This is the same shape of hazard CLAUDE.md's design
+principle 7 already names for `sweep_dimension_enum.py` — "a candidate that looked like a
+genuine MATCH turned out to be a false positive — leftover state from before the write,
+not a result the candidate caused" — now confirmed in a second, independent tool in this
+codebase. The fix itself has not yet had its own real-hardware run.
 
 ### 11.3 What's still genuinely unconfirmed
 
 Being explicit about evidentiary weight, per this codebase's own discipline:
 
 - **The trigger itself** (§7.1, §9.1) is real-hardware-confirmed, independently, on two
-  cameras, and fired correctly in all three Phase 6 hardware runs (§11.2). Nothing about
+  cameras, and fired correctly in all five Phase 6 hardware runs (§11.2). Nothing about
   Phase 6 changes that.
-- **Concurrent BLE + REST sessions** (§11.2) — confirmed working across the second and
-  third runs: both sessions were open together, the BLE trigger fired, and the REST
-  session polled (and, in the third run, confirmed) afterward without incident.
+- **Concurrent BLE + REST sessions** (§11.2) — confirmed working across every run from
+  the second onward: both sessions were open together, the BLE trigger fired, and the
+  REST session polled (and, from the third run onward, confirmed) afterward without
+  incident.
 - **The redesigned `mtime`-based confirmation** (`stills_marker()`/`wait_for_new_still()`,
-  §11.2) is now real-hardware-confirmed — the third run's "Confirmed ✓" is a genuine
-  positive result, not just an absence of errors. One data point, not an exhaustive proof
-  (repeated runs, a heavily-used card, a first-ever-photo card with no prior `Stills`
-  directory are all still open questions), but the mechanism itself works.
-- **`guess_new_still_path()`** (§11.2) is brand new — an opt-in, informational filename
-  lookup built on the same real-hardware evidence as the confirmation redesign, but not
-  itself yet run against a real camera. Whether its narrow default search window
-  (`range(1, 11)` for the index) actually lands on the right filename in practice, versus
-  needing a caller-supplied hint, is unconfirmed.
+  §11.2) is now real-hardware-confirmed across three consecutive runs (third, fourth,
+  fifth) — each printed a genuine "Confirmed ✓" for a real capture, including twice within
+  the same clock-minute. Not an exhaustive proof (a heavily-used card, a first-ever-photo
+  card with no prior `Stills` directory are still open questions), but the mechanism has
+  now proven itself repeatedly, including under back-to-back captures.
+- **`guess_new_still_path()`** (§11.2) found and fixed its own real defect on its first two
+  real-hardware runs (the highest-index-first fix) but has not yet had a real-hardware run
+  *past* that fix — whether the corrected version actually lands on the right filename in
+  practice, versus needing a caller-supplied hint, is still unconfirmed.
 - **The mount-path resolution** deliberately avoids the one unconfirmed rule
   (`docs/rest/transport.md`'s `sd0`→`sd1` mapping, explicitly "not something to encode as
   a rule") by reading `GET /mounts/`'s own real listing instead — the single-mount case is
-  now real-hardware-confirmed (all three hardware runs resolved `/mounts/A001-sd1/`
-  correctly), but the *fallback* disambiguation-by-volume-prefix logic
-  (`resolve_mount_path()`, for the case of more than one mount) still has no real-hardware
-  test behind it, only unit tests against a fake.
+  now real-hardware-confirmed (every hardware run resolved `/mounts/A001-sd1/` correctly),
+  but the *fallback* disambiguation-by-volume-prefix logic (`resolve_mount_path()`, for
+  the case of more than one mount) still has no real-hardware test behind it, only unit
+  tests against a fake.
 
 None of this is a defect — it's the accurate confirmation status of a feature that was
-wrong twice on first contact with real hardware, corrected both times, and confirmed
-working on the third try, recorded honestly rather than glossed over, the same way every
+wrong twice on first contact with real hardware (the mounts `404` and the filename-stem
+assumption), corrected both times and confirmed working repeatedly from the third run
+onward, then caught and fixed a third defect in its own follow-up filename-lookup feature
+on runs four and five — recorded honestly rather than glossed over, the same way every
 other phase in this migration was.
 
 ### 11.4 `POCKET_6K_G2 v8.6` still needs its own trigger discovery

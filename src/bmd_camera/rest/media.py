@@ -238,9 +238,22 @@ async def guess_new_still_path(
     counter `<NNN>` is genuinely unknowable without a directory listing
     (Stills always `500`s — module docstring), so this probes every
     `(minute offset, index, extension)` combination in
-    `index_candidates` × `minute_offsets` × `extensions`, in that nesting
-    order (most-likely timestamp first), via `session.path_exists()`, and
-    returns the first real match.
+    `index_candidates` × `minute_offsets` × `extensions`.
+
+    Within a given `minute_offsets` entry, `index_candidates` is always
+    checked **highest first**, regardless of the order passed in — a real
+    hardware defect, 2026-08-04: two photos taken 30 seconds apart landed
+    in the same clock-minute, so both matched the same timestamp candidate,
+    and an earlier ascending-order search returned the *lower* (stale,
+    already-existing) index both times instead of the just-written one.
+    Since the counter only ever grows, the highest existing index that
+    matches a given timestamp is always the most recently captured one —
+    checking high-to-low fixes this without needing any new signal.
+    `minute_offsets` itself is still checked in the order given (most
+    likely timestamp first) and the first offset with any match wins, so
+    this does not fully solve every ambiguous case (a genuinely wrong
+    timestamp guess with its own stale match would still win over a correct
+    but untried one) — only the specific, observed failure mode.
 
     `index_candidates` defaults to a narrow `range(1, 11)` deliberately —
     this function has no way to know how many stills already exist on the
@@ -260,7 +273,7 @@ async def guess_new_still_path(
     reel = _reel_from_mount_path(mount_path)
     for offset in minute_offsets:
         stamp = (around + timedelta(minutes=offset)).strftime("%m%d%H%M")
-        for index in index_candidates:
+        for index in sorted(index_candidates, reverse=True):
             for ext in extensions:
                 path = f"{mount_path}{STILLS_DIR_NAME}/{reel}_{stamp}_S{index:03d}{ext}"
                 if await session.path_exists(path):

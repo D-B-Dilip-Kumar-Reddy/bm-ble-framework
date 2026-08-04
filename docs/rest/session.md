@@ -22,20 +22,26 @@ channel is genuinely engaging.
 `list_mount()`/`mount_names()`/`path_exists()` (Phase 6, `docs/ble/photo_capture.md` §11)
 are implemented and unit-tested — the REST half of photo-capture confirmation, composed
 with `CameraSession.capture_photo()` (BLE) via `rest/media.py` and
-`examples/capture_photo.py`. Three real-hardware runs against `POCKET_6K_PRO v8.6`,
-2026-08-04, in order: (1) a `RestClient` defect made every `/mounts/...` call 404; (2)
-fixed, but the *design* itself was wrong — `rest/media.py`'s original filename-prediction
-approach (a still shares a clip's date-time stem) was disproven by pulling the card, so
-confirmation was redesigned around the Stills subdirectory's own `mtime`, and
+`examples/capture_photo.py`. Real-hardware runs against `POCKET_6K_PRO v8.6`, 2026-08-04,
+in order: (1) a `RestClient` defect made every `/mounts/...` call 404; (2) fixed, but the
+*design* itself was wrong — `rest/media.py`'s original filename-prediction approach (a
+still shares a clip's date-time stem) was disproven by pulling the card, so confirmation
+was redesigned around the Stills subdirectory's own `mtime`, and
 `path_exists()`/`RestClient.exists()` were removed as dead code once nothing called them;
 (3) the redesigned `mtime`-based mechanism **ran clean and confirmed a real capture** —
-its first success. `path_exists()`/`RestClient.exists()` were then reintroduced for
+its first success; `path_exists()`/`RestClient.exists()` were then reintroduced for
 `guess_new_still_path()`, an opt-in, purely informational filename lookup layered on top
-of the (already-succeeding) `mtime` confirmation — never a substitute for it. See
-"`list_mount(path)` → `tuple[dict, ...]` / `mount_names()` → `tuple[str, ...]`" and
-"`path_exists(path)` → `bool` and `guess_new_still_path()`" below, and
-`docs/ble/photo_capture.md` §11, for the full evidentiary record.
-`guess_new_still_path()` itself has not yet had a real-hardware run.
+of the (already-succeeding) `mtime` confirmation — never a substitute for it; (4)
+`guess_new_still_path()`'s own first real-hardware runs found a real defect in *it*: two
+captures roughly 30 seconds apart landed in the same clock-minute, so both matched the
+same timestamp candidate, and the original ascending-index search returned the same
+*stale* (lower, already-existing) filename both times instead of the just-written one.
+Fixed by always checking the highest candidate index first — since the counter only
+grows, the highest matching index under a given timestamp is always the most recent
+capture. See "`list_mount(path)` → `tuple[dict, ...]` / `mount_names()` →
+`tuple[str, ...]`" and "`path_exists(path)` → `bool` and `guess_new_still_path()`" below,
+and `docs/ble/photo_capture.md` §11, for the full evidentiary record. This fix has not yet
+had its own real-hardware run.
 
 ## Overview
 
@@ -243,7 +249,19 @@ default `range(1, 11)` for the index, deliberately small since an unbounded sear
 be slow and still often come back empty on a heavily-used card. It **never gates
 `wait_for_new_still()`'s own pass/fail** — a `None` result means only that this specific
 guess missed, not that the capture failed. `examples/capture_photo.py` calls it once,
-after confirmation, purely to print a likely name. Not yet exercised on real hardware.
+after confirmation, purely to print a likely name.
+
+**Defect found on real hardware, same day, first two runs of this function:** two photos
+taken about 30 seconds apart both landed in the same clock-minute, so both matched the
+same `(reel, timestamp)` candidate — and the function, checking `index_candidates` in
+ascending order, returned the *lower*, already-existing index (`S006`) both times instead
+of the newly written one (`S007` the second time), even though `wait_for_new_still()`'s
+own `mtime` check correctly confirmed a real new file each time. Not a confirmation bug —
+`wait_for_new_still()` was right both times — but a guess bug: since the `_S<NNN>` counter
+only ever grows, the highest index that matches a given timestamp candidate is always the
+most recently captured one. Fixed by checking `index_candidates` highest-first,
+unconditionally, regardless of the order a caller passes them in. This fix itself has not
+yet had a real-hardware run.
 
 ### `is_recording` / `wait_while_recording(timeout)`
 
@@ -585,8 +603,10 @@ against a minimal fake exposing only the `RestCameraSession` methods they call
 same-named `file` entry never counts as the `Stills` directory, that a marker change
 appearing mid-poll (not just immediately or never) is detected, and for
 `guess_new_still_path`, that it finds a `.braw` match too (not just `.dng`), tries
-adjacent minutes, respects a caller-supplied index range, and derives the reel from the
-mount path rather than needing it passed in separately.
+adjacent minutes, respects a caller-supplied index range, derives the reel from the mount
+path rather than needing it passed in separately, and — the real-hardware regression —
+prefers the highest matching index when more than one candidate matches the same
+timestamp, rather than the first one found in ascending order.
 
 ---
 

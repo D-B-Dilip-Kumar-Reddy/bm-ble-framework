@@ -278,6 +278,26 @@ class TestGuessNewStillPath:
         assert result == "/mounts/A001-sd1/Stills/A001_08041126_S003.braw"
 
     @pytest.mark.asyncio
+    async def test_prefers_highest_index_when_multiple_match_same_minute(self):
+        """Real hardware defect, 2026-08-04: two photos taken ~30s apart
+        landed in the same clock-minute, so both matched the same
+        timestamp candidate. An earlier ascending-order search returned
+        the lower, already-existing index both times instead of the
+        just-written one — since the counter only grows, the highest
+        matching index is always the most recent capture."""
+        session = FakeMediaSession(storage=_storage_with_active("A001"), mounts=("A001-sd1",))
+        session.set_existing(
+            "/mounts/A001-sd1/Stills/A001_08041212_S006.braw",
+            "/mounts/A001-sd1/Stills/A001_08041212_S007.braw",
+        )
+
+        result = await guess_new_still_path(
+            session, "/mounts/A001-sd1/", around=datetime(2026, 8, 4, 12, 12, 58)
+        )
+
+        assert result == "/mounts/A001-sd1/Stills/A001_08041212_S007.braw"
+
+    @pytest.mark.asyncio
     async def test_respects_custom_index_candidates(self):
         """A caller with a real hint (e.g. a previously confirmed index)
         should pass a narrow range around it instead of the default
