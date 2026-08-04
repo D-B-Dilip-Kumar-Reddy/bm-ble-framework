@@ -78,6 +78,29 @@ reports), with automated match detection against a target resolution/codec.
 See `docs/ble/active_camera_control.md`'s section on it and `docs/ble/settings.md`
 §16 for the case that motivated it.
 
+**When an outcome has no echo to cross-check, and the operator's own read
+is ambiguous** — `tools/control/verify_photo_trigger.py` is the other
+sibling tool, built for a real case this exact situation produced: on
+`POCKET_6K_G2 v8.6` (2026-08-04), a VOID photo-trigger sweep confirmed
+`photo_taken` for *both* `reserved=0x00` and `reserved=0x01`, with no BLE
+echo for either candidate to cross-check against (the photo trigger has
+never echoed on any camera tested — `docs/ble/photo_capture.md` §7, §9).
+This is exactly the failure mode this doc's own warning names below (two
+candidates confirming identically can mean the camera is indifferent, or
+it can mean the read itself was unreliable — a quick "yes" answered twice
+without any independent check in between). Since the photo trigger's real
+effect is observable over REST (a new file lands on the SD card —
+`rest/media.py`'s `stills_marker()`/`wait_for_new_still()`, Phase 6),
+`verify_photo_trigger.py` replaces the operator's glance with that signal:
+for each `--reserved` candidate it records a REST baseline, sends the one
+candidate over BLE, and reports a real REST-confirmed CONFIRMED/not
+confirmed. See `docs/ble/photo_capture.md` §11.4 for the G2 v8.6 case that
+motivated it. This is currently specific to the photo trigger (its
+confirmation channel is the Stills directory specifically) — a future
+echo-less command discovered on a different SDI category would need its
+own REST-observable signal, not a generic drop-in replacement for this
+tool.
+
 ---
 
 ## Module split: pure logic vs interactive driver

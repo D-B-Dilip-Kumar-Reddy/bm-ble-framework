@@ -1499,3 +1499,19 @@ coordinates onto v8.6 without re-verifying: `tools/control/discover_command.py
 other v8.6 command family was independently re-sniffed rather than inherited (e.g.
 `docs/ble/recording.md`'s reserved-byte difference between v7.9 and v8.6). Until then,
 `examples/capture_photo.py` defaults to `POCKET_6K_PRO v8.6`.
+
+**First discovery run, `POCKET_6K_G2 v8.6`, 2026-08-04: the trigger fires (both
+candidates), but the sweep can't resolve which reserved byte on its own.** The seeded
+sweep (`category=0x0A parameter=0x03 VOID`, `--reserved 0,1`) confirmed `photo_taken` for
+*both* `reserved=0x00` and `reserved=0x01`, exactly as expected from the trigger byte
+sequence already confirmed on the other two cameras (`FF 04 00 00 0A 03 00 00`,
+`reserved=0x00`). No BLE echo arrived for either candidate — expected, consistent with
+every other trigger attempt on any camera (§7, §9) — so `discover_command.py`'s own
+"disagreeing candidates" warning applies at full strength here: with no echo to
+cross-check against, the operator's own read is the *only* evidence, and confirming two
+different byte values identically, seconds apart, is indistinguishable from a habitual
+"yes" without more. `tools/control/verify_photo_trigger.py` was built for exactly this gap
+(`docs/ble/command_discovery.md`'s "When an outcome has no echo to cross-check" section) —
+it replaces the glance with `rest/media.py`'s real per-photo `mtime` signal. Not yet run;
+this is the next step before a `commands.photo` block can be written for `POCKET_6K_G2
+v8.6` with real confidence.
