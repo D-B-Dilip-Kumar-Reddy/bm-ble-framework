@@ -1152,25 +1152,34 @@ class RestCameraSession:
         full Phase 7 sequence (`POCKET_6K_G2` and `POCKET_6K_PRO v8.6`,
         2026-08-04, `examples/rest_playback.py`).
 
-        **Possible auto-revert of the camera's format on exit — one data
-        point, `POCKET_6K_G2 v8.6`, 2026-08-04.** A run that had
-        `select_clip()` switch the camera from `BRaw:8_1 @
-        4096x2160p29.97` to a requested clip's own `BRaw:5_1 @
-        6144x3456p25` ended with `GET /system/format` reporting
-        `BRaw:8_1 @ 4096x2160p29.97` again — the exact pre-`select_clip()`
-        format — even though nothing in the script ever requested that
-        switch back. This method (and `stop()`, which calls it directly)
-        are the only candidates in that run's call sequence for what
-        triggered it, but `stop()` *is* this method right now (see
-        `stop()`'s own docstring), so this single run cannot distinguish
-        "leaving playback mode reverts format" from some other cause tied
-        to the same request. Not yet confirmed to repeat, not yet isolated
-        to this call specifically, and not relied on anywhere in this
-        session — a caller who needs the pre-`select_clip()` format
-        restored should not assume this happens and should call
-        `set_camera_format()` explicitly instead. See
-        docs/rest/session.md's `enter_playback()` / `exit_playback()`
-        section for the full writeup.
+        **Possible auto-revert of the camera's format on exit —
+        `POCKET_6K_G2 v8.6`, 2026-08-04.** A run that had `select_clip()`
+        switch the camera from `BRaw:8_1 @ 4096x2160p29.97` to a requested
+        clip's own `BRaw:5_1 @ 6144x3456p25` ended with `GET
+        /system/format` reporting `BRaw:8_1 @ 4096x2160p29.97` again — the
+        exact pre-`select_clip()` format — even though nothing in the
+        script ever requested that switch back.
+
+        **Follow-up, same day, immediately after: `select_clip()` alone**
+        — no `enter_playback()`/`play()`/`pause()`/`seek()`/`shuttle()`/
+        `stop()`/`exit_playback()` at all — left the camera at
+        `BRaw:5_1 @ 6144x3456p25`, the switched format, with no revert.
+        This rules out `select_clip()`/`set_camera_format()` themselves as
+        the cause: whatever triggers the revert requires actually entering
+        or leaving playback mode, not just switching format. Still not
+        isolated further — `enter_playback()`, `play()`, `pause()`,
+        `seek()`, `shuttle()`, `stop()`, and this method all remain
+        candidates within that sequence (`stop()` *is* this method right
+        now, so it and `exit_playback()` still can't be distinguished from
+        each other). Next narrowing test: `select_clip()` +
+        `enter_playback()` + immediate `exit_playback()`, skipping
+        `play()`/`pause()`/`seek()`/`shuttle()` entirely, to check whether
+        just the `Output`/`InputPreview` round trip alone reproduces it.
+        Not relied on anywhere in this session either way — a caller who
+        needs a particular format after playback should call
+        `set_camera_format()` explicitly rather than assume the camera
+        restores it. See docs/rest/session.md's `enter_playback()` /
+        `exit_playback()` section for the full writeup.
         """
         await self._set_transport_mode("InputPreview")
 

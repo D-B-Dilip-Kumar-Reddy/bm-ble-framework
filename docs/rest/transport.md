@@ -786,6 +786,20 @@ writeup and the suggested follow-up test (call `select_clip()` alone, skip the p
 steps entirely, to see whether the switch itself — not anything playback-related — is
 what triggers it).
 
+**Eighth real-hardware evidence, `POCKET_6K_G2 v8.6`, 2026-08-04, the very next run — the
+narrowing test from the seventh finding:** `select_clip()` called alone, with
+`enter_playback()`/`play()`/`pause()`/`seek()`/`shuttle()`/`stop()`/`exit_playback()` all
+skipped entirely, left the camera at the switched format (`BRaw:5_1 @ 6144x3456p25`) — no
+revert. This rules out `select_clip()`/`set_camera_format()` themselves as the cause of
+the seventh finding's revert: whatever triggers it requires actually entering or leaving
+playback mode, not merely switching format. Still not isolated to a single call within
+that sequence — `enter_playback()`, `play()`, `pause()`, `seek()`, `shuttle()`, `stop()`,
+and `exit_playback()` all remain candidates (`stop()` is `exit_playback()` right now, so
+those two still can't be told apart). Next narrowing test:
+`select_clip()` + `enter_playback()` + immediate `exit_playback()`, skipping the
+play/pause/seek/shuttle steps, to check whether the bare `Output`/`InputPreview` round
+trip alone reproduces it.
+
 ---
 
 ## Library surface (Phase 2)

@@ -736,25 +736,30 @@ without having gone through `select_clip()` first, or with the camera's format h
 changed since, is expected to dual-check-fail with a `BMDVerificationError` rather than a
 clearer diagnosis naming the mismatch.
 
-**Possible auto-revert of the camera's format on exit — one data point,
-`POCKET_6K_G2 v8.6`, 2026-08-04.** `examples/rest_playback.py` now brackets its whole run
-with `GET /system/format` snapshots (`_print_format`, before `select_clip()` and after
-`exit_playback()`). One run: the camera started at `BRaw:8_1 @ 4096x2160p29.97`;
-`select_clip()` switched it to the requested clip's own `BRaw:5_1 @ 6144x3456p25` to sync
-the timeline (see `select_clip()`'s section); by the time `exit_playback()` completed, the
-"after" snapshot reported `BRaw:8_1 @ 4096x2160p29.97` again — the exact format the camera
-started in — even though nothing in the script, or in `RestCameraSession`, ever requested
-that switch back. `stop()` and `exit_playback()` are the only candidates in that run's call
-sequence, but `stop()` *is* `exit_playback()` right now (see "`play()` / `pause()` /
-`stop()`" below) — the two steps send the identical `PUT`, so this one run can't tell
-whether leaving playback mode is what triggers a revert, whether it's tied to `stop()`
-specifically, or whether something else in the sequence caused it. **Not confirmed to
-repeat, not isolated to a specific call, and not relied on anywhere in this session** — a
+**Possible auto-revert of the camera's format on exit — `POCKET_6K_G2 v8.6`, 2026-08-04.**
+`examples/rest_playback.py` now brackets its whole run with `GET /system/format` snapshots
+(`_print_format`, before `select_clip()` and after `exit_playback()`). One run: the camera
+started at `BRaw:8_1 @ 4096x2160p29.97`; `select_clip()` switched it to the requested
+clip's own `BRaw:5_1 @ 6144x3456p25` to sync the timeline (see `select_clip()`'s section);
+by the time `exit_playback()` completed, the "after" snapshot reported `BRaw:8_1 @
+4096x2160p29.97` again — the exact format the camera started in — even though nothing in
+the script, or in `RestCameraSession`, ever requested that switch back.
+
+**Immediate follow-up, same day — the narrowing test paid off.** `select_clip()` called
+*alone*, with `enter_playback()`/`play()`/`pause()`/`seek()`/`shuttle()`/`stop()`/
+`exit_playback()` all skipped entirely, left the camera at `BRaw:5_1 @ 6144x3456p25` — the
+switched format — with no revert. This rules out `select_clip()`/`set_camera_format()`
+themselves as the cause: whatever triggers the revert requires actually entering or
+leaving playback mode, not merely switching format. Still not isolated further —
+`enter_playback()`, `play()`, `pause()`, `seek()`, `shuttle()`, `stop()`, and
+`exit_playback()` all remain candidates within that sequence (`stop()` *is*
+`exit_playback()` right now, see "`play()` / `pause()` / `stop()`" below, so the two still
+can't be distinguished from each other). **Not relied on anywhere in this session** — a
 caller that needs a particular format after playback should call `set_camera_format()`
-explicitly rather than assume the camera restores it. Worth a dedicated test: run
-`select_clip()` alone (skip `enter_playback()`/`play()`/`stop()`/`exit_playback()`
-entirely) and check whether the format still reverts, to rule out the switch itself being
-the trigger rather than anything playback-related.
+explicitly rather than assume the camera restores it. Next narrowing test:
+`select_clip()` + `enter_playback()` + immediate `exit_playback()`, skipping
+`play()`/`pause()`/`seek()`/`shuttle()` entirely, to check whether just the
+`Output`/`InputPreview` round trip alone reproduces it.
 
 ### `play()` / `pause()` / `stop()`
 
