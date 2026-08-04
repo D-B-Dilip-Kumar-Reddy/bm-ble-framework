@@ -14,7 +14,10 @@ real-hardware run then confirmed **544/544 (0 unconfirmed) across the full combi
 space**, including the "sensor area" dimension — while also catching a second real defect
 (`/system/format` was never subscribed for the WS dual-check's primary channel, so every
 write silently paid the full verify timeout before confirming via the secondary `GET`
-instead), now fixed. A fresh run confirming the fix itself hasn't been reported yet.
+instead), now fixed and **re-confirmed, `POCKET_6K_G2 v8.6`, 2026-08-04**: an identical
+full re-sweep (544 confirmed, 16 unsupported, 0 unconfirmed) with per-combination timing
+now 0.0–0.2s (a few 1.1s outliers) instead of a uniform ~6.0s — the primary WS-event
+channel is genuinely engaging.
 
 ## Overview
 
@@ -380,9 +383,12 @@ to `/system/format`, so nothing had ever told the camera to push `/system/format
 this connection at all — `set_camera_format`'s `arm()`/`wait_for()` on it was waiting on a
 channel that could structurally never deliver. Every confirmation in this run came from the
 secondary `GET` readback, after burning the full primary timeout uselessly first. Fixed by
-subscribing to `/system/format` in `__aenter__` too (see "Connection lifecycle" above) — a
-fresh sweep run to confirm the primary channel actually engages now, and that writes get
-noticeably faster, hasn't been reported yet.
+subscribing to `/system/format` in `__aenter__` too (see "Connection lifecycle" above).
+
+**Fix re-confirmed, `POCKET_6K_G2 v8.6`, 2026-08-04**: an identical full re-sweep — same
+544 confirmed, 16 unsupported, 0 unconfirmed — but per-combination timing dropped to
+0.0–0.2s (a handful of 1.1s outliers), not the uniform ~6.0s the pre-fix run showed. The
+primary WS-event channel is genuinely winning the race now, not just theoretically fixed.
 
 ---
 

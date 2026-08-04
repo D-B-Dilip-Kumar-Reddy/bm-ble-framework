@@ -872,8 +872,11 @@ had a chance to fire — `__aenter__` had never subscribed the router to `/syste
 all, so every write fell through to the secondary `GET` readback after burning the full
 primary timeout first. Fixed by subscribing to `/system/format` alongside
 `/transports/0/record` at connect time — see docs/rest/session.md's "Connection lifecycle"
-section. A fresh sweep confirming the fix (materially faster per-combination timing) hasn't
-been reported yet.
+section.
+
+**Fix confirmed, `POCKET_6K_G2 v8.6`, 2026-08-04**: an identical full re-sweep — same 544
+confirmed, 16 unsupported, 0 unconfirmed — with per-combination timing now 0.0–0.2s (a
+handful of 1.1s outliers) instead of the uniform ~6.0s the pre-fix run showed.
 
 ---
 
