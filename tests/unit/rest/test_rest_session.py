@@ -1612,3 +1612,36 @@ class TestSetTimeline:
 
         with pytest.raises(BMDVerificationError, match="set_timeline"):
             await session.set_timeline([7])
+
+    @pytest.mark.asyncio
+    async def test_continues_to_post_when_delete_returns_501(self):
+        """Real-hardware finding, POCKET_6K_G2 v8.6, 2026-08-04 (Phase 7's
+        first run): DELETE /timelines/0 returns 501 on this firmware. A
+        confirmed 501 from the DELETE specifically must not block the
+        POSTs that follow."""
+        client = FakeRestClient({TIMELINE_PATH: {"clips": [{"clipUniqueId": 1}]}})
+
+        async def delete(path):
+            client.delete_calls.append(path)
+            raise BMDUnsupportedError(f"[cam.local] DELETE {path} — not implemented (501)")
+
+        client.delete = delete
+        session = make_session(make_playback_profile(), client=client)
+
+        await session.set_timeline([1])
+
+        assert client.delete_calls == [TIMELINE_PATH]
+        assert client.post_calls == [(TIMELINE_ADD_PATH, {"clipUniqueId": 1})]
+
+    @pytest.mark.asyncio
+    async def test_other_delete_errors_still_propagate(self):
+        client = FakeRestClient({})
+
+        async def delete(path):
+            raise BMDRestError(f"[cam.local] DELETE {path} -> 500", status=500, body=None)
+
+        client.delete = delete
+        session = make_session(make_playback_profile(), client=client)
+
+        with pytest.raises(BMDRestError):
+            await session.set_timeline([1])

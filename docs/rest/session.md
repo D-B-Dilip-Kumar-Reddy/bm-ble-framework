@@ -47,8 +47,13 @@ increasing filenames (`..._S009.braw`, then `..._S010.braw`) instead of repeatin
 
 `set_timeline()`, `enter_playback()`/`exit_playback()`, `play()`/`pause()`/`stop()`, and
 `shuttle()`/`seek()` (Phase 7 — playback and gallery, entirely new capability BLE never
-reached) are implemented, unit-tested, and have a new `examples/rest_playback.py` — but
-**not yet run against real hardware**. Two of the four endpoints Phase 7 needs
+reached) are implemented, unit-tested, and have a new `examples/rest_playback.py`.
+**First real-hardware run, `POCKET_6K_G2 v8.6`, 2026-08-04:** `set_timeline()` hit a real
+defect on its very first call — `DELETE /timelines/0` returns `501` on this firmware, not
+just theoretically unswept but actually confirmed unimplemented. Fixed by catching that
+specific `501` and proceeding straight to `POST`ing (see `set_timeline()`'s own section
+below); the run stopped there this time, so `enter_playback()` onward remain unexercised.
+Two of the four endpoints Phase 7 needs
 (`/transports/0` and `/transports/0/playback`) have a real same-value-`PUT`-confirmed
 `204` from the Phase 0 sweep (`docs/rest/transport.md`); the other two
 (`/timelines/0`/`/timelines/0/add`, needed by `set_timeline()`) were never even
@@ -530,8 +535,10 @@ primary WS-event channel is genuinely winning the race now, not just theoretical
 Entirely new capability BLE never reached (`docs/rest/transport.md`'s "New capability
 REST brings"). Built to the same dual-check discipline as every other write in this
 session, but with a materially weaker evidentiary base than Phases 4/5 had going in — see
-each method's own docstring for exactly what is and isn't confirmed. **Not yet run against
-real hardware.**
+each method's own docstring for exactly what is and isn't confirmed. **First real-hardware
+run, `POCKET_6K_G2 v8.6`, 2026-08-04:** `set_timeline()` hit a real defect immediately —
+see its own section below. The rest of the sequence (`enter_playback()` onward) has not
+yet been reached by a real run.
 
 ### `set_timeline(clip_unique_ids)`
 
@@ -548,6 +555,18 @@ Phase 4's own writes were the first real evidence either way. The `POST` body
 (`{"clipUniqueId": id}`) reuses the field name `/clips/list` already confirmed real
 (`docs/rest/transport.md`), on the hypothesis the two endpoints share a vocabulary — not an
 independently captured `/timelines/0/add` sample.
+
+**Real-hardware finding, `POCKET_6K_G2 v8.6`, 2026-08-04 (Phase 7's first run):**
+`DELETE /timelines/0` returned `501` — the DELETE *method* on this path is genuinely not
+implemented on this firmware, a different and more specific answer than the read sweep's
+confirmed `GET`. Since a `BMDUnsupportedError` propagating from the DELETE would have
+blocked every subsequent `POST` from ever being attempted, and whether this camera even
+needs an explicit clear before adding is itself unconfirmed, `set_timeline()` now catches a
+`501` from the DELETE specifically, logs it, and proceeds straight to `POST`ing — any other
+error from the DELETE still propagates normally. This got the method further, but the run
+stopped there for this session; whether `POST /timelines/0/add` itself works, and whether
+skipping the clear leaves stale entries in the timeline, are both still open until a run
+reaches that step.
 
 No WS event shape is known for this resource, so verification here isn't the usual
 primary/secondary dual-check — it's a poll: `GET /timelines/0` repeatedly (default every

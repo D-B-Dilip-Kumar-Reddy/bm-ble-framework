@@ -177,10 +177,14 @@ src/bmd_camera/
                               # combination BLE's write path can't reach. Playback/gallery
                               # writes (Phase 7) — set_timeline, enter_playback/
                               # exit_playback, play/pause/stop, shuttle/seek — built,
-                              # dual-check verified, not yet real-hardware-confirmed; see
-                              # docs/rest/session.md for exactly which endpoints/field
-                              # names are sweep-confirmed vs. this migration's own
-                              # plan-derived hypotheses
+                              # dual-check verified; first real-hardware run
+                              # (POCKET_6K_G2 v8.6, 2026-08-04) found DELETE /timelines/0
+                              # returns 501 — set_timeline() now degrades to POST-only when
+                              # that happens — but stopped there, so POST /timelines/0/add
+                              # and everything past set_timeline() remain
+                              # not-yet-real-hardware-confirmed; see docs/rest/session.md
+                              # for exactly which endpoints/field names are sweep-confirmed
+                              # vs. this migration's own plan-derived hypotheses
     mapping.py                 # Codec name derivation between the BLE profile's vocabulary
                               # and REST's own spelling — confirmed strings always win
                               # (design principle 1); this is a fallback seed only
@@ -257,9 +261,13 @@ examples/
                             # against the same camera. See docs/ble/photo_capture.md §11
   rest_playback.py          # Phase 7 — set_timeline + enter_playback/play/pause/seek/
                             # shuttle/stop/exit_playback; entirely new capability BLE
-                            # never reached. Built, not yet real-hardware-confirmed —
-                            # verification is by eye (operator watches the camera
-                            # screen), see docs/rest/session.md and docs/rest/transport.md
+                            # never reached. First real-hardware run (POCKET_6K_G2 v8.6,
+                            # 2026-08-04) hit DELETE /timelines/0 returning 501 inside
+                            # set_timeline() — fixed by degrading to POST-only — but
+                            # stopped there; enter_playback() onward remain
+                            # not-yet-real-hardware-confirmed. Verification is by eye
+                            # (operator watches the camera screen), see
+                            # docs/rest/session.md and docs/rest/transport.md
   playback.py               # (planned)
 
 tests/

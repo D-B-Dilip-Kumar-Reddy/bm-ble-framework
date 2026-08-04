@@ -684,6 +684,18 @@ code runs — the same position `/transports/0/record` was in before Phase 4. Se
 docs/rest/session.md's Phase 7 section for which parts of the request/response shapes are
 sweep-confirmed and which are this migration's own plan-derived hypotheses.
 
+That first real-hardware run (`POCKET_6K_G2 v8.6`, 2026-08-04) answered one of those two
+`NEVER_WRITE` unknowns immediately: `DELETE /timelines/0` returns `501 Not Implemented` —
+the DELETE method specifically, not the resource generally, since this doc's own sweep
+never probed it (DELETE was excluded as destructive, not merely because it might be
+unsupported). `set_timeline()` now catches that specific `BMDUnsupportedError`, logs a
+warning, and proceeds straight to the `POST /timelines/0/add` loop it would have run
+anyway. Still unanswered by that run: whether `POST /timelines/0/add` itself is
+implemented on this firmware (the run stopped at the DELETE failure before reaching it),
+and whether skipping the clear leaves stale entries in the timeline or `POST` replaces it
+outright. Both remain open until a run gets far enough to observe them. See
+docs/rest/session.md's `set_timeline()` section for the full evidentiary writeup.
+
 ---
 
 ## Library surface (Phase 2)

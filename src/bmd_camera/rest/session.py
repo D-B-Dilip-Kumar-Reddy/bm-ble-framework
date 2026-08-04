@@ -908,6 +908,23 @@ class RestCameraSession:
         the hypothesis the two endpoints share a vocabulary — not an
         independently captured `/timelines/0/add` sample.
 
+        **Real-hardware finding, `POCKET_6K_G2 v8.6`, 2026-08-04 (first
+        Phase 7 run):** `DELETE /timelines/0` returns `501` — the DELETE
+        *method* on this path is genuinely not implemented on this
+        firmware, unlike the read sweep's confirmed `GET`. This is not the
+        same question `probe_endpoints.py`'s read sweep answered (that a
+        `GET` on this path works); the HTTP method matters, and DELETE's
+        answer is negative. Since a `BMDUnsupportedError` here would
+        otherwise block every subsequent `POST` from ever being tried, and
+        whether this camera even needs an explicit clear before adding is
+        itself unconfirmed, a `501` from the DELETE specifically is caught
+        and logged rather than propagated — the method proceeds straight to
+        `POST`ing. Any other error from the DELETE still propagates
+        normally. Whether skipping the clear leaves stale entries in the
+        timeline, or whether `POST /timelines/0/add` itself replaces rather
+        than appends, remains unconfirmed until a real run reaches the
+        `POST` step.
+
         Verified by polling `GET /timelines/0` until its reported clip ids
         match `clip_unique_ids` exactly, or `verify_timeout_s` elapses
         (`BMDVerificationError`) — no WS event shape is known for this
@@ -924,7 +941,16 @@ class RestCameraSession:
                 "tools/rest/probe_endpoints.py against this camera first."
             )
 
-        await self._rest_client.delete(TIMELINE_PATH)
+        try:
+            await self._rest_client.delete(TIMELINE_PATH)
+        except BMDUnsupportedError:
+            self._log.warning(
+                "[%s] DELETE %s is not implemented (501) on this firmware — proceeding "
+                "to POST %s without clearing the existing timeline first",
+                self.host,
+                TIMELINE_PATH,
+                TIMELINE_ADD_PATH,
+            )
         for clip_id in clip_unique_ids:
             await self._rest_client.post(TIMELINE_ADD_PATH, {"clipUniqueId": clip_id})
 
