@@ -27,11 +27,11 @@ a separate namespace at the host root, confirmed by
 `tools/rest/probe_endpoints.py`'s own two request-building call sites:
 the endpoint catalog sweep builds `f"{base_url}{API_BASE}{endpoint.path}"`
 while `walk_mounts()` builds `f"{base_url}{path}"` with no `API_BASE` at
-all (`docs/rest/transport.md`'s mounts walk). `get()`/`exists()` default
+all (`docs/rest/transport.md`'s mounts walk). `get()` defaults
 `api_prefixed=True` for every control-API call; callers addressing
-`/mounts/...` (`rest/media.py`, `RestCameraSession.mount_names()` /
-`path_exists()`) must pass `api_prefixed=False`, or the request 404s
-against `/control/api/v1/mounts/...` — a path that was never real.
+`/mounts/...` (`RestCameraSession.list_mount()`/`mount_names()`) must pass
+`api_prefixed=False`, or the request 404s against
+`/control/api/v1/mounts/...` — a path that was never real.
 
 Every log line is prefixed `[<host>]`, mirroring CLAUDE.md's
 `[<ble_name> @ <address>]` convention for the BLE transport.
@@ -123,54 +123,6 @@ class RestClient:
 
     async def delete(self, path: str) -> Any:
         return await self._request("DELETE", path)
-
-    async def exists(self, path: str, *, api_prefixed: bool = True) -> bool:
-        """Whether `GET path` returns a successful status, without ever
-        attempting to parse or decode the response body.
-
-        `get()`'s body handling (`_read_body`) tries `.json()` then falls
-        back to `.text()` — fine for every endpoint this client has talked
-        to so far, all of which return JSON or empty bodies, but a real
-        still image (`.dng`/`.braw`) is binary content `.text()` could
-        raise decoding. `exists()` exists specifically for probing whether
-        a media file is present under `/mounts/...` (`rest/media.py`)
-        without ever touching its content.
-
-        `/mounts/...` paths live outside `API_BASE` — pass
-        `api_prefixed=False` for them, per this module's docstring.
-
-        Returns `True` for `2xx`, `False` for `404`. Still raises
-        `BMDUnsupportedError` for `501` and `BMDRestError` for any other
-        non-2xx — the same status contract `get()` has, minus the body.
-        """
-        if self._session is None:
-            raise BMDConnectionError(
-                "RestClient has no open session — use 'async with RestClient(...)' "
-                "or pass an existing session to the constructor"
-            )
-        url = self._url(path, api_prefixed=api_prefixed)
-        self._log.debug("[%s] HEAD-style GET %s", self.host, path)
-        try:
-            async with self._session.request(
-                "GET", url, timeout=aiohttp.ClientTimeout(total=self.timeout_s)
-            ) as resp:
-                status = resp.status
-        except aiohttp.ClientError as exc:
-            raise BMDConnectionError(f"[{self.host}] GET {path} failed: {exc}") from exc
-        except TimeoutError as exc:
-            raise BMDConnectionError(
-                f"[{self.host}] GET {path} timed out after {self.timeout_s}s"
-            ) from exc
-
-        self._log.debug("[%s] GET %s -> %s", self.host, path, status)
-
-        if status == 404:
-            return False
-        if status == 501:
-            raise BMDUnsupportedError(f"[{self.host}] GET {path} — not implemented (501)")
-        if 200 <= status < 300:
-            return True
-        raise BMDRestError(f"[{self.host}] GET {path} -> {status}", status=status, body=None)
 
     def _url(self, path: str, *, api_prefixed: bool) -> str:
         prefix = API_BASE if api_prefixed else ""

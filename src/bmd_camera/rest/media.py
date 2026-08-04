@@ -3,8 +3,8 @@ bmd_camera/rest/media.py
 ===========================
 Photo-capture confirmation over REST — the out-of-band verification channel
 BLE's photo trigger has never had (`docs/ble/photo_capture.md` §7.3's open
-TODO). No BLE knowledge lives here — design principle 5's boundary, held
-here for REST.
+TODO, §11's real-hardware correction). No BLE knowledge lives here — design
+principle 5's boundary, held here for REST.
 
 WHY THIS EXISTS
 -----------------
@@ -12,9 +12,9 @@ WHY THIS EXISTS
 (category `0x0A`/parameter `0x03`/`VOID`) but cannot verify anything: no
 BLE channel — echo or `CAMERA_STATUS` — has ever been observed to move in
 response, on either camera tested (`docs/ble/photo_capture.md` §7, §9).
-This module supplies the confirmation BLE structurally cannot: watch for a
-new still file to appear on the SD card, over REST, after the BLE trigger
-fires. See `examples/capture_photo.py` for the composition of both.
+This module supplies the confirmation BLE structurally cannot: watch the
+Stills directory itself change on the SD card, over REST, after the BLE
+trigger fires. See `examples/capture_photo.py` for the composition of both.
 
 WHY THE MOUNT PATH ISN'T DERIVED FROM `deviceName`
 ------------------------------------------------------
@@ -32,73 +32,80 @@ reports: unambiguous when there is exactly one mount, or by matching the
 confirmed `volume` prefix (design principle 1 — only using data the camera
 itself already reported) when there is more than one.
 
-STILLS CANNOT BE LISTED
---------------------------
-Every subdirectory under a mount root `500`s (`docs/rest/transport.md`,
-"The 500 is not Stills-specific"), Stills included. So this module cannot
-list a Stills directory's contents — it probes individual filenames
-directly via `RestCameraSession.path_exists()`, exactly as
-`docs/rest/transport.md`'s Phase 6 section anticipated.
+WHY THIS ISN'T FILENAME PROBING — a real-hardware finding, 2026-08-04
+--------------------------------------------------------------------------
+The original design here assumed a still shares a clip's full
+`<reel>_<date>` filename stem (an operator sample at planning time:
+`A001_07311253_C001.mov` / `A001_07311253_S001.dng`). The first real
+`capture_photo.py` run against `POCKET_6K_PRO v8.6` falsified that:
+`mount_names()`/`wait_for_new_still()` ran cleanly but reported "NOT
+confirmed", yet pulling the card afterward showed the photo really was
+taken. Three real stills were on the card: `A001_07311253_S001`,
+`A001_07311254_S002`, `A001_08041126_S003` — the middle timestamp segment
+is unique **per still**, one second apart on two photos taken back to
+back, and three days apart on the third. Only the leading reel identifier
+(`A001`) is actually shared with clips; the timestamp segment is each
+photo's own capture moment, generated fresh every time, and the trailing
+`_S<NNN>` counter is a reel-wide cumulative count with no knowable
+baseline (Stills directory listing `500`s unconditionally — see below —
+so there is no way to learn the current count in advance). A still's exact
+filename cannot be predicted or brute-forced from clip data at all — the
+former `derive_still_prefix()`/`find_highest_still_index()`/
+`wait_for_new_still()` index-probing design is retired for this reason
+(see git history for the removed implementation, and
+`docs/ble/photo_capture.md` §11 for the full evidentiary record).
 
-FILENAME PATTERN — inherited from the original plan, not yet re-confirmed
-by a sweep run in this codebase
------------------------------------------------------------------------------
-A clip's `filePath` basename (e.g. `A001_07311253_C001.mov`) and a still's
-(e.g. `A001_07311253_S001.dng`) were reported sharing the `A001_07311253`
-stem — operator-provided at planning time, not yet independently
-re-confirmed by any tool in this codebase. `derive_still_prefix()` assumes
-this pattern holds; treat its output as a candidate to verify on first
-real use, not an established fact the way
-`docs/ble/photo_capture.md`'s trigger finding is.
+STILLS CANNOT BE LISTED, BUT THE MOUNT ROOT CAN
+----------------------------------------------------
+Every subdirectory under a mount root `500`s (`docs/rest/transport.md`,
+"The 500 is not Stills-specific"), Stills included — so this module can
+never enumerate what's actually inside Stills, or learn a still's exact
+name, over REST. But the mount **root** listing works, and it already
+reports `Stills` as one of its own entries, complete with an `mtime`
+(`{"name": "Stills", "type": "directory", "mtime": "..."}`) — standard
+filesystem behaviour updates a directory's own `mtime` whenever a file is
+added inside it, without ever needing to open that directory. That gives a
+genuine, per-operation confirmation signal that needs no filename
+knowledge at all: read `Stills`'s `mtime` before the trigger fires, then
+poll for it to change afterward. `stills_marker()` reads it;
+`wait_for_new_still()` polls for the change. This specific mechanism is
+not yet independently confirmed on real hardware — it is what this module
+moved to *after* the filename-probing design failed its first real run,
+and its own first real run is still pending.
+
+THE TRADE-OFF: no more exact filename
+------------------------------------------
+This design confirms *that* a still was written, never *which* filename
+it got — REST has no way to learn that (the `500` above), so naming a
+captured still requires physically reading the card, exactly as this
+bug's own diagnosis did. `examples/capture_photo.py` reports
+success/failure only; it cannot report a filename.
 
 STILL FILE FORMAT DIFFERS BY CAMERA AND CODEC
 --------------------------------------------------
 `docs/ble/photo_capture.md` §8.4: `POCKET_6K_G2 v7.9` stills are always
 `.dng`; `POCKET_6K_PRO v8.6` stills are `.dng` under ProRes but `.braw`
-under BRAW. `find_highest_still_index()`/`wait_for_new_still()` probe both
-extensions for this reason, never assuming one.
+under BRAW. Irrelevant to this module now — the `mtime` signal doesn't
+care about extension — kept here as a fact the next filename-dependent
+feature (e.g. downloading a confirmed still once a human has read its name
+off the card) will need again.
 """
 
 from __future__ import annotations
 
 import asyncio
-import re
 import time
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .session import RestCameraSession
 
-STILL_EXTENSIONS = (".dng", ".braw")
-
-_CLIP_STEM_RE = re.compile(r"^(?P<prefix>.+)_C\d+$")
-
-
-def derive_still_prefix(clip_file_path: str) -> str:
-    """The filename stem a still is expected to share with a clip's own
-    `filePath` — e.g. `/mnt/sd0/A001/A001_07311253_C001.mov` ->
-    `A001_07311253`.
-
-    Strips the directory, extension, and trailing `_C<digits>` clip-index
-    suffix a real clip filename carries (`docs/rest/transport.md`'s sample:
-    `A001_07311253_C001.mov`). Raises `ValueError` if the filename doesn't
-    match this shape at all, rather than returning a wrong guess.
-    """
-    basename = clip_file_path.rsplit("/", 1)[-1]
-    stem = basename.rsplit(".", 1)[0] if "." in basename else basename
-    match = _CLIP_STEM_RE.match(stem)
-    if match is None:
-        raise ValueError(
-            f"Clip filename {basename!r} does not match the expected "
-            "<prefix>_C<NNN>.<ext> shape (docs/rest/transport.md) — cannot "
-            "derive a still filename prefix from it."
-        )
-    return match.group("prefix")
+STILLS_DIR_NAME = "Stills"
 
 
 def resolve_mount_path(mount_names: tuple[str, ...], *, volume: str | None) -> str:
-    """The `/mounts/<name>/` path to use for still-file probing, resolved
-    from `GET /mounts/`'s own real directory listing — never by
+    """The `/mounts/<name>/` path to use for Stills-directory monitoring,
+    resolved from `GET /mounts/`'s own real directory listing — never by
     transforming a `deviceName` into a guessed mount suffix (see module
     docstring).
 
@@ -130,73 +137,53 @@ def resolve_mount_path(mount_names: tuple[str, ...], *, volume: str | None) -> s
 async def resolve_active_mount(session: RestCameraSession) -> str:
     """`storage_state()` (for the active device's `volume`) + `mount_names()`
     (the camera's own real mount listing), combined via `resolve_mount_path`
-    — the mount path `find_highest_still_index`/`wait_for_new_still` probe
-    under."""
+    — the mount path `stills_marker()`/`wait_for_new_still()` monitor."""
     storage = await session.storage_state()
     volume = storage.active_device.volume if storage.active_device else None
     names = await session.mount_names()
     return resolve_mount_path(names, volume=volume)
 
 
-async def find_highest_still_index(
-    session: RestCameraSession,
-    mount_path: str,
-    prefix: str,
-    *,
-    extensions: tuple[str, ...] = STILL_EXTENSIONS,
-    max_index: int = 999,
-) -> int | None:
-    """The highest `_S<NNN>` still index currently on the card for `prefix`,
-    or `None` if none exist yet.
-
-    Probes `{mount_path}Stills/{prefix}_S{index:03d}{ext}` for `index` = 1,
-    2, 3, ... — bounded by `max_index` — stopping at the first index where
-    none of `extensions` exists via `session.path_exists()`. Call this
-    *before* triggering `CameraSession.capture_photo()` to get a baseline;
-    `wait_for_new_still()` is what confirms the trigger afterward.
-    """
-    highest: int | None = None
-    index = 1
-    while index <= max_index:
-        found = False
-        for ext in extensions:
-            path = f"{mount_path}Stills/{prefix}_S{index:03d}{ext}"
-            if await session.path_exists(path):
-                found = True
-                break
-        if not found:
-            break
-        highest = index
-        index += 1
-    return highest
+async def stills_marker(session: RestCameraSession, mount_path: str) -> str | None:
+    """The Stills subdirectory's own `mtime`, from `mount_path`'s root
+    listing — advances whenever a file is added to or removed from
+    Stills, without ever needing to list Stills' own contents (which
+    500s unconditionally — see module docstring). Returns `None` if no
+    `Stills` entry exists yet (no photo has ever been taken on this
+    card)."""
+    entries = await session.list_mount(mount_path)
+    for entry in entries:
+        if entry.get("name") == STILLS_DIR_NAME and entry.get("type") == "directory":
+            return entry.get("mtime")
+    return None
 
 
 async def wait_for_new_still(
     session: RestCameraSession,
     mount_path: str,
-    prefix: str,
-    baseline_index: int | None,
+    baseline_marker: str | None,
     *,
-    extensions: tuple[str, ...] = STILL_EXTENSIONS,
     timeout_s: float,
-    poll_interval_s: float = 1.0,
-) -> int | None:
-    """Poll for a still at index `(baseline_index or 0) + 1` to appear,
-    returning its index once found or `None` on timeout.
+    poll_interval_s: float = 0.5,
+) -> bool:
+    """Poll `mount_path`'s root listing until the Stills subdirectory's
+    `mtime` differs from `baseline_marker` (or first appears, if
+    `baseline_marker` is `None` — no Stills directory existed yet), or
+    `timeout_s` elapses.
 
-    This is the actual per-photo confirmation design principle 3 asks for
-    — a specific new file appearing, not a coarse "some write happened"
-    signal (the `0x09/0x02` BLE lead, `docs/ble/photo_capture.md` §5.3, is
-    exactly that too-coarse signal — moves roughly once per three photos,
-    not once per photo). Call `find_highest_still_index()` first, before
-    triggering the BLE capture, to get `baseline_index`.
+    This is the real per-operation confirmation design principle 3 asks
+    for — the Stills directory's own filesystem-level change, not a
+    filename guess (see module docstring for why guessing was retired)
+    and not the coarse `0x09/0x02` BLE write-margin lead
+    (`docs/ble/photo_capture.md` §5.3), which moves roughly once per three
+    photos, not once per photo. Call `stills_marker()` first, before
+    triggering the BLE capture, to get `baseline_marker`.
     """
-    target_index = (baseline_index or 0) + 1
     deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        for ext in extensions:
-            path = f"{mount_path}Stills/{prefix}_S{target_index:03d}{ext}"
-            if await session.path_exists(path):
-                return target_index
+    while True:
+        marker = await stills_marker(session, mount_path)
+        if marker is not None and marker != baseline_marker:
+            return True
+        if time.monotonic() >= deadline:
+            return False
         await asyncio.sleep(poll_interval_s)
-    return None

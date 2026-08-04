@@ -487,33 +487,37 @@ class RestCameraSession:
         body = await self._rest_client.get("/transports/0/timecode")
         return decode_rest_timecode(body["timecode"])
 
+    async def list_mount(self, path: str) -> tuple[dict[str, Any], ...]:
+        """Raw directory listing at `path` — entries exactly as the camera
+        reports them: `{"name": ..., "type": "file"|"directory", "mtime": ...}`,
+        plus `"size"` for files (`docs/rest/transport.md`). `path` may be the
+        bare `/mounts/` root (mount names) or a specific mount's own root
+        (its direct children, e.g. a `Stills` entry with its own `mtime`) —
+        both are outside `/control/api/v1`, so this always calls
+        `api_prefixed=False`. Every subdirectory *one level below* a mount
+        root 500s unconditionally (`docs/rest/transport.md`'s "The 500 is
+        not Stills-specific") — never call this on anything deeper than a
+        mount root."""
+        body = await self._rest_client.get(path, api_prefixed=False)
+        return (
+            tuple(entry for entry in body if isinstance(entry, dict))
+            if isinstance(body, list)
+            else ()
+        )
+
     async def mount_names(self) -> tuple[str, ...]:
         """`GET /mounts/`'s own real directory listing — the mount names
         actually available over HTTP (e.g. `("A001-sd1",)`), confirmed on
         real hardware to return `[{"name": ..., "type": "directory"}, ...]`
         (`docs/rest/transport.md`). Never derived from `deviceName`/`volume`
         by string transformation — see `rest/media.py`'s module docstring
-        for why that mapping isn't trusted as a rule.
-
-        `/mounts/` is the Web Media Manager, a separate URL namespace from
-        the `/control/api/v1` control API — `api_prefixed=False` is required
-        here or the request 404s against a `/control/api/v1/mounts/` path
-        that was never real. See `RestClient`'s module docstring."""
-        body = await self._rest_client.get(MOUNTS_PATH, api_prefixed=False)
-        entries = body if isinstance(body, list) else []
+        for why that mapping isn't trusted as a rule."""
+        entries = await self.list_mount(MOUNTS_PATH)
         return tuple(
             entry["name"]
             for entry in entries
-            if isinstance(entry, dict) and entry.get("type") == "directory"
+            if entry.get("type") == "directory" and isinstance(entry.get("name"), str)
         )
-
-    async def path_exists(self, path: str) -> bool:
-        """Whether `path` (e.g. a `/mounts/<name>/Stills/<file>` still)
-        exists, without ever decoding its content — see `RestClient.exists()`
-        for why a plain `GET` isn't safe for probing binary media files.
-        `path` is a `/mounts/...` path, outside `API_BASE` — see
-        `mount_names()`'s docstring."""
-        return await self._rest_client.exists(path, api_prefixed=False)
 
     # ── Writes (Phase 4) ─────────────────────────────────────────────────
 

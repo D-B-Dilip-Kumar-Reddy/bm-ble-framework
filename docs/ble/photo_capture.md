@@ -1355,14 +1355,9 @@ Now it does (`docs/ble/payload_profiles.md`).
 
 ### 11.2 REST confirmation — `rest/media.py`
 
-The out-of-band channel §7.3's TODO proposed, built now: `find_highest_still_index()`
-reads a baseline still count before the BLE trigger fires, `wait_for_new_still()` polls
-for the next index afterward — a real per-photo signal, not the too-coarse `0x09/0x02`
-storage lead (§5.3) that moves roughly once per three photos. Full design rationale
-(mount-path resolution deliberately not derived from `deviceName`, the still-listing `500`
-that forces filename probing instead of a directory listing, the `.dng`/`.braw` format
-split) lives in `rest/media.py`'s own module docstring and `docs/rest/session.md` rather
-than duplicated here — this section is the cross-transport index pointing at both halves.
+The out-of-band channel §7.3's TODO proposed, built now — but its design changed twice on
+first real contact with hardware, both times documented here rather than quietly patched
+over.
 
 `examples/capture_photo.py` is the composition: one script holding a BLE `CameraSession`
 and a REST `RestCameraSession` open to the same physical camera at once — the first thing
@@ -1371,44 +1366,82 @@ untested ("concurrent BLE + REST is unverified... Phase 6 needs both open at onc
 confirm on hardware").
 
 **First real-hardware run, `POCKET_6K_PRO v8.6`, 2026-08-04:** got past `storage_state()`
-(reported the active device correctly) and `derive_still_prefix()` (derived
-`A001_08031748` from the newest clip) cleanly, then `mount_names()` raised
+(reported the active device correctly) and the then-existing clip-based prefix derivation
+(derived `A001_08031748` from the newest clip) cleanly, then `mount_names()` raised
 `BMDRestError: GET /mounts/ -> 404`. This was not a camera fact — it was a real
-`RestClient` defect (`docs/rest/session.md`'s `mount_names()`/`path_exists()` section,
-`docs/rest/transport.md`'s "Two URL namespaces on one host"): `get()`/`exists()`
-unconditionally prepended `/control/api/v1` to every path, so the request went to
+`RestClient` defect (`docs/rest/session.md`'s `list_mount()`/`mount_names()` section,
+`docs/rest/transport.md`'s "Two URL namespaces on one host"): `get()` unconditionally
+prepended `/control/api/v1` to every path, so the request went to
 `/control/api/v1/mounts/` — a path that was never real; `/mounts/` is the Web Media
-Manager, a separate namespace at the host root. Fixed by adding `api_prefixed: bool`
-to `RestClient.get()`/`exists()`, with `mount_names()`/`path_exists()` passing
-`api_prefixed=False`. The BLE trigger itself was never reached in this run — the
-concurrent-BLE+REST combination this section flags is still unconfirmed pending a
-re-run past this fix.
+Manager, a separate namespace at the host root. Fixed by adding `api_prefixed: bool` to
+`RestClient.get()`, with `mount_names()` passing `api_prefixed=False`.
+
+**Second real-hardware run, same camera, same day, past the first fix:** this one ran all
+the way through — storage check, mount resolution, the BLE trigger, the confirmation poll
+— and printed "NOT confirmed — no new still appeared within 15.0s". The photo had, in
+fact, been taken: pulling the SD card and opening `Stills\` in Windows Explorer showed
+three real files, `A001_07311253_S001`, `A001_07311254_S002`, and — dated to the exact
+minute of this run — `A001_08041126_S003`. This exposed a design defect, not a code bug.
+The original design (`derive_still_prefix()`) assumed a still shares a clip's full
+`<reel>_<date>` filename stem — an operator sample from the planning document, never
+independently re-confirmed in this codebase (§11.3's original wording flagged exactly
+this). The pulled card disproved it directly: only the leading reel identifier (`A001`)
+is actually shared between a clip and a still. The middle timestamp segment is each
+photo's *own* capture moment, generated fresh every time — one second apart between the
+first two stills, three days apart on the third — and the trailing `_S<NNN>` counter is a
+reel-wide cumulative count with no way to learn its current value in advance (Stills'
+contents can never be listed — every subdirectory under a mount root `500`s
+unconditionally, `docs/rest/transport.md`). A still's exact filename is therefore not
+predictable or brute-forceable from clip data at all; probing for it, as the original
+design did, was always going to find nothing.
+
+`rest/media.py` was redesigned around a signal that needs no filename knowledge:
+`stills_marker()` reads the Stills subdirectory's own `mtime` from the (working) mount
+root listing — standard filesystem behaviour advances a directory's `mtime` whenever a
+file is added inside it, without ever opening that directory. `wait_for_new_still()` now
+polls for that `mtime` to change. `derive_still_prefix()`, `find_highest_still_index()`,
+and the old filename-probing `wait_for_new_still()` were removed entirely, along with
+`RestCameraSession.path_exists()` and `RestClient.exists()` (the binary-safe existence
+probe they depended on), once nothing called them anymore. The trade-off this accepts:
+REST can now confirm *that* a still was written, but can never report *which* filename it
+got — naming a captured still still requires physically reading the card, exactly as this
+bug's own diagnosis did. Full design rationale (mount-path resolution deliberately not
+derived from `deviceName`, why the `mtime` signal doesn't need the `.dng`/`.braw` format
+split filename-probing needed) lives in `rest/media.py`'s own module docstring and
+`docs/rest/session.md` rather than duplicated here.
+
+The BLE trigger fired successfully in both hardware runs (§11.1's TX bytes matched
+`FF 04 00 00 0A 03 00 00` exactly), and the concurrent-BLE+REST combination worked without
+incident in the second run — those two things are now real-hardware-confirmed. The
+redesigned `mtime`-based confirmation mechanism itself has not yet had its own
+real-hardware run.
 
 ### 11.3 What's still genuinely unconfirmed
 
 Being explicit about evidentiary weight, per this codebase's own discipline:
 
 - **The trigger itself** (§7.1, §9.1) is real-hardware-confirmed, independently, on two
-  cameras. Nothing about Phase 6 changes that.
-- **The filename-prefix pattern** (`derive_still_prefix()` — a still shares a clip's
-  `<reel>_<date>` stem) is inherited from the original planning document's operator-
-  provided sample. The first real-hardware run (§11.2) derived `A001_08031748` from a
-  real clip without error, which confirms the derivation *runs* against a real
-  `filePath`, but not yet that a still with that exact prefix actually appears — the run
-  didn't reach the trigger.
+  cameras, and fired correctly in both Phase 6 hardware runs (§11.2). Nothing about
+  Phase 6 changes that.
+- **Concurrent BLE + REST sessions** (§11.2) — confirmed working in the second run: both
+  sessions were open together, the BLE trigger fired, and the REST session polled
+  afterward without incident.
+- **The redesigned `mtime`-based confirmation** (`stills_marker()`/`wait_for_new_still()`,
+  §11.2) is new as of this section's second real-hardware run and has not yet had a
+  real-hardware run of its own — it replaced a design two hardware runs disproved, but
+  its own correctness (does the Stills directory's `mtime` actually advance reliably and
+  promptly on this firmware) is still a hypothesis, not a confirmed fact.
 - **The mount-path resolution** deliberately avoids the one unconfirmed rule
   (`docs/rest/transport.md`'s `sd0`→`sd1` mapping, explicitly "not something to encode as
-  a rule") by reading `GET /mounts/`'s own real listing instead — but the *fallback*
-  disambiguation-by-volume-prefix logic (`resolve_mount_path()`, for the case of more than
-  one mount) has no real-hardware test behind it yet, only unit tests against a fake.
-  `mount_names()` itself hit a real defect on its first hardware call (§11.2, now fixed)
-  and has not yet succeeded end-to-end on hardware.
-- **Concurrent BLE + REST sessions** (§11.2) — untested on real hardware; the first run
-  didn't reach the point where both sessions would be open together.
+  a rule") by reading `GET /mounts/`'s own real listing instead — the single-mount case is
+  now real-hardware-confirmed (both hardware runs resolved `/mounts/A001-sd1/` correctly),
+  but the *fallback* disambiguation-by-volume-prefix logic (`resolve_mount_path()`, for
+  the case of more than one mount) still has no real-hardware test behind it, only unit
+  tests against a fake.
 
-None of this is a defect — it's the accurate confirmation status of a feature built ahead
-of its first real run, recorded honestly rather than glossed over, the same way every
-other phase in this migration was.
+None of this is a defect — it's the accurate confirmation status of a feature that was
+wrong twice on first contact with real hardware and corrected both times, recorded
+honestly rather than glossed over, the same way every other phase in this migration was.
 
 ### 11.4 `POCKET_6K_G2 v8.6` still needs its own trigger discovery
 

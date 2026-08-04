@@ -143,15 +143,12 @@ class FakeRestClient:
         *,
         errors: dict[str, Exception] | None = None,
         put_responses: dict[str, object] | None = None,
-        exists_responses: dict[str, bool] | None = None,
     ):
         self.responses = responses
         self.errors = errors or {}
         self.put_responses = put_responses or {}
-        self.exists_responses = exists_responses or {}
         self.calls: list[str] = []
         self.put_calls: list[tuple[str, object]] = []
-        self.exists_calls: list[str] = []
         self.api_prefixed_calls: dict[str, bool] = {}
 
     async def get(self, path: str, *, api_prefixed: bool = True):
@@ -166,13 +163,6 @@ class FakeRestClient:
         if path in self.errors:
             raise self.errors[path]
         return self.put_responses.get(path)
-
-    async def exists(self, path: str, *, api_prefixed: bool = True) -> bool:
-        self.exists_calls.append(path)
-        self.api_prefixed_calls[path] = api_prefixed
-        if path in self.errors:
-            raise self.errors[path]
-        return self.exists_responses.get(path, False)
 
 
 def make_session(
@@ -488,23 +478,57 @@ class TestMountNames:
         assert await session.mount_names() == ()
 
 
-class TestPathExists:
+class TestListMount:
+    """`mount_names()` is now built on `list_mount()` — these tests cover
+    `list_mount()` directly, including the shape `rest/media.py`'s
+    `stills_marker()` relies on: a mount root's `Stills` entry carrying its
+    own `mtime`, which advances whenever a file is added inside it without
+    ever needing to list Stills' own contents (permanently `500`s —
+    docs/rest/transport.md)."""
+
     @pytest.mark.asyncio
-    async def test_delegates_to_client_exists(self):
+    async def test_returns_raw_entries(self):
         client = FakeRestClient(
-            {}, exists_responses={"/mounts/A001-sd1/Stills/A001_0001_S001.dng": True}
+            {
+                "/mounts/A001-sd1/": [
+                    {"name": "Stills", "type": "directory", "mtime": "Fri, 31 Jul 2026 12:54:20"},
+                    {
+                        "name": "A001_07311253_C001.mov",
+                        "type": "file",
+                        "mtime": "Fri, 31 Jul 2026 12:53:58",
+                        "size": 49058872,
+                    },
+                ]
+            }
         )
         session = make_session(make_profile(), client=client)
 
-        assert await session.path_exists("/mounts/A001-sd1/Stills/A001_0001_S001.dng") is True
-        assert await session.path_exists("/mounts/A001-sd1/Stills/A001_0001_S999.dng") is False
-        assert client.exists_calls == [
-            "/mounts/A001-sd1/Stills/A001_0001_S001.dng",
-            "/mounts/A001-sd1/Stills/A001_0001_S999.dng",
-        ]
-        # /mounts/... is outside /control/api/v1 — see TestMountNames.test_parses_real_shape
-        assert client.api_prefixed_calls["/mounts/A001-sd1/Stills/A001_0001_S001.dng"] is False
-        assert client.api_prefixed_calls["/mounts/A001-sd1/Stills/A001_0001_S999.dng"] is False
+        entries = await session.list_mount("/mounts/A001-sd1/")
+
+        assert entries == (
+            {"name": "Stills", "type": "directory", "mtime": "Fri, 31 Jul 2026 12:54:20"},
+            {
+                "name": "A001_07311253_C001.mov",
+                "type": "file",
+                "mtime": "Fri, 31 Jul 2026 12:53:58",
+                "size": 49058872,
+            },
+        )
+        assert client.api_prefixed_calls["/mounts/A001-sd1/"] is False
+
+    @pytest.mark.asyncio
+    async def test_empty_when_no_entries(self):
+        client = FakeRestClient({"/mounts/A001-sd1/": []})
+        session = make_session(make_profile(), client=client)
+
+        assert await session.list_mount("/mounts/A001-sd1/") == ()
+
+    @pytest.mark.asyncio
+    async def test_ignores_non_dict_entries(self):
+        client = FakeRestClient({"/mounts/A001-sd1/": ["not-a-dict", 42]})
+        session = make_session(make_profile(), client=client)
+
+        assert await session.list_mount("/mounts/A001-sd1/") == ()
 
 
 class TestNotConnected:

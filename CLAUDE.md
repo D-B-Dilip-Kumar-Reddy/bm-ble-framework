@@ -182,10 +182,12 @@ src/bmd_camera/
                               # byte-reversed relative to BLE; reuses ble/timecode.py's
                               # Timecode dataclass and duration_seconds() as-is
     media.py                  # Photo-capture confirmation (Phase 6) — resolve_active_mount,
-                              # find_highest_still_index, wait_for_new_still; a per-photo
-                              # signal BLE structurally cannot provide (no echo/CAMERA_STATUS
-                              # movement on a photo trigger, on either camera — see
-                              # docs/ble/photo_capture.md §11). Playback controls (planned)
+                              # stills_marker, wait_for_new_still; confirms via the Stills
+                              # subdirectory's own mtime in the mount-root listing, not a
+                              # filename guess (an earlier filename-prediction design was
+                              # disproven on real hardware — see docs/ble/photo_capture.md
+                              # §11). No BLE channel (echo/CAMERA_STATUS) moves on a photo
+                              # trigger, on either camera. Playback controls (planned)
 
 tools/
   common/                   # Shared BLE capture/decode engine (tools/common/capture.py)

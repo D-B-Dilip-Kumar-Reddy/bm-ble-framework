@@ -9,8 +9,8 @@ WHY BOTH TRANSPORTS ARE OPEN AT ONCE
 (category `0x0A`/parameter `0x03`/`VOID`) but cannot verify anything itself
 — no BLE channel (echo or `CAMERA_STATUS`) has ever been observed to move
 in response, on either camera tested (`docs/ble/photo_capture.md` §7, §9).
-`rest/media.py` supplies the confirmation BLE structurally cannot: watch
-for a new still file to appear on the SD card, over REST. This script is
+`rest/media.py` supplies the confirmation BLE structurally cannot: watch the
+Stills directory itself change on the SD card, over REST. This script is
 therefore the first thing in this codebase to hold a BLE `CameraSession`
 and a REST `RestCameraSession` open to the *same physical camera*
 simultaneously — an untested combination (the plan's own risk list flags
@@ -30,15 +30,18 @@ over two different transports.
 
 WHAT THIS SCRIPT CHANGES ON THE CAMERA: takes one real photo.
 
-CONFIRMATION DESIGN — pieces still not independently re-confirmed in this
-codebase
-------------------------------------------------------------------------------
-`rest/media.py`'s filename-prefix derivation (a still shares a clip's
-`<reel>_<date>` stem) and the mount-path resolution are both explained in
-that module's docstring, including which parts are confirmed on real
-hardware and which are inherited from the original plan, not yet
-independently re-confirmed by a tool in this codebase. This script's own
-run is what confirms or refutes them for real.
+CONFIRMATION DESIGN — no exact filename, by design
+------------------------------------------------------
+`rest/media.py`'s `stills_marker()`/`wait_for_new_still()` confirm *that* a
+new still appeared by watching the Stills subdirectory's own `mtime` in the
+(working) mount-root listing — Stills' own contents can never be listed
+over REST (a permanent firmware `500`, `docs/rest/transport.md`), and an
+earlier design that tried to predict a still's exact filename from clip
+data was disproven on real hardware (see that module's docstring and
+`docs/ble/photo_capture.md` §11). So this script reports success/failure
+only; it cannot name the file it confirmed. No clip needs to exist on the
+card first — the previous design's `clips()` precondition is gone along
+with the filename-prediction it fed.
 
 Usage:
     python examples/capture_photo.py
@@ -50,12 +53,7 @@ import sys
 
 from bmd_camera import BMDUnsupportedError, CameraSession, RestCameraSession
 from bmd_camera.exceptions import BMDStorageError
-from bmd_camera.rest.media import (
-    derive_still_prefix,
-    find_highest_still_index,
-    resolve_active_mount,
-    wait_for_new_still,
-)
+from bmd_camera.rest.media import resolve_active_mount, stills_marker, wait_for_new_still
 
 HOST = "pocket-cinema-camera-6k-pro.local"
 REST_MODEL_KEY = "POCKET_6K_PRO"
@@ -78,26 +76,11 @@ async def main() -> int:
             raise BMDStorageError(f"[{HOST}] No active storage device — cannot capture a photo")
         print(f"Active storage: {storage.active_device.device_name}")
 
-        try:
-            clips = await rest_session.clips()
-        except BMDStorageError as exc:
-            print(f"clips(): {exc}")
-            clips = ()
-        if not clips:
-            print(
-                "No clips on the card yet — cannot derive a still filename prefix "
-                "(rest/media.py's derive_still_prefix() needs an existing clip's "
-                "filePath). Record at least one short clip first."
-            )
-            return 1
-        prefix = derive_still_prefix(clips[-1].file_path)
-        print(f"Still filename prefix: {prefix}")
-
         mount_path = await resolve_active_mount(rest_session)
         print(f"Resolved mount: {mount_path}")
 
-        baseline = await find_highest_still_index(rest_session, mount_path, prefix)
-        print(f"Baseline highest still index: {baseline}")
+        baseline = await stills_marker(rest_session, mount_path)
+        print(f"Baseline Stills mtime: {baseline}")
 
         async with CameraSession(BLE_MODEL_KEY, BLE_FIRMWARE) as ble_session:
             try:
@@ -107,14 +90,14 @@ async def main() -> int:
                 return 1
             print("Trigger sent over BLE — no BLE confirmation exists, polling over REST …")
 
-        confirmed_index = await wait_for_new_still(
-            rest_session, mount_path, prefix, baseline, timeout_s=CONFIRM_TIMEOUT_S
+        confirmed = await wait_for_new_still(
+            rest_session, mount_path, baseline, timeout_s=CONFIRM_TIMEOUT_S
         )
 
-    if confirmed_index is None:
-        print(f"NOT confirmed — no new still appeared within {CONFIRM_TIMEOUT_S}s")
+    if not confirmed:
+        print(f"NOT confirmed — Stills directory did not change within {CONFIRM_TIMEOUT_S}s")
         return 1
-    print(f"Confirmed ✓ — new still at index {confirmed_index}")
+    print("Confirmed ✓ — Stills directory changed (exact filename not knowable over REST)")
     return 0
 
 

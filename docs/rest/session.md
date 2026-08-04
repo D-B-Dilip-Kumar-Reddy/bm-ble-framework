@@ -19,10 +19,18 @@ full re-sweep (544 confirmed, 16 unsupported, 0 unconfirmed) with per-combinatio
 now 0.0–0.2s (a few 1.1s outliers) instead of a uniform ~6.0s — the primary WS-event
 channel is genuinely engaging.
 
-`mount_names()`/`path_exists()` (Phase 6, `docs/ble/photo_capture.md` §11) are
-implemented and unit-tested — the REST half of photo-capture confirmation, composed with
+`list_mount()`/`mount_names()` (Phase 6, `docs/ble/photo_capture.md` §11) are implemented
+and unit-tested — the REST half of photo-capture confirmation, composed with
 `CameraSession.capture_photo()` (BLE) via `rest/media.py` and `examples/capture_photo.py`.
-No real-hardware run reported yet.
+The **first real-hardware run, `POCKET_6K_PRO v8.6`, 2026-08-04, reported "NOT
+confirmed" for a photo the camera really did take** — `rest/media.py`'s original
+filename-prediction design (a still shares a clip's date-time stem) was disproven by
+pulling the card; the confirmation mechanism was redesigned around the Stills
+subdirectory's own `mtime`, and `path_exists()`/`RestClient.exists()` were removed as
+dead code once nothing called them anymore. See "`list_mount()` → `tuple[dict, ...]` /
+`mount_names()` → `tuple[str, ...]`" below and `docs/ble/photo_capture.md` §11 for the
+full evidentiary record. The redesigned mechanism itself has not yet had its own
+real-hardware confirmation.
 
 ## Overview
 
@@ -158,42 +166,55 @@ returning valid (if all-empty) data (confirmed the same run), which is exactly w
 see "Timecode decode" below. Reuses the BLE `Timecode` dataclass and `duration_seconds()`
 as-is; only the wire decode differs between transports.
 
-### `mount_names()` → `tuple[str, ...]` / `path_exists(path)` → `bool`
+### `list_mount(path)` → `tuple[dict, ...]` / `mount_names()` → `tuple[str, ...]`
 
-Phase 6's two primitives (`docs/ble/photo_capture.md` §11, `rest/media.py`), added
-directly to `RestCameraSession` rather than as free functions, since both need the same
-connected `RestClient` every other read verb already uses.
+Phase 6's mount-listing primitives (`docs/ble/photo_capture.md` §11, `rest/media.py`),
+added directly to `RestCameraSession` rather than as free functions, since both need the
+same connected `RestClient` every other read verb already uses.
 
-`mount_names()` is `GET /mounts/`'s own real directory listing (confirmed shape:
-`[{"name": ..., "type": "directory"}, ...]`, `docs/rest/transport.md`) — the mechanism
-`rest/media.py`'s `resolve_mount_path()` uses instead of guessing a mount name from
-`deviceName` (see that module's docstring for why the one observed `sd0`→`sd1` mapping is
-not trusted as a rule).
+`list_mount(path)` is the general form: a raw directory listing at `path`, entries exactly
+as the camera reports them (`{"name": ..., "type": "file"|"directory", "mtime": ...}`,
+plus `"size"` for files — `docs/rest/transport.md`). `path` can be the bare `/mounts/`
+root or a specific mount's own root; both are outside `/control/api/v1`, so this always
+calls the client with `api_prefixed=False`. `mount_names()` is `list_mount(MOUNTS_PATH)`
+filtered to directory names — the mechanism `rest/media.py`'s `resolve_mount_path()` uses
+instead of guessing a mount name from `deviceName` (see that module's docstring for why
+the one observed `sd0`→`sd1` mapping is not trusted as a rule). `rest/media.py`'s
+`stills_marker()` calls `list_mount()` directly on a resolved mount root to read the
+`Stills` entry's own `mtime` — see below.
 
-`path_exists(path)` checks whether a path exists **without ever reading or decoding its
-body** — it delegates to `RestClient.exists()`, a new method distinct from `get()`
-specifically because a still image (`.dng`/`.braw`) is binary content `get()`'s
-JSON-then-text fallback could raise decoding. This is what `rest/media.py`'s still-index
-probing calls, since a directory listing isn't available (every subdirectory under a
-mount root — Stills included — `500`s).
-
-**Defect found and fixed on real hardware, 2026-08-04:** the first `examples/capture_photo.py`
-run against `POCKET_6K_PRO v8.6` got past `storage_state()` and `derive_still_prefix()`
-cleanly, then `mount_names()` raised `BMDRestError: GET /mounts/ -> 404`. Root cause:
-`RestClient._request`/`exists()` unconditionally prepended `API_BASE`
-(`/control/api/v1`) to every path, so the real request went to
+**Defect found and fixed on real hardware, 2026-08-04 (first run):** the first
+`examples/capture_photo.py` run against `POCKET_6K_PRO v8.6` got past `storage_state()`
+and the (then-existing) clip-based prefix derivation cleanly, then `mount_names()` raised
+`BMDRestError: GET /mounts/ -> 404`. Root cause: `RestClient._request()` unconditionally
+prepended `API_BASE` (`/control/api/v1`) to every path, so the real request went to
 `/control/api/v1/mounts/` — a path that was never real. `/mounts/` is the Web Media
 Manager, a URL namespace at the host root, entirely separate from the control API;
 `tools/rest/probe_endpoints.py`'s own two request-building call sites already drew this
 distinction (`walk_mounts()` never adds `API_BASE`), but `RestClient` didn't carry the
-same rule. Fixed by adding `api_prefixed: bool = True` to `RestClient.get()`/`exists()`
-(and the shared `_request()`/`_url()` internals); `mount_names()` and `path_exists()` now
-pass `api_prefixed=False`. Regression tests assert the real constructed URL in both
-`test_client.py` (`TestStatusHandling.test_api_prefixed_false_omits_api_base`,
-`TestExists.test_api_prefixed_false_omits_api_base`) and `test_rest_session.py`
+same rule. Fixed by adding `api_prefixed: bool = True` to `RestClient.get()` (and the
+shared `_request()`/`_url()` internals); `list_mount()` now passes `api_prefixed=False`.
+Regression tests assert the real constructed URL in both `test_client.py`
+(`TestStatusHandling.test_api_prefixed_false_omits_api_base`) and `test_rest_session.py`
 (`FakeRestClient.api_prefixed_calls`), since the original tests only asserted status-code
 handling and never the URL a mounts call actually produced — which is exactly how this
-escaped review. Not yet re-confirmed on real hardware past this fix.
+escaped review.
+
+**Second defect found on real hardware, same day, past the first fix:** with the 404
+fixed, the *next* run got all the way through — `mount_names()`, the BLE trigger, the
+whole confirmation poll — and reported "NOT confirmed", yet pulling the SD card
+afterward showed the photo really had been taken. `rest/media.py`'s original design
+assumed a still shares a clip's full `<reel>_<date>` filename stem; the pulled card
+showed three real stills where only the reel identifier (`A001`) was actually shared —
+the timestamp segment was unique per photo, and the trailing counter had no knowable
+baseline (Stills can never be listed — see below). No REST call was broken this time; the
+*design* was wrong. Retired the filename-prediction approach entirely
+(`derive_still_prefix()`, `find_highest_still_index()`, the old `wait_for_new_still()`) in
+favor of watching the Stills subdirectory's own `mtime` in a mount-root `list_mount()`
+call — see `rest/media.py`'s module docstring and `docs/ble/photo_capture.md` §11 for the
+full evidentiary record. `path_exists()` on `RestCameraSession` and `RestClient.exists()`
+were removed once the redesign left them with no caller — dead code, not kept "for later."
+This redesigned mechanism has not yet had its own real-hardware run.
 
 ### `is_recording` / `wait_while_recording(timeout)`
 
@@ -523,17 +544,14 @@ module name rather than the plain `sys.path`-insert-and-import pattern
 identical to `tools/control/sweep_camera_format.py`'s and a plain `import` would collide
 in `sys.modules` across the two test files — see that test file's module docstring.
 
-`mount_names()`/`path_exists()` are covered directly in `test_rest_session.py`
-(`TestMountNames`, `TestPathExists`) with the same fake-`RestClient` pattern, extended
-with an `.exists()` method. `tests/unit/rest/test_media.py` covers `rest/media.py`'s pure
-functions (`derive_still_prefix`, `resolve_mount_path`) and its two session-composing ones
-(`resolve_active_mount`, `find_highest_still_index`, `wait_for_new_still`) against a
-minimal fake exposing only the three `RestCameraSession` methods they call — including
-the real evidence a `.braw` still must be found too, not just `.dng`
-(`docs/ble/photo_capture.md` §8.4), and that a still appearing mid-poll (not just
-immediately or never) is detected. `tests/unit/rest/test_client.py`'s `TestExists` proves
-`exists()` never calls `.json()`/`.text()` at all — a `FakeResponse` with no body
-configured would raise if it ever did.
+`list_mount()`/`mount_names()` are covered directly in `test_rest_session.py`
+(`TestListMount`, `TestMountNames`) with the same fake-`RestClient` pattern.
+`tests/unit/rest/test_media.py` covers `rest/media.py`'s pure function
+(`resolve_mount_path`) and its session-composing ones (`resolve_active_mount`,
+`stills_marker`, `wait_for_new_still`) against a minimal fake exposing only the
+`RestCameraSession` methods they call (`storage_state`, `mount_names`, `list_mount`) —
+including that a same-named `file` entry never counts as the `Stills` directory, and that
+a marker change appearing mid-poll (not just immediately or never) is detected.
 
 ---
 
