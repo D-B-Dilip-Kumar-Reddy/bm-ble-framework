@@ -1325,7 +1325,7 @@ investigation never had. See `docs/rest/transport.md`.
 
 ---
 
-## 11. Phase 6 — `capture_photo()` built, verified over REST (2026-08-04)
+## 11. Phase 6 — `capture_photo()` built, first real-hardware run in progress (2026-08-04)
 
 §7.3 left an open architectural question: how to reconcile "no BLE channel confirms a
 photo was taken" with CLAUDE.md design principle 3's "every write command must be
@@ -1368,7 +1368,21 @@ than duplicated here — this section is the cross-transport index pointing at b
 and a REST `RestCameraSession` open to the same physical camera at once — the first thing
 in this codebase to do that. The plan's own risk list flagged this combination as
 untested ("concurrent BLE + REST is unverified... Phase 6 needs both open at once —
-confirm on hardware"); no run has been reported yet.
+confirm on hardware").
+
+**First real-hardware run, `POCKET_6K_PRO v8.6`, 2026-08-04:** got past `storage_state()`
+(reported the active device correctly) and `derive_still_prefix()` (derived
+`A001_08031748` from the newest clip) cleanly, then `mount_names()` raised
+`BMDRestError: GET /mounts/ -> 404`. This was not a camera fact — it was a real
+`RestClient` defect (`docs/rest/session.md`'s `mount_names()`/`path_exists()` section,
+`docs/rest/transport.md`'s "Two URL namespaces on one host"): `get()`/`exists()`
+unconditionally prepended `/control/api/v1` to every path, so the request went to
+`/control/api/v1/mounts/` — a path that was never real; `/mounts/` is the Web Media
+Manager, a separate namespace at the host root. Fixed by adding `api_prefixed: bool`
+to `RestClient.get()`/`exists()`, with `mount_names()`/`path_exists()` passing
+`api_prefixed=False`. The BLE trigger itself was never reached in this run — the
+concurrent-BLE+REST combination this section flags is still unconfirmed pending a
+re-run past this fix.
 
 ### 11.3 What's still genuinely unconfirmed
 
@@ -1378,13 +1392,19 @@ Being explicit about evidentiary weight, per this codebase's own discipline:
   cameras. Nothing about Phase 6 changes that.
 - **The filename-prefix pattern** (`derive_still_prefix()` — a still shares a clip's
   `<reel>_<date>` stem) is inherited from the original planning document's operator-
-  provided sample, not yet independently re-confirmed by any tool run in this codebase.
+  provided sample. The first real-hardware run (§11.2) derived `A001_08031748` from a
+  real clip without error, which confirms the derivation *runs* against a real
+  `filePath`, but not yet that a still with that exact prefix actually appears — the run
+  didn't reach the trigger.
 - **The mount-path resolution** deliberately avoids the one unconfirmed rule
   (`docs/rest/transport.md`'s `sd0`→`sd1` mapping, explicitly "not something to encode as
   a rule") by reading `GET /mounts/`'s own real listing instead — but the *fallback*
   disambiguation-by-volume-prefix logic (`resolve_mount_path()`, for the case of more than
   one mount) has no real-hardware test behind it yet, only unit tests against a fake.
-- **Concurrent BLE + REST sessions** (§11.2) — untested on real hardware.
+  `mount_names()` itself hit a real defect on its first hardware call (§11.2, now fixed)
+  and has not yet succeeded end-to-end on hardware.
+- **Concurrent BLE + REST sessions** (§11.2) — untested on real hardware; the first run
+  didn't reach the point where both sessions would be open together.
 
 None of this is a defect — it's the accurate confirmation status of a feature built ahead
 of its first real run, recorded honestly rather than glossed over, the same way every
