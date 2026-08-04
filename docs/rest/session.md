@@ -600,6 +600,13 @@ First consumer: `examples/check_timeline_stale_entries.py` (below), built to tes
 skipping `DELETE /timelines/0` (`select_clip()`'s finding #1 — `501` on this firmware)
 ever leaves a previous format's clips mixed in with a newly-selected format's clips.
 
+**Answered, `POCKET_6K_G2 v8.6`, 2026-08-04:** no. Two runs, in opposite directions
+(clip A `ProRes:Proxy @ 4096x2160p23.98` -> clip B `BRaw:8_1 @ 6144x2560p23.98`, then the
+reverse), each read the timeline right after switching. Both times the readback contained
+*only* the just-selected clip's own format group — no trace of the previous format's
+clips. `POST /timelines/0/add` fully replaces the timeline's contents on this firmware,
+even though `DELETE` never runs.
+
 ### `select_clip(clip_unique_id)`
 
 Makes one clip (`Clip.clip_unique_id`, from `clips()`, Phase 3) playable: switches the
@@ -688,14 +695,16 @@ ran clean on both cameras, this method's own dual-check passing each time. The t
 clip's format already matched the camera's current setting on both runs, so this
 specific evidence doesn't cover the `set_camera_format()` branch inside `select_clip()`
 (that piece's own evidence is still Phase 5's, not new here) — a clip whose format
-*doesn't* match, forcing the switch, remains the next real-hardware gap to close. Still
-open, from finding #1: whether skipping the DELETE clear leaves stale entries when adding
-does work — this run's card only ever held clips of the one format being requested, so it
-couldn't distinguish a clean add from one with leftover entries.
-`examples/check_timeline_stale_entries.py` (below `timeline_clip_ids()`'s own section)
-was built specifically to close this gap: it switches between two clips of different
-formats via `select_clip()` and checks `timeline_clip_ids()` after each switch for any id
-that doesn't belong to the second clip's format.
+*doesn't* match, forcing the switch, remains the next real-hardware gap to close.
+
+**Real-hardware finding #6, `POCKET_6K_G2 v8.6`, 2026-08-04, closing finding #1's last
+open question:** `examples/check_timeline_stale_entries.py` switched between two clips of
+different formats via `select_clip()` — `ProRes:Proxy @ 4096x2160p23.98` and
+`BRaw:8_1 @ 6144x2560p23.98` — checking `timeline_clip_ids()` after each switch, in both
+directions (A -> B, then B -> A). Both runs: the readback after the second switch
+contained *only* the newly-selected clip's own format group, nothing from the one before
+it. **Skipping the `DELETE` clear does not leave stale cross-format entries** — `POST
+/timelines/0/add` fully replaces the timeline's contents on this firmware regardless.
 
 No WS event shape is known for `/timelines/0`, so verification there isn't the usual
 primary/secondary dual-check — it's a poll: `GET /timelines/0` repeatedly (default every

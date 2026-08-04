@@ -829,6 +829,19 @@ an opt-out; a caller needing a specific format after playback must call
 `set_camera_format()` again explicitly. See docs/rest/session.md's `enter_playback()` /
 `exit_playback()` section for the full four-run trail.
 
+**Eleventh real-hardware evidence, `POCKET_6K_G2 v8.6`, 2026-08-04, closing `select_clip()`
+finding #1's last open question:** `examples/check_timeline_stale_entries.py` switched
+between two clips of different formats — `ProRes:Proxy @ 4096x2160p23.98` and
+`BRaw:8_1 @ 6144x2560p23.98` — via `select_clip()`, reading `timeline_clip_ids()`
+(`GET /timelines/0`) after each switch, in both directions (A -> B, then the reverse).
+Both runs: the readback after the second switch contained *only* the newly-selected
+clip's own format group — nothing left over from the one before it.
+**`POST /timelines/0/add` fully replaces the timeline's contents on this firmware, even
+though `DELETE /timelines/0` never runs (`501`).** This closes the one open question
+`select_clip()`'s design has carried since its first real-hardware run. See
+docs/rest/session.md's `timeline_clip_ids()` and `select_clip()` sections for the full
+writeup.
+
 ---
 
 ## Library surface (Phase 2)

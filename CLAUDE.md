@@ -169,7 +169,11 @@ src/bmd_camera/
                               # timecode, notification-driven is_recording,
                               # timeline_clip_ids — a plain GET /timelines/0, added to let
                               # a caller inspect the timeline independently of
-                              # select_clip()'s own membership poll); writes —
+                              # select_clip()'s own membership poll — closed select_clip()'s
+                              # last open question: two runs (opposite directions, two real
+                              # format pairs) confirmed POST /timelines/0/add fully replaces
+                              # the timeline's contents even though DELETE never runs (501),
+                              # no stale cross-format entries left behind); writes —
                               # record_start/record_stop (Phase 4, real-hardware-
                               # confirmed) and set_camera_format (Phase 5, dual-check
                               # verified, live-capability-gated via supported_formats(),
@@ -344,8 +348,11 @@ examples/
                             # DELETE /timelines/0 leaves stale cross-format entries).
                             # Deliberately never calls enter_playback()/exit_playback(),
                             # since exit_playback()'s confirmed format-revert would muddy
-                            # the read. See docs/rest/session.md's timeline_clip_ids() and
-                            # select_clip() sections
+                            # the read. CONFIRMED, POCKET_6K_G2 v8.6, 2026-08-04, both
+                            # directions (two real format pairs): no stale entries — POST
+                            # /timelines/0/add fully replaces the timeline even without
+                            # DELETE ever running. See docs/rest/session.md's
+                            # timeline_clip_ids() and select_clip() sections
   playback.py               # (planned)
 
 tests/

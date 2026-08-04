@@ -955,14 +955,19 @@ class RestCameraSession:
         shape confirmed `POCKET_6K_PRO v8.6`, 2026-08-04: `{"clips":
         [{"clipUniqueId": int, "frameCount": int}]}`).
 
-        Added for `examples/check_timeline_stale_entries.py` — answering
-        whether skipping `DELETE /timelines/0` (`501` on this firmware,
-        `select_clip()`'s finding #1) ever leaves cross-format entries
-        behind after switching to a differently-formatted clip requires
-        reading the timeline back independently of `select_clip()`'s own
-        internal poll, which only checks for the *requested* clip's
-        membership and would not itself notice an unrelated leftover
-        entry.
+        Added for `examples/check_timeline_stale_entries.py`, which used it
+        to answer `select_clip()`'s finding #1 open question — whether
+        skipping `DELETE /timelines/0` (`501` on this firmware) ever
+        leaves cross-format entries behind after switching to a
+        differently-formatted clip. **Answer, `POCKET_6K_G2 v8.6`,
+        2026-08-04, confirmed symmetrically in both directions (clip A ->
+        clip B and clip B -> clip A, two different codec/resolution
+        combinations): no.** Every readback contained exactly the
+        newly-selected clip's own format group, nothing left over from
+        the previous one. `POST /timelines/0/add` fully replaces the
+        timeline's contents on this firmware even without the `DELETE`
+        that structurally cannot run — see `select_clip()`'s own
+        docstring for the closed-out finding.
         """
         endpoint = self.profile.rest_endpoint(TIMELINE_PATH)
         if endpoint is None or not endpoint.supported:
@@ -1036,7 +1041,14 @@ class RestCameraSession:
         (`clip_unique_id=1`) already matched the camera's format on both
         runs, so this specific run didn't exercise the `set_camera_format`
         branch — that piece's own evidence is still Phase 5's, not new
-        from this run. `resolve_ble_codec_name` (`mapping.py`) can raise
+        from this run. Finding #1's open question — whether skipping the
+        `DELETE` clear leaves stale cross-format entries in the timeline —
+        is since closed: `examples/check_timeline_stale_entries.py`
+        confirmed, symmetrically in both directions, that `POST
+        /timelines/0/add` fully replaces the timeline's contents even
+        without `DELETE` ever running (see `timeline_clip_ids()`'s
+        docstring for the full readback). `resolve_ble_codec_name`
+        (`mapping.py`) can raise
         `BMDUnsupportedError` if a clip's REST codec string isn't in the
         profile's confirmed `format_names` table (no derivation fallback
         — see `mapping.py`'s own docstring for
