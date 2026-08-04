@@ -303,7 +303,7 @@ added, a new `docs/<feature>.md` must be created alongside the code change.
 | `docs/ble/reverse_engineering.md` | Tool-by-tool procedure for bringing up a new `(MODEL_KEY, FIRMWARE)` pair, and for adding a single new command |
 | `docs/ble/camera_registry.md` | Full evidentiary notes behind the Camera Registry table above |
 | `docs/rest/transport.md` | REST/WebSocket transport (8.6) — addressing the camera over USB, scheme discovery, `tools/rest/probe_endpoints.py`, sweep results for both cameras, the `RestClient`/`RestEventRouter` library surface |
-| `docs/rest/session.md` | `RestCameraSession` — the REST state/control surface: read verbs (Phase 3 — format, storage, clips, timecode, notification-driven `is_recording`); `record_start`/`record_stop` (Phase 4 — dual-check verification, storage precondition, real-hardware-confirmed); `set_camera_format` (Phase 5 — one `PUT /system/format`, live-capability-gated via `supported_formats()`); codec name mapping and REST timecode decode |
+| `docs/rest/session.md` | `RestCameraSession` — the REST state/control surface: read verbs (Phase 3 — format, storage, clips, timecode, notification-driven `is_recording`); `record_start`/`record_stop` (Phase 4 — dual-check verification, storage precondition, real-hardware-confirmed); `set_camera_format` (Phase 5 — one `PUT /system/format`, live-capability-gated via `supported_formats()`); photo-capture confirmation primitives (Phase 6 — `list_mount`/`mount_names`/`path_exists`/`guess_new_still_path`, real-hardware-confirmed); playback/gallery writes (Phase 7 — `set_timeline`/`enter_playback`/`play`/`pause`/`seek`/`shuttle`/`stop`, built, not yet real-hardware-confirmed); codec name mapping and REST timecode decode |
 
 ---
 
