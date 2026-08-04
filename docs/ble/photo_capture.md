@@ -1472,10 +1472,15 @@ Being explicit about evidentiary weight, per this codebase's own discipline:
 - **The mount-path resolution** deliberately avoids the one unconfirmed rule
   (`docs/rest/transport.md`'s `sd0`→`sd1` mapping, explicitly "not something to encode as
   a rule") by reading `GET /mounts/`'s own real listing instead — the single-mount case is
-  now real-hardware-confirmed (every hardware run resolved `/mounts/A001-sd1/` correctly),
-  but the *fallback* disambiguation-by-volume-prefix logic (`resolve_mount_path()`, for
-  the case of more than one mount) still has no real-hardware test behind it, only unit
-  tests against a fake.
+  now real-hardware-confirmed (every hardware run resolved `/mounts/A001-sd1/` correctly).
+  `resolve_mount_path()`'s *fallback* disambiguation-by-volume-prefix branch (for the case
+  of more than one mount) is exercised only by unit tests against a fake, and — a
+  deliberate scoping decision, not an oversight — is out of scope for a real-hardware
+  confirmation on the current test rig: both cameras in this project's registry have a
+  single SD card slot, so the multi-mount branch never fires in practice. The code stays
+  (cheap, already covered by unit tests, and a future single-card-slot assumption isn't
+  guaranteed to hold for every camera this codebase might eventually support — e.g. a
+  dual-slot body), but it is not an open real-hardware gap to chase.
 
 None of this is a defect — it's the accurate confirmation status of a feature that was
 wrong twice on first contact with real hardware (the mounts `404` and the filename-stem

@@ -130,6 +130,13 @@ def resolve_mount_path(mount_names: tuple[str, ...], *, volume: str | None) -> s
     real hardware — `docs/rest/transport.md`). Raises `ValueError` if that
     still leaves zero or more than one candidate — this function never
     guesses which mount to use.
+
+    The multi-mount branch is unit-tested only, never against real
+    hardware — a deliberate scoping decision, not an oversight: both
+    cameras in this project's registry have a single SD card slot, so it
+    never fires in practice (`docs/ble/photo_capture.md` §11.3). Kept
+    rather than removed since it's cheap and a future camera in this
+    codebase's scope might not share that constraint.
     """
     if not mount_names:
         raise ValueError("GET /mounts/ reported no mounts — is a storage device inserted?")
