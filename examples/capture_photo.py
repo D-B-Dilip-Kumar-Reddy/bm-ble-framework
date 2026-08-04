@@ -30,18 +30,22 @@ over two different transports.
 
 WHAT THIS SCRIPT CHANGES ON THE CAMERA: takes one real photo.
 
-CONFIRMATION DESIGN — no exact filename, by design
-------------------------------------------------------
+CONFIRMATION DESIGN — no *guaranteed* filename, but a best-effort guess
+-----------------------------------------------------------------------------
 `rest/media.py`'s `stills_marker()`/`wait_for_new_still()` confirm *that* a
 new still appeared by watching the Stills subdirectory's own `mtime` in the
 (working) mount-root listing — Stills' own contents can never be listed
 over REST (a permanent firmware `500`, `docs/rest/transport.md`), and an
 earlier design that tried to predict a still's exact filename from clip
 data was disproven on real hardware (see that module's docstring and
-`docs/ble/photo_capture.md` §11). So this script reports success/failure
-only; it cannot name the file it confirmed. No clip needs to exist on the
-card first — the previous design's `clips()` precondition is gone along
-with the filename-prediction it fed.
+`docs/ble/photo_capture.md` §11). No clip needs to exist on the card first
+— the previous design's `clips()` precondition is gone along with the
+filename-prediction it fed. Confirmation success/failure never depends on
+a filename. After confirming, this script makes one **opt-in, best-effort**
+attempt to name the file anyway, via `guess_new_still_path()` — a narrow
+probe around the trigger's own timestamp — and reports whatever it finds
+(or doesn't) purely as a convenience; a `None` here does not mean the
+capture failed.
 
 Usage:
     python examples/capture_photo.py
@@ -50,10 +54,16 @@ Usage:
 import asyncio
 import logging
 import sys
+from datetime import datetime
 
 from bmd_camera import BMDUnsupportedError, CameraSession, RestCameraSession
 from bmd_camera.exceptions import BMDStorageError
-from bmd_camera.rest.media import resolve_active_mount, stills_marker, wait_for_new_still
+from bmd_camera.rest.media import (
+    guess_new_still_path,
+    resolve_active_mount,
+    stills_marker,
+    wait_for_new_still,
+)
 
 HOST = "pocket-cinema-camera-6k-pro.local"
 REST_MODEL_KEY = "POCKET_6K_PRO"
@@ -83,6 +93,7 @@ async def main() -> int:
         print(f"Baseline Stills mtime: {baseline}")
 
         async with CameraSession(BLE_MODEL_KEY, BLE_FIRMWARE) as ble_session:
+            trigger_time = datetime.now()
             try:
                 await ble_session.capture_photo()
             except BMDUnsupportedError as exc:
@@ -94,10 +105,20 @@ async def main() -> int:
             rest_session, mount_path, baseline, timeout_s=CONFIRM_TIMEOUT_S
         )
 
-    if not confirmed:
-        print(f"NOT confirmed — Stills directory did not change within {CONFIRM_TIMEOUT_S}s")
-        return 1
-    print("Confirmed ✓ — Stills directory changed (exact filename not knowable over REST)")
+        if not confirmed:
+            print(f"NOT confirmed — Stills directory did not change within {CONFIRM_TIMEOUT_S}s")
+            return 1
+        print("Confirmed ✓ — Stills directory changed")
+
+        guessed_path = await guess_new_still_path(rest_session, mount_path, around=trigger_time)
+        if guessed_path is not None:
+            print(f"Likely filename (best-effort guess): {guessed_path}")
+        else:
+            print(
+                "Filename not determined (best-effort guess found nothing in its default "
+                "search window) — the capture is still confirmed above."
+            )
+
     return 0
 
 

@@ -519,6 +519,19 @@ class RestCameraSession:
             if entry.get("type") == "directory" and isinstance(entry.get("name"), str)
         )
 
+    async def path_exists(self, path: str) -> bool:
+        """Whether `path` (e.g. a `/mounts/<name>/Stills/<file>` still)
+        exists, without ever decoding its content — see `RestClient.exists()`
+        for why a plain `GET` isn't safe for probing binary media files.
+        `path` is a `/mounts/...` path, outside `API_BASE` — see
+        `mount_names()`'s docstring. Purely opportunistic: used only by
+        `rest/media.py`'s `guess_new_still_path()`, an opt-in, best-effort
+        filename lookup — never by `wait_for_new_still()`'s actual
+        confirmation, which relies on the Stills directory's own `mtime`
+        instead (a directory listing 500s unconditionally, so a filename
+        guess can be wrong; a real signal cannot)."""
+        return await self._rest_client.exists(path, api_prefixed=False)
+
     # ── Writes (Phase 4) ─────────────────────────────────────────────────
 
     async def record_start(self) -> None:

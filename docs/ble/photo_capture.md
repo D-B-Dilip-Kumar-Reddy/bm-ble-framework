@@ -1325,7 +1325,7 @@ investigation never had. See `docs/rest/transport.md`.
 
 ---
 
-## 11. Phase 6 — `capture_photo()` built, first real-hardware run in progress (2026-08-04)
+## 11. Phase 6 — `capture_photo()` built and confirmed over REST on real hardware (2026-08-04)
 
 §7.3 left an open architectural question: how to reconcile "no BLE channel confirms a
 photo was taken" with CLAUDE.md design principle 3's "every write command must be
@@ -1402,46 +1402,61 @@ file is added inside it, without ever opening that directory. `wait_for_new_stil
 polls for that `mtime` to change. `derive_still_prefix()`, `find_highest_still_index()`,
 and the old filename-probing `wait_for_new_still()` were removed entirely, along with
 `RestCameraSession.path_exists()` and `RestClient.exists()` (the binary-safe existence
-probe they depended on), once nothing called them anymore. The trade-off this accepts:
-REST can now confirm *that* a still was written, but can never report *which* filename it
-got — naming a captured still still requires physically reading the card, exactly as this
-bug's own diagnosis did. Full design rationale (mount-path resolution deliberately not
-derived from `deviceName`, why the `mtime` signal doesn't need the `.dng`/`.braw` format
-split filename-probing needed) lives in `rest/media.py`'s own module docstring and
-`docs/rest/session.md` rather than duplicated here.
+probe they depended on), once nothing called them anymore.
 
-The BLE trigger fired successfully in both hardware runs (§11.1's TX bytes matched
-`FF 04 00 00 0A 03 00 00` exactly), and the concurrent-BLE+REST combination worked without
-incident in the second run — those two things are now real-hardware-confirmed. The
-redesigned `mtime`-based confirmation mechanism itself has not yet had its own
-real-hardware run.
+**Third real-hardware run, same camera, same day, past the redesign:**
+`examples/capture_photo.py` ran end to end and printed "Confirmed ✓" — the redesigned
+`mtime` signal worked on its first try. Combined with the BLE trigger firing correctly in
+all three runs (§11.1's TX bytes matched `FF 04 00 00 0A 03 00 00` exactly every time) and
+the concurrent-BLE+REST combination working without incident, Phase 6's core confirmation
+design is now real-hardware-confirmed.
+
+**A follow-up request — "can I get the still name" — reopened the filename question, this
+time as an explicit trade-off rather than a silent gap.** REST still cannot *guarantee* a
+filename (the `500` above is permanent), but the real filenames observed on the pulled
+card follow a knowable shape: `<reel>_<MMDDHHMM>_S<NNN><ext>`, where the reel and
+timestamp are both derivable (the reel from the mount name already resolved; the
+timestamp from the trigger's own send time, confirmed to land on the same minute twice
+now) and only the counter is genuinely unknowable without a listing. `rest/media.py` grew
+`guess_new_still_path()` — a deliberately **opt-in, informational-only** probe of a narrow
+`(minute offset, index, extension)` window via the reintroduced `path_exists()`/
+`RestClient.exists()` — that never gates `wait_for_new_still()`'s own pass/fail.
+`examples/capture_photo.py` calls it once, after confirmation, purely to print a likely
+name. This is new code as of this section's third hardware run and has not itself been
+exercised on real hardware yet.
 
 ### 11.3 What's still genuinely unconfirmed
 
 Being explicit about evidentiary weight, per this codebase's own discipline:
 
 - **The trigger itself** (§7.1, §9.1) is real-hardware-confirmed, independently, on two
-  cameras, and fired correctly in both Phase 6 hardware runs (§11.2). Nothing about
+  cameras, and fired correctly in all three Phase 6 hardware runs (§11.2). Nothing about
   Phase 6 changes that.
-- **Concurrent BLE + REST sessions** (§11.2) — confirmed working in the second run: both
-  sessions were open together, the BLE trigger fired, and the REST session polled
-  afterward without incident.
+- **Concurrent BLE + REST sessions** (§11.2) — confirmed working across the second and
+  third runs: both sessions were open together, the BLE trigger fired, and the REST
+  session polled (and, in the third run, confirmed) afterward without incident.
 - **The redesigned `mtime`-based confirmation** (`stills_marker()`/`wait_for_new_still()`,
-  §11.2) is new as of this section's second real-hardware run and has not yet had a
-  real-hardware run of its own — it replaced a design two hardware runs disproved, but
-  its own correctness (does the Stills directory's `mtime` actually advance reliably and
-  promptly on this firmware) is still a hypothesis, not a confirmed fact.
+  §11.2) is now real-hardware-confirmed — the third run's "Confirmed ✓" is a genuine
+  positive result, not just an absence of errors. One data point, not an exhaustive proof
+  (repeated runs, a heavily-used card, a first-ever-photo card with no prior `Stills`
+  directory are all still open questions), but the mechanism itself works.
+- **`guess_new_still_path()`** (§11.2) is brand new — an opt-in, informational filename
+  lookup built on the same real-hardware evidence as the confirmation redesign, but not
+  itself yet run against a real camera. Whether its narrow default search window
+  (`range(1, 11)` for the index) actually lands on the right filename in practice, versus
+  needing a caller-supplied hint, is unconfirmed.
 - **The mount-path resolution** deliberately avoids the one unconfirmed rule
   (`docs/rest/transport.md`'s `sd0`→`sd1` mapping, explicitly "not something to encode as
   a rule") by reading `GET /mounts/`'s own real listing instead — the single-mount case is
-  now real-hardware-confirmed (both hardware runs resolved `/mounts/A001-sd1/` correctly),
-  but the *fallback* disambiguation-by-volume-prefix logic (`resolve_mount_path()`, for
-  the case of more than one mount) still has no real-hardware test behind it, only unit
-  tests against a fake.
+  now real-hardware-confirmed (all three hardware runs resolved `/mounts/A001-sd1/`
+  correctly), but the *fallback* disambiguation-by-volume-prefix logic
+  (`resolve_mount_path()`, for the case of more than one mount) still has no real-hardware
+  test behind it, only unit tests against a fake.
 
 None of this is a defect — it's the accurate confirmation status of a feature that was
-wrong twice on first contact with real hardware and corrected both times, recorded
-honestly rather than glossed over, the same way every other phase in this migration was.
+wrong twice on first contact with real hardware, corrected both times, and confirmed
+working on the third try, recorded honestly rather than glossed over, the same way every
+other phase in this migration was.
 
 ### 11.4 `POCKET_6K_G2 v8.6` still needs its own trigger discovery
 

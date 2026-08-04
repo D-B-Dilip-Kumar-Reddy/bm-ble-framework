@@ -73,34 +73,50 @@ not yet independently confirmed on real hardware — it is what this module
 moved to *after* the filename-probing design failed its first real run,
 and its own first real run is still pending.
 
-THE TRADE-OFF: no more exact filename
-------------------------------------------
-This design confirms *that* a still was written, never *which* filename
-it got — REST has no way to learn that (the `500` above), so naming a
-captured still requires physically reading the card, exactly as this
-bug's own diagnosis did. `examples/capture_photo.py` reports
-success/failure only; it cannot report a filename.
+THE TRADE-OFF: no *guaranteed* filename, but an opt-in best-effort guess
+-----------------------------------------------------------------------------
+Confirmation itself (`wait_for_new_still()`) never learns *which* filename
+a still got — REST has no way to learn that (the `500` above). But the
+real filenames observed on a pulled card (see above) follow a knowable
+shape: `<reel>_<MMDDHHMM>_S<NNN><ext>`, where the reel is already known
+(the mount name's own prefix — `resolve_active_mount()` already resolves
+it), the timestamp lands on the same minute the trigger was sent (real
+evidence: a trigger logged at `11:26:24` produced a still stamped exactly
+`08041126`), and only the counter `<NNN>` is genuinely unknowable without
+a listing. `guess_new_still_path()` exploits this: it probes a caller-
+supplied, deliberately narrow set of `(minute offset, index, extension)`
+combinations via `RestCameraSession.path_exists()`, returning the first
+match. It is **opt-in, informational only, and never gates
+`wait_for_new_still()`'s own pass/fail** — a caller with no reasonable
+index range to try should not call it at all rather than brute-forcing an
+unbounded range (see its docstring for why an unbounded default would be
+both slow and unreliable). `examples/capture_photo.py` calls it once,
+after confirmation, purely to print a likely name.
 
 STILL FILE FORMAT DIFFERS BY CAMERA AND CODEC
 --------------------------------------------------
 `docs/ble/photo_capture.md` §8.4: `POCKET_6K_G2 v7.9` stills are always
 `.dng`; `POCKET_6K_PRO v8.6` stills are `.dng` under ProRes but `.braw`
-under BRAW. Irrelevant to this module now — the `mtime` signal doesn't
-care about extension — kept here as a fact the next filename-dependent
-feature (e.g. downloading a confirmed still once a human has read its name
-off the card) will need again.
+under BRAW. Irrelevant to confirmation (the `mtime` signal doesn't care
+about extension) but directly relevant to `guess_new_still_path()`, which
+defaults to trying both extensions per candidate since it has no cheap way
+to know the active codec on its own.
 """
 
 from __future__ import annotations
 
 import asyncio
 import time
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from .session import RestCameraSession
 
 STILLS_DIR_NAME = "Stills"
+STILL_EXTENSIONS = (".dng", ".braw")
 
 
 def resolve_mount_path(mount_names: tuple[str, ...], *, volume: str | None) -> str:
@@ -172,9 +188,11 @@ async def wait_for_new_still(
     `timeout_s` elapses.
 
     This is the real per-operation confirmation design principle 3 asks
-    for — the Stills directory's own filesystem-level change, not a
-    filename guess (see module docstring for why guessing was retired)
-    and not the coarse `0x09/0x02` BLE write-margin lead
+    for — the Stills directory's own filesystem-level change, never a
+    filename guess (see module docstring for why filename-based
+    *confirmation* was retired — `guess_new_still_path()` exists for an
+    opt-in, purely informational name lookup, and never feeds back into
+    this function) and not the coarse `0x09/0x02` BLE write-margin lead
     (`docs/ble/photo_capture.md` §5.3), which moves roughly once per three
     photos, not once per photo. Call `stills_marker()` first, before
     triggering the BLE capture, to get `baseline_marker`.
@@ -187,3 +205,64 @@ async def wait_for_new_still(
         if time.monotonic() >= deadline:
             return False
         await asyncio.sleep(poll_interval_s)
+
+
+def _reel_from_mount_path(mount_path: str) -> str:
+    """The reel identifier a mount path's own name starts with — e.g.
+    `/mounts/A001-sd1/` -> `"A001"`. Relies on the one pattern confirmed on
+    real hardware, `"<reel>-<slot label>"` (`docs/rest/transport.md`'s "The
+    clip-path mapping"), already leaned on by `resolve_mount_path()`'s own
+    volume-prefix narrowing — this is the same assumption, not a new one."""
+    mount_name = mount_path.removeprefix("/mounts/").rstrip("/")
+    return mount_name.split("-", 1)[0]
+
+
+async def guess_new_still_path(
+    session: RestCameraSession,
+    mount_path: str,
+    *,
+    around: datetime,
+    index_candidates: Iterable[int] = range(1, 11),
+    minute_offsets: tuple[int, ...] = (0, 1, -1),
+    extensions: tuple[str, ...] = STILL_EXTENSIONS,
+) -> str | None:
+    """Best-effort reconstruction of a just-confirmed still's exact
+    filename — opt-in, informational only, and never a substitute for
+    `wait_for_new_still()`'s own confirmation (see module docstring).
+
+    Real stills follow `<reel>_<MMDDHHMM>_S<NNN><ext>`, where the reel is
+    already known (derived from `mount_path`'s own name — the camera's own
+    reported mount, not guessed) and the timestamp lands on the same
+    minute the trigger was sent (real evidence: a trigger logged at
+    `11:26:24` produced a still stamped exactly `08041126`). Only the
+    counter `<NNN>` is genuinely unknowable without a directory listing
+    (Stills always `500`s — module docstring), so this probes every
+    `(minute offset, index, extension)` combination in
+    `index_candidates` × `minute_offsets` × `extensions`, in that nesting
+    order (most-likely timestamp first), via `session.path_exists()`, and
+    returns the first real match.
+
+    `index_candidates` defaults to a narrow `range(1, 11)` deliberately —
+    this function has no way to know how many stills already exist on the
+    card (the same limitation that retired filename-based *confirmation*),
+    so an unbounded search would be both slow (one HTTP request per
+    combination) and likely to still come back empty on a heavily-used
+    card. Callers who have an actual hint (e.g. a previously confirmed
+    index) should pass a narrow range built around it, such as
+    `range(hint - 2, hint + 3)`, for a fast, well-targeted probe instead of
+    this default shot in the dark.
+
+    Returns `None` if nothing in the search space matches — this is not
+    evidence the capture failed (`wait_for_new_still()` already settled
+    that); it only means this function's guess was wrong or the true
+    index fell outside `index_candidates`.
+    """
+    reel = _reel_from_mount_path(mount_path)
+    for offset in minute_offsets:
+        stamp = (around + timedelta(minutes=offset)).strftime("%m%d%H%M")
+        for index in index_candidates:
+            for ext in extensions:
+                path = f"{mount_path}{STILLS_DIR_NAME}/{reel}_{stamp}_S{index:03d}{ext}"
+                if await session.path_exists(path):
+                    return path
+    return None

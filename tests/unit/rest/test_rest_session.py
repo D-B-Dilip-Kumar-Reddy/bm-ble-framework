@@ -143,12 +143,15 @@ class FakeRestClient:
         *,
         errors: dict[str, Exception] | None = None,
         put_responses: dict[str, object] | None = None,
+        exists_responses: dict[str, bool] | None = None,
     ):
         self.responses = responses
         self.errors = errors or {}
         self.put_responses = put_responses or {}
+        self.exists_responses = exists_responses or {}
         self.calls: list[str] = []
         self.put_calls: list[tuple[str, object]] = []
+        self.exists_calls: list[str] = []
         self.api_prefixed_calls: dict[str, bool] = {}
 
     async def get(self, path: str, *, api_prefixed: bool = True):
@@ -163,6 +166,13 @@ class FakeRestClient:
         if path in self.errors:
             raise self.errors[path]
         return self.put_responses.get(path)
+
+    async def exists(self, path: str, *, api_prefixed: bool = True) -> bool:
+        self.exists_calls.append(path)
+        self.api_prefixed_calls[path] = api_prefixed
+        if path in self.errors:
+            raise self.errors[path]
+        return self.exists_responses.get(path, False)
 
 
 def make_session(
@@ -529,6 +539,29 @@ class TestListMount:
         session = make_session(make_profile(), client=client)
 
         assert await session.list_mount("/mounts/A001-sd1/") == ()
+
+
+class TestPathExists:
+    """Reintroduced alongside RestClient.exists() for rest/media.py's
+    guess_new_still_path() — an opt-in, best-effort filename lookup, never
+    part of wait_for_new_still()'s actual confirmation."""
+
+    @pytest.mark.asyncio
+    async def test_delegates_to_client_exists(self):
+        client = FakeRestClient(
+            {}, exists_responses={"/mounts/A001-sd1/Stills/A001_0001_S001.dng": True}
+        )
+        session = make_session(make_profile(), client=client)
+
+        assert await session.path_exists("/mounts/A001-sd1/Stills/A001_0001_S001.dng") is True
+        assert await session.path_exists("/mounts/A001-sd1/Stills/A001_0001_S999.dng") is False
+        assert client.exists_calls == [
+            "/mounts/A001-sd1/Stills/A001_0001_S001.dng",
+            "/mounts/A001-sd1/Stills/A001_0001_S999.dng",
+        ]
+        # /mounts/... is outside /control/api/v1 — see TestListMount.test_returns_raw_entries
+        assert client.api_prefixed_calls["/mounts/A001-sd1/Stills/A001_0001_S001.dng"] is False
+        assert client.api_prefixed_calls["/mounts/A001-sd1/Stills/A001_0001_S999.dng"] is False
 
 
 class TestNotConnected:

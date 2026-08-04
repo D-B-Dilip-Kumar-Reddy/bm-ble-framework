@@ -1,19 +1,21 @@
 """Unit tests for :mod:`bmd_camera.rest.media`.
 
-No real network — `resolve_active_mount`/`stills_marker`/`wait_for_new_still`
-take a `RestCameraSession`-like object exposing only the methods they
-actually call (`storage_state`, `mount_names`, `list_mount`), faked
-directly here rather than reusing
+No real network — `resolve_active_mount`/`stills_marker`/`wait_for_new_still`/
+`guess_new_still_path` take a `RestCameraSession`-like object exposing only
+the methods they actually call (`storage_state`, `mount_names`,
+`list_mount`, `path_exists`), faked directly here rather than reusing
 `tests/unit/rest/test_rest_session.py`'s lower-level `FakeRestClient`.
 """
 
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 
 import pytest
 
 from bmd_camera.rest.media import (
+    guess_new_still_path,
     resolve_active_mount,
     resolve_mount_path,
     stills_marker,
@@ -54,10 +56,15 @@ class FakeMediaSession:
         self._storage = storage
         self._mounts = mounts
         self.list_mount_calls: list[str] = []
+        self.path_exists_calls: list[str] = []
         self._mount_entries: dict[str, tuple[dict, ...]] = {}
+        self._existing_paths: set[str] = set()
 
     def set_mount_entries(self, mount_path: str, entries: tuple[dict, ...]) -> None:
         self._mount_entries[mount_path] = entries
+
+    def set_existing(self, *paths: str) -> None:
+        self._existing_paths = set(paths)
 
     async def storage_state(self) -> StorageState:
         return self._storage
@@ -68,6 +75,10 @@ class FakeMediaSession:
     async def list_mount(self, path: str) -> tuple[dict, ...]:
         self.list_mount_calls.append(path)
         return self._mount_entries.get(path, ())
+
+    async def path_exists(self, path: str) -> bool:
+        self.path_exists_calls.append(path)
+        return path in self._existing_paths
 
 
 def _storage_with_active(volume: str | None) -> StorageState:
@@ -211,3 +222,96 @@ class TestWaitForNewStill:
         )
 
         assert result is True
+
+
+class TestGuessNewStillPath:
+    """Opt-in, best-effort filename lookup — never part of
+    wait_for_new_still()'s actual confirmation. Real evidence
+    (docs/ble/photo_capture.md §11): a trigger sent at 11:26:24 produced
+    A001_08041126_S003.dng — the reel from the mount name, the timestamp
+    floored to the minute, an index with no knowable baseline."""
+
+    @pytest.mark.asyncio
+    async def test_finds_exact_match_at_zero_minute_offset(self):
+        session = FakeMediaSession(storage=_storage_with_active("A001"), mounts=("A001-sd1",))
+        session.set_existing("/mounts/A001-sd1/Stills/A001_08041126_S003.dng")
+
+        result = await guess_new_still_path(
+            session, "/mounts/A001-sd1/", around=datetime(2026, 8, 4, 11, 26, 24)
+        )
+
+        assert result == "/mounts/A001-sd1/Stills/A001_08041126_S003.dng"
+
+    @pytest.mark.asyncio
+    async def test_returns_none_when_nothing_matches(self):
+        session = FakeMediaSession(storage=_storage_with_active("A001"), mounts=("A001-sd1",))
+
+        result = await guess_new_still_path(
+            session, "/mounts/A001-sd1/", around=datetime(2026, 8, 4, 11, 26, 24)
+        )
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_finds_match_one_minute_after_trigger(self):
+        """Absorbs a capture landing just past a minute boundary."""
+        session = FakeMediaSession(storage=_storage_with_active("A001"), mounts=("A001-sd1",))
+        session.set_existing("/mounts/A001-sd1/Stills/A001_08041127_S004.dng")
+
+        result = await guess_new_still_path(
+            session, "/mounts/A001-sd1/", around=datetime(2026, 8, 4, 11, 26, 59)
+        )
+
+        assert result == "/mounts/A001-sd1/Stills/A001_08041127_S004.dng"
+
+    @pytest.mark.asyncio
+    async def test_finds_braw_extension_too(self):
+        """docs/ble/photo_capture.md §8.4: POCKET_6K_PRO v8.6 stills are
+        .braw under BRAW, not .dng."""
+        session = FakeMediaSession(storage=_storage_with_active("A001"), mounts=("A001-sd1",))
+        session.set_existing("/mounts/A001-sd1/Stills/A001_08041126_S003.braw")
+
+        result = await guess_new_still_path(
+            session, "/mounts/A001-sd1/", around=datetime(2026, 8, 4, 11, 26, 24)
+        )
+
+        assert result == "/mounts/A001-sd1/Stills/A001_08041126_S003.braw"
+
+    @pytest.mark.asyncio
+    async def test_respects_custom_index_candidates(self):
+        """A caller with a real hint (e.g. a previously confirmed index)
+        should pass a narrow range around it instead of the default
+        shot-in-the-dark range(1, 11)."""
+        session = FakeMediaSession(storage=_storage_with_active("A001"), mounts=("A001-sd1",))
+        session.set_existing("/mounts/A001-sd1/Stills/A001_08041126_S051.dng")
+
+        result = await guess_new_still_path(
+            session,
+            "/mounts/A001-sd1/",
+            around=datetime(2026, 8, 4, 11, 26, 24),
+            index_candidates=range(49, 54),
+        )
+
+        assert result == "/mounts/A001-sd1/Stills/A001_08041126_S051.dng"
+
+    @pytest.mark.asyncio
+    async def test_default_index_candidates_do_not_reach_index_outside_range(self):
+        session = FakeMediaSession(storage=_storage_with_active("A001"), mounts=("A001-sd1",))
+        session.set_existing("/mounts/A001-sd1/Stills/A001_08041126_S051.dng")
+
+        result = await guess_new_still_path(
+            session, "/mounts/A001-sd1/", around=datetime(2026, 8, 4, 11, 26, 24)
+        )
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_derives_reel_from_mount_path(self):
+        session = FakeMediaSession(storage=_storage_with_active("B002"), mounts=("B002-sd2",))
+        session.set_existing("/mounts/B002-sd2/Stills/B002_08041126_S001.dng")
+
+        result = await guess_new_still_path(
+            session, "/mounts/B002-sd2/", around=datetime(2026, 8, 4, 11, 26, 24)
+        )
+
+        assert result == "/mounts/B002-sd2/Stills/B002_08041126_S001.dng"

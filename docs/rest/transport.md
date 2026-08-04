@@ -706,15 +706,21 @@ real socket. Every log line is prefixed `[<host>]`, the REST sibling of CLAUDE.m
 **Two URL namespaces on one host.** `/control/api/v1/...` (`API_BASE`) is not the whole
 HTTP surface — `/mounts/...` is the Web Media Manager, a separate namespace at the host
 root, which this doc's own mounts walk (`walk_mounts()`, above) already builds requests
-for without `API_BASE`. `RestClient.get()` takes `api_prefixed: bool = True` for exactly
-this reason; `RestCameraSession.list_mount()`/`mount_names()` pass `api_prefixed=False`.
-This was a real defect on first real-hardware use (`docs/rest/session.md`'s
-`list_mount()`/`mount_names()` section) — `RestClient` originally prepended `API_BASE`
-unconditionally, so every `/mounts/...` call 404'd against a path that was never real.
-(`RestClient` briefly also had an `exists()` method, added for a filename-probing
-photo-confirmation design that a second real-hardware defect the same day retired — see
-`docs/rest/session.md` and `docs/ble/photo_capture.md` §11; `exists()` was removed once
-the redesign left it with no caller.)
+for without `API_BASE`. `RestClient.get()`/`exists()` take `api_prefixed: bool = True` for
+exactly this reason; `RestCameraSession.list_mount()`/`mount_names()`/`path_exists()` pass
+`api_prefixed=False`. This was a real defect on first real-hardware use
+(`docs/rest/session.md`'s "`list_mount(path)`" section) — `RestClient` originally
+prepended `API_BASE` unconditionally, so every `/mounts/...` call 404'd against a path
+that was never real.
+
+`RestClient.exists()` has had a churny history worth recording plainly: added for an
+original filename-probing photo-confirmation design, removed once a second real-hardware
+defect the same day retired that design in favor of a `Stills`-directory-`mtime` signal
+that needs no filenames, then reintroduced again once the redesigned mechanism worked on
+hardware and a follow-up request asked for the captured still's name — this time as a
+deliberately opt-in, informational-only lookup (`rest/media.py`'s
+`guess_new_still_path()`) that never gates the actual confirmation. See
+`docs/rest/session.md` and `docs/ble/photo_capture.md` §11 for the full sequence.
 
 ### `RestEventRouter` (`src/bmd_camera/rest/events.py`)
 
