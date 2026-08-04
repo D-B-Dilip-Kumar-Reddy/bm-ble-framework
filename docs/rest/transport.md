@@ -674,6 +674,16 @@ iris, zoom, focus and autofocus; per-channel audio input, level, phantom power, 
 low-cut filter; the full DaVinci-style colour corrector; and playback with a real
 timeline. All of it unverified until swept.
 
+**Playback and gallery (Phase 7, docs/rest/session.md) is built** —
+`RestCameraSession.set_timeline()`/`enter_playback()`/`exit_playback()`/`play()`/`pause()`/
+`stop()`/`shuttle()`/`seek()` — but sits on a thinner evidentiary base than any earlier
+phase. `/transports/0` and `/transports/0/playback` both have a real same-value-`PUT`-`204`
+from this doc's own write probe (above); `/timelines/0` and `/timelines/0/add` are in the
+`NEVER_WRITE` list and have never had their write side exercised at all until Phase 7's own
+code runs — the same position `/transports/0/record` was in before Phase 4. See
+docs/rest/session.md's Phase 7 section for which parts of the request/response shapes are
+sweep-confirmed and which are this migration's own plan-derived hypotheses.
+
 ---
 
 ## Library surface (Phase 2)

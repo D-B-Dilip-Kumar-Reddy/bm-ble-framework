@@ -27,7 +27,11 @@ from bmd_camera.rest.events import RestEventRouter
 from bmd_camera.rest.exceptions import BMDRestError
 from bmd_camera.rest.session import (
     FORMAT_PROPERTY,
+    PLAYBACK_PROPERTY,
     RECORD_PROPERTY,
+    TIMELINE_ADD_PATH,
+    TIMELINE_PATH,
+    TRANSPORT_MODE_PROPERTY,
     Clip,
     Format,
     RestCameraSession,
@@ -131,6 +135,33 @@ def make_profile_with_record_confirmed() -> CameraProfile:
     return make_profile(rest_raw=rest_raw)
 
 
+def make_playback_profile() -> CameraProfile:
+    """A profile whose rest/ file confirms TRANSPORT_MODE_PROPERTY's and
+    PLAYBACK_PROPERTY's PUT side (both same-value-probed real,
+    docs/rest/transport.md), plus TIMELINE_PATH's GET side only — DELETE/POST
+    are NEVER_WRITE, so only GET can ever be profile-confirmed for it, the
+    same shape as RECORD_PROPERTY (make_profile_with_record_confirmed)."""
+    rest_raw = {
+        "_meta": {"model_key": MODEL_KEY, "firmware": FIRMWARE, "status": "UNVERIFIED"},
+        "endpoints": {
+            TRANSPORT_MODE_PROPERTY: {
+                "status": 200,
+                "supported": True,
+                "put_status": 204,
+                "put_supported": True,
+            },
+            PLAYBACK_PROPERTY: {
+                "status": 200,
+                "supported": True,
+                "put_status": 204,
+                "put_supported": True,
+            },
+            TIMELINE_PATH: {"status": 200, "supported": True},
+        },
+    }
+    return make_profile(rest_raw=rest_raw)
+
+
 class FakeRestClient:
     """Minimal stand-in for RestClient: `.get(path)` returns a canned body,
     or raises a canned exception (for `errors`) — e.g. simulating a real
@@ -152,6 +183,8 @@ class FakeRestClient:
         self.calls: list[str] = []
         self.put_calls: list[tuple[str, object]] = []
         self.exists_calls: list[str] = []
+        self.delete_calls: list[str] = []
+        self.post_calls: list[tuple[str, object]] = []
         self.api_prefixed_calls: dict[str, bool] = {}
 
     async def get(self, path: str, *, api_prefixed: bool = True):
@@ -166,6 +199,18 @@ class FakeRestClient:
         if path in self.errors:
             raise self.errors[path]
         return self.put_responses.get(path)
+
+    async def delete(self, path: str):
+        self.delete_calls.append(path)
+        if path in self.errors:
+            raise self.errors[path]
+        return None
+
+    async def post(self, path: str, body: object):
+        self.post_calls.append((path, body))
+        if path in self.errors:
+            raise self.errors[path]
+        return None
 
     async def exists(self, path: str, *, api_prefixed: bool = True) -> bool:
         self.exists_calls.append(path)
@@ -1236,8 +1281,10 @@ class TestConnectionLifecycle:
         dual-check primary channel, but nothing ever subscribed the router
         to it — every one of 544 real writes in that run burned the full
         verify_timeout_s before falling through to the secondary GET
-        readback. __aenter__ must subscribe to both properties it later
-        arms, not just RECORD_PROPERTY."""
+        readback. __aenter__ must subscribe to every property a write
+        method later arms, not just RECORD_PROPERTY — extended for
+        TRANSPORT_MODE_PROPERTY/PLAYBACK_PROPERTY (Phase 7) on the same
+        principle, ahead of that phase's own first real-hardware run."""
         fake_session = FakeAiohttpSession()
         session = RestCameraSession("cam.local", MODEL_KEY, FIRMWARE, session=fake_session)
 
@@ -1254,6 +1301,16 @@ class TestConnectionLifecycle:
                 "type": "request",
                 "id": 0,
                 "data": {"action": "subscribe", "properties": [FORMAT_PROPERTY]},
+            },
+            {
+                "type": "request",
+                "id": 0,
+                "data": {"action": "subscribe", "properties": [TRANSPORT_MODE_PROPERTY]},
+            },
+            {
+                "type": "request",
+                "id": 0,
+                "data": {"action": "subscribe", "properties": [PLAYBACK_PROPERTY]},
             },
         ]
 
@@ -1330,3 +1387,228 @@ class TestConnectionLifecycle:
             )
             await asyncio.sleep(0.05)
             assert session.is_recording is True
+
+
+class TestEnterExitPlayback:
+    """enter_playback()/exit_playback() -> _set_transport_mode(), the exact
+    dual-check shape as _set_recording_state — see that class's own tests
+    for the pattern this mirrors."""
+
+    @pytest.mark.asyncio
+    async def test_raises_bmd_unsupported_when_endpoint_not_confirmed(self):
+        session = make_session(make_profile(), client=FakeRestClient({}))  # no rest_raw
+
+        with pytest.raises(BMDUnsupportedError, match="transports/0"):
+            await session.enter_playback()
+
+    @pytest.mark.asyncio
+    async def test_enter_playback_confirmed_by_ws_event_primary(self):
+        client = FakeRestClient({})
+        session = make_session(make_playback_profile(), client=client)
+
+        async def deliver_event():
+            await asyncio.sleep(0.01)
+            session._router.handle_event(
+                {
+                    "type": "event",
+                    "data": {
+                        "action": "propertyValueChanged",
+                        "property": TRANSPORT_MODE_PROPERTY,
+                        "value": {"mode": "Output"},
+                    },
+                }
+            )
+
+        asyncio.create_task(deliver_event())
+        await session.enter_playback()
+
+        assert client.put_calls == [(TRANSPORT_MODE_PROPERTY, {"mode": "Output"})]
+        assert TRANSPORT_MODE_PROPERTY not in client.calls  # no GET readback needed
+
+    @pytest.mark.asyncio
+    async def test_exit_playback_confirmed_by_get_readback_secondary(self):
+        client = FakeRestClient({TRANSPORT_MODE_PROPERTY: {"mode": "InputPreview"}})
+        session = make_session(make_playback_profile(), client=client)
+        session.verify_timeout_s = 0.05
+
+        await session.exit_playback()
+
+        assert client.put_calls == [(TRANSPORT_MODE_PROPERTY, {"mode": "InputPreview"})]
+        assert TRANSPORT_MODE_PROPERTY in client.calls
+
+    @pytest.mark.asyncio
+    async def test_raises_verification_error_when_neither_channel_confirms(self):
+        client = FakeRestClient({TRANSPORT_MODE_PROPERTY: {"mode": "InputRecord"}})
+        session = make_session(make_playback_profile(), client=client)
+        session.verify_timeout_s = 0.05
+
+        with pytest.raises(BMDVerificationError, match="Output"):
+            await session.enter_playback()
+
+
+class TestShuttleAndSeek:
+    """shuttle()/seek() -> _put_playback(), the generic structural dual-check
+    (_contains) rather than a named-field parser — see PLAYBACK_PROPERTY's
+    own docstring for why."""
+
+    @pytest.mark.asyncio
+    async def test_raises_bmd_unsupported_when_endpoint_not_confirmed(self):
+        session = make_session(make_profile(), client=FakeRestClient({}))
+
+        with pytest.raises(BMDUnsupportedError, match="transports/0/playback"):
+            await session.shuttle(1.0)
+
+    @pytest.mark.asyncio
+    async def test_shuttle_confirmed_by_ws_event_primary(self):
+        client = FakeRestClient({})
+        session = make_session(make_playback_profile(), client=client)
+
+        async def deliver_event():
+            await asyncio.sleep(0.01)
+            session._router.handle_event(
+                {
+                    "type": "event",
+                    "data": {
+                        "action": "propertyValueChanged",
+                        "property": PLAYBACK_PROPERTY,
+                        "value": {"speed": 2.0},
+                    },
+                }
+            )
+
+        asyncio.create_task(deliver_event())
+        await session.shuttle(2.0)
+
+        assert client.put_calls == [(PLAYBACK_PROPERTY, {"speed": 2.0})]
+        assert PLAYBACK_PROPERTY not in client.calls
+
+    @pytest.mark.asyncio
+    async def test_shuttle_backward_confirmed_by_get_readback_secondary(self):
+        client = FakeRestClient({PLAYBACK_PROPERTY: {"speed": -1.0}})
+        session = make_session(make_playback_profile(), client=client)
+        session.verify_timeout_s = 0.05
+
+        await session.shuttle(-1.0)
+
+        assert client.put_calls == [(PLAYBACK_PROPERTY, {"speed": -1.0})]
+
+    @pytest.mark.asyncio
+    async def test_seek_sends_timecode_and_clip(self):
+        client = FakeRestClient({PLAYBACK_PROPERTY: {"timecode": 12345, "clip": 0}})
+        session = make_session(make_playback_profile(), client=client)
+        session.verify_timeout_s = 0.05
+
+        await session.seek(12345)
+
+        assert client.put_calls == [(PLAYBACK_PROPERTY, {"timecode": 12345, "clip": 0})]
+
+    @pytest.mark.asyncio
+    async def test_seek_respects_explicit_clip(self):
+        client = FakeRestClient({PLAYBACK_PROPERTY: {"timecode": 500, "clip": 2}})
+        session = make_session(make_playback_profile(), client=client)
+        session.verify_timeout_s = 0.05
+
+        await session.seek(500, clip=2)
+
+        assert client.put_calls == [(PLAYBACK_PROPERTY, {"timecode": 500, "clip": 2})]
+
+    @pytest.mark.asyncio
+    async def test_raises_verification_error_when_readback_missing_expected_fields(self):
+        client = FakeRestClient({PLAYBACK_PROPERTY: {"speed": 0.0}})  # doesn't match 2.0
+        session = make_session(make_playback_profile(), client=client)
+        session.verify_timeout_s = 0.05
+
+        with pytest.raises(BMDVerificationError, match="shuttle"):
+            await session.shuttle(2.0)
+
+
+class TestPlayPauseStop:
+    """play()/pause()/stop() are thin aliases over shuttle()/exit_playback()
+    — see their own docstrings for why they route through the
+    write-confirmed /transports/0/playback and /transports/0 endpoints
+    instead of the unswept dedicated /transports/0/play, /transports/0/stop
+    triggers."""
+
+    @pytest.mark.asyncio
+    async def test_play_sends_speed_one(self):
+        client = FakeRestClient({PLAYBACK_PROPERTY: {"speed": 1.0}})
+        session = make_session(make_playback_profile(), client=client)
+        session.verify_timeout_s = 0.05
+
+        await session.play()
+
+        assert client.put_calls == [(PLAYBACK_PROPERTY, {"speed": 1.0})]
+
+    @pytest.mark.asyncio
+    async def test_pause_sends_speed_zero(self):
+        client = FakeRestClient({PLAYBACK_PROPERTY: {"speed": 0.0}})
+        session = make_session(make_playback_profile(), client=client)
+        session.verify_timeout_s = 0.05
+
+        await session.pause()
+
+        assert client.put_calls == [(PLAYBACK_PROPERTY, {"speed": 0.0})]
+
+    @pytest.mark.asyncio
+    async def test_stop_sets_transport_mode_to_input_preview(self):
+        client = FakeRestClient({TRANSPORT_MODE_PROPERTY: {"mode": "InputPreview"}})
+        session = make_session(make_playback_profile(), client=client)
+        session.verify_timeout_s = 0.05
+
+        await session.stop()
+
+        assert client.put_calls == [(TRANSPORT_MODE_PROPERTY, {"mode": "InputPreview"})]
+
+
+class TestSetTimeline:
+    @pytest.mark.asyncio
+    async def test_raises_bmd_unsupported_when_endpoint_not_confirmed(self):
+        session = make_session(make_profile(), client=FakeRestClient({}))
+
+        with pytest.raises(BMDUnsupportedError, match="timelines/0"):
+            await session.set_timeline([1, 2])
+
+    @pytest.mark.asyncio
+    async def test_clears_then_adds_each_clip_in_order(self):
+        client = FakeRestClient(
+            {TIMELINE_PATH: {"clips": [{"clipUniqueId": 1}, {"clipUniqueId": 2}]}}
+        )
+        session = make_session(make_playback_profile(), client=client)
+
+        await session.set_timeline([1, 2])
+
+        assert client.delete_calls == [TIMELINE_PATH]
+        assert client.post_calls == [
+            (TIMELINE_ADD_PATH, {"clipUniqueId": 1}),
+            (TIMELINE_ADD_PATH, {"clipUniqueId": 2}),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_polls_until_readback_matches(self):
+        client = FakeRestClient({})
+        session = make_session(make_playback_profile(), client=client)
+        session.verify_timeout_s = 1.0
+
+        bodies = iter(
+            [
+                {"clips": []},
+                {"clips": [{"clipUniqueId": 7}]},
+            ]
+        )
+
+        async def get(path, *, api_prefixed: bool = True):
+            client.calls.append(path)
+            return next(bodies)
+
+        client.get = get
+
+        await session.set_timeline([7], poll_interval_s=0.01)
+
+    @pytest.mark.asyncio
+    async def test_raises_verification_error_on_timeout(self):
+        client = FakeRestClient({TIMELINE_PATH: {"clips": []}})
+        session = make_session(make_playback_profile(), client=client)
+        session.verify_timeout_s = 0.1
+
+        with pytest.raises(BMDVerificationError, match="set_timeline"):
+            await session.set_timeline([7])

@@ -174,7 +174,13 @@ src/bmd_camera/
                               # among several camera-offered pairings — see
                               # tools/rest/sweep_camera_format.py). ProRes/4K DCI
                               # real-hardware-confirmed on both cameras — the exact
-                              # combination BLE's write path can't reach. See docs/rest/session.md
+                              # combination BLE's write path can't reach. Playback/gallery
+                              # writes (Phase 7) — set_timeline, enter_playback/
+                              # exit_playback, play/pause/stop, shuttle/seek — built,
+                              # dual-check verified, not yet real-hardware-confirmed; see
+                              # docs/rest/session.md for exactly which endpoints/field
+                              # names are sweep-confirmed vs. this migration's own
+                              # plan-derived hypotheses
     mapping.py                 # Codec name derivation between the BLE profile's vocabulary
                               # and REST's own spelling — confirmed strings always win
                               # (design principle 1); this is a fallback seed only
@@ -249,6 +255,11 @@ examples/
                             # REST confirmation (rest/media.py); the first script in this
                             # codebase to hold a BLE and a REST session open concurrently
                             # against the same camera. See docs/ble/photo_capture.md §11
+  rest_playback.py          # Phase 7 — set_timeline + enter_playback/play/pause/seek/
+                            # shuttle/stop/exit_playback; entirely new capability BLE
+                            # never reached. Built, not yet real-hardware-confirmed —
+                            # verification is by eye (operator watches the camera
+                            # screen), see docs/rest/session.md and docs/rest/transport.md
   playback.py               # (planned)
 
 tests/

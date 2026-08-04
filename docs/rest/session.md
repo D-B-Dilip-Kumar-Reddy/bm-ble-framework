@@ -1,4 +1,4 @@
-# REST Session — State and Control Surface (Phases 3-6)
+# REST Session — State and Control Surface (Phases 3-7)
 
 **Status:** read verbs (Phase 3), `record_start`/`record_stop` (Phase 4), and
 `set_camera_format` (Phase 5) are all implemented and **real-hardware-confirmed** on both
@@ -44,6 +44,23 @@ increasing filenames (`..._S009.braw`, then `..._S010.braw`) instead of repeatin
 "`list_mount(path)` → `tuple[dict, ...]` / `mount_names()` → `tuple[str, ...]`" and
 "`path_exists(path)` → `bool` and `guess_new_still_path()`" below, and
 `docs/ble/photo_capture.md` §11, for the full evidentiary record.
+
+`set_timeline()`, `enter_playback()`/`exit_playback()`, `play()`/`pause()`/`stop()`, and
+`shuttle()`/`seek()` (Phase 7 — playback and gallery, entirely new capability BLE never
+reached) are implemented, unit-tested, and have a new `examples/rest_playback.py` — but
+**not yet run against real hardware**. Two of the four endpoints Phase 7 needs
+(`/transports/0` and `/transports/0/playback`) have a real same-value-`PUT`-confirmed
+`204` from the Phase 0 sweep (`docs/rest/transport.md`); the other two
+(`/timelines/0`/`/timelines/0/add`, needed by `set_timeline()`) were never even
+same-value-probed — `probe_endpoints.py`'s `NEVER_WRITE` list skips them entirely, the same
+position `/transports/0/record` was in before Phase 4 proved it out. `play()`/`stop()` are
+deliberately built as aliases (`shuttle(1.0)`/`exit_playback()`) rather than touching the
+dedicated `/transports/0/play`/`/transports/0/stop` triggers, which have the same
+zero-write-evidence problem as the timeline endpoints — see "`play()`/`pause()`/`stop()`"
+below for the full reasoning. `shuttle()`/`seek()`'s request-body field names
+(`"speed"`, `"timecode"`/`"clip"`) are this migration's own plan-derived hypotheses, not
+independently captured samples the way `/system/format`'s or `/transports/0/record`'s were
+— see "`shuttle(speed)`/`seek(timecode)`" below.
 
 ## Overview
 
@@ -508,6 +525,103 @@ primary WS-event channel is genuinely winning the race now, not just theoretical
 
 ---
 
+## Write verbs (Phase 7 — playback and gallery)
+
+Entirely new capability BLE never reached (`docs/rest/transport.md`'s "New capability
+REST brings"). Built to the same dual-check discipline as every other write in this
+session, but with a materially weaker evidentiary base than Phases 4/5 had going in — see
+each method's own docstring for exactly what is and isn't confirmed. **Not yet run against
+real hardware.**
+
+### `set_timeline(clip_unique_ids)`
+
+`DELETE /timelines/0` (clears whatever timeline exists) then one `POST /timelines/0/add`
+per id, in order — `Clip.clip_unique_id` values from `clips()` (Phase 3). Required before
+`enter_playback()`/`play()` can show anything.
+
+**The one Phase 7 write with zero prior sweep evidence of any kind.** `/timelines/0`
+(DELETE) and `/timelines/0/add` (POST) are both in `tools/rest/probe_endpoints.py`'s
+`NEVER_WRITE` list — a delete or add is destructive regardless of value, so even the
+idempotent same-value-probe method that confirmed `/transports/0`/`/transports/0/playback`
+writable can't touch them. This is the same position `/transports/0/record` was in before
+Phase 4's own writes were the first real evidence either way. The `POST` body
+(`{"clipUniqueId": id}`) reuses the field name `/clips/list` already confirmed real
+(`docs/rest/transport.md`), on the hypothesis the two endpoints share a vocabulary — not an
+independently captured `/timelines/0/add` sample.
+
+No WS event shape is known for this resource, so verification here isn't the usual
+primary/secondary dual-check — it's a poll: `GET /timelines/0` repeatedly (default every
+0.5s, `poll_interval_s`) until `_parse_timeline_clip_ids()`'s reading matches
+`clip_unique_ids` exactly, or `verify_timeout_s` elapses (`BMDVerificationError`). The
+parser itself is a guess two levels deep: it looks for a `"clips"` key holding either a
+flat id list or `/clips/list`'s own `{"clipUniqueId": ...}` dict-list shape — if the real
+`GET /timelines/0` body looks like neither, this will reliably time out and raise rather
+than falsely confirm, which is the correct failure mode for an unconfirmed guess.
+
+### `enter_playback()` / `exit_playback()`
+
+`PUT /transports/0 {"mode": "Output"}` / `{"mode": "InputPreview"}`, via the shared
+`_set_transport_mode()` helper — the same dual-check shape as `_set_recording_state()`: a
+WS `propertyValueChanged` event on `/transports/0` primary, a `GET` readback secondary,
+parsed by `_transport_mode()`.
+
+This is Phase 7's best-evidenced write. `/transports/0`'s `PUT` returned a real `204` on a
+same-value probe on both cameras (`docs/rest/transport.md`), and the reshaping table for
+that probe — "Echoes `InputPreview`/`Output`; skips when the camera reports `InputRecord`"
+— is itself confirmation that a real `GET /transports/0` body looks like
+`{"mode": "InputPreview"|"InputRecord"|"Output"}`, not a shape invented for this session.
+`"InputRecord"` is read-only here (set through `/transports/0/record` instead); this method
+doesn't special-case that itself, since the camera's own rejection of an invalid mode is
+already the actual guard — it just surfaces as a failed verification rather than a
+`ValueError`.
+
+### `play()` / `pause()` / `stop()`
+
+Thin aliases: `play()` is `shuttle(1.0)`, `pause()` is `shuttle(0.0)`, `stop()` is
+`exit_playback()` — none of them touch the dedicated `/transports/0/play`/
+`/transports/0/stop` trigger endpoints the migration plan originally named for them.
+
+**Why routed through other endpoints instead of the plan's own names.** Both
+`/transports/0/play` and `/transports/0/stop` are real (confirmed present by the Phase 0
+read sweep) but sit in `probe_endpoints.py`'s `NEVER_WRITE` list — meaning, unlike
+`/transports/0` and `/transports/0/playback`, **neither has ever had its `PUT` exercised at
+all**, not even a same-value probe. Their request body (a void trigger needs *some* body —
+`{}`? nothing?) and what a successful call would even look like on readback are both
+unknown. `/transports/0/playback`'s `PUT` is confirmed writable (`204`, same-value probe),
+so `play()`/`pause()` route through it instead — trading a small amount of fidelity to the
+plan's original API shape for a write path with real, if partial, evidence behind it.
+`stop()` uses `exit_playback()` for the identical reason, since `_set_transport_mode`'s body
+is sweep-confirmed real. This is a considered scope reduction, not a silent one — if a real
+hardware run shows `/transports/0/play`/`/transports/0/stop` behave differently from
+"speed 1.0" / "leave playback mode," these aliases will need revisiting.
+
+### `shuttle(speed)` / `seek(timecode, clip=0)`
+
+Both `PUT /transports/0/playback`, dual-check verified via the generic `_put_playback()`
+helper: a WS `propertyValueChanged` event on `/transports/0/playback` primary, a `GET`
+readback secondary, checked with `_contains()` — a structural "does the reported body
+contain every key/value pair I just sent" match, not a named-field parser like
+`_recording_flag`/`_format_matches`.
+
+`shuttle(speed)` sends `{"speed": speed}` — positive shuttles forward, negative backward,
+magnitude sets the rate (the migration plan's own hypothesis: `2.0`/`-1.0` for
+forward/backward, `0` for pause). `seek(timecode, clip=0)` sends
+`{"timecode": timecode, "clip": clip}`, reusing the exact field names `GET
+/transports/0/timecode` already confirmed real (`{"clip": 0, "timecode": 274153986}`,
+`docs/rest/transport.md`) rather than inventing a `"position"` field the plan never pinned
+down.
+
+**Why `_contains()` instead of a named parser.** Unlike `/system/format` or
+`/transports/0/record`, `docs/rest/transport.md` never captured a real sample of
+`/transports/0/playback`'s body — only that `GET` returns `200` and `PUT` returns `204` on
+a same-value probe. `"speed"`/`"timecode"`/`"clip"` are this migration's plan-derived
+hypotheses about the field names, not sniffed samples. `_contains()` doesn't pretend to
+know more than that: if the real field is spelled differently, the reported body simply
+won't contain the expected key/value pair, verification correctly fails, and
+`BMDVerificationError` is raised — never a false "confirmed."
+
+---
+
 ## Codec name mapping (`rest/mapping.py`)
 
 `RestCameraSession`'s write path (`set_camera_format`) takes profile *names* — the
@@ -585,6 +699,21 @@ Two further tests cover the `sensor_resolution` disambiguation parameter directl
 the requested pairing out of several ambiguous matches, and raises `BMDUnsupportedError`
 when the camera doesn't pair that exact value with the requested combination at all.
 
+Phase 7's writes (`TestEnterExitPlayback`, `TestShuttleAndSeek`, `TestPlayPauseStop`,
+`TestSetTimeline`) reuse the same fake-`RestClient`/deliver-an-event pattern, plus a new
+`make_playback_profile()` helper confirming `TRANSPORT_MODE_PROPERTY`'s and
+`PLAYBACK_PROPERTY`'s `put_supported`, and `TIMELINE_PATH`'s `supported` (GET-only, matching
+`make_profile_with_record_confirmed()`'s shape for a `NEVER_WRITE` endpoint).
+`FakeRestClient` gained `.delete()`/`.post()` for `set_timeline()`'s tests. Coverage
+includes: the capability-check `BMDUnsupportedError`s for all four write paths; both
+dual-check paths for `enter_playback`/`exit_playback`/`shuttle`/`seek`; that `seek()`
+defaults `clip` to `0` but respects an explicit override; that `play()`/`pause()`/`stop()`
+send exactly the bodies their docstrings claim (`{"speed": 1.0}`/`{"speed":
+0.0}`/`{"mode": "InputPreview"}`); `set_timeline()`'s delete-then-post-per-id sequencing,
+its poll-until-match behavior (a custom `client.get` returning a different body each call,
+the same technique `set_camera_format`'s own GET-readback tests use), and its
+`BMDVerificationError` on a poll that never matches within `verify_timeout_s`.
+
 `tests/unit/tools/rest/test_rest_sweep_camera_format.py` covers
 `tools/rest/sweep_camera_format.py` separately, since it's a standalone script rather than
 package code — `enumerate_combinations` against real `POCKET_6K_G2`/`POCKET_6K_PRO`
@@ -635,3 +764,8 @@ timestamp, rather than the first one found in ascending order.
 - **No caching.** Every read verb hits the camera fresh. A future phase may add a
   `CameraState`-style cached view if a real use case needs one; nothing here assumes it
   will.
+- **No dedicated `/transports/0/play`/`/transports/0/stop` support.** `play()`/`stop()`
+  are aliases (`shuttle(1.0)`/`exit_playback()`) rather than wrappers around these two
+  endpoints — see "`play()`/`pause()`/`stop()`" above for why. If a real hardware run shows
+  the dedicated triggers behave meaningfully differently, this is the first place to
+  revisit.

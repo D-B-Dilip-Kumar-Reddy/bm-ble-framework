@@ -7,9 +7,14 @@ as `ble/session.py`'s `CameraSession` composes `BMDCameraController` and
 `NotificationRouter` — see design principle 5's transport/protocol
 boundary, held here for REST.
 
-STATUS: read verbs, record start/stop (Phase 4), and format writes (Phase 5) —
-the REST dual-check design principle 3 has always specified: a WS
-`propertyValueChanged` event primary, a `GET` readback secondary.
+STATUS: read verbs, record start/stop (Phase 4), format writes (Phase 5), photo
+confirmation primitives (Phase 6), and playback/gallery writes (Phase 7) — the
+REST dual-check design principle 3 has always specified: a WS
+`propertyValueChanged` event primary, a `GET` readback secondary. Phase 7's
+`set_timeline()`/`play()`/`pause()`/`stop()`/`shuttle()`/`seek()` are built but
+not yet run against real hardware — see their own docstrings for exactly which
+parts are sweep-confirmed and which are this migration's own plan-derived
+hypotheses.
 
     async with RestCameraSession("172.27.97.141", "POCKET_6K_PRO", "v8.6") as session:
         fmt = await session.get_format()
@@ -19,6 +24,10 @@ the REST dual-check design principle 3 has always specified: a WS
         await session.record_start()
         await session.record_stop()
         await session.set_camera_format("BRAW", "5:1", "4K DCI", "23.98")
+        await session.set_timeline([c.clip_unique_id for c in clips[:1]])
+        await session.enter_playback()
+        await session.play()
+        await session.exit_playback()
 
 `is_recording` is the one piece of state this session tracks continuously
 rather than fetching on demand — notification-derived only, from
@@ -36,6 +45,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -62,6 +72,10 @@ logger = logging.getLogger(__name__)
 
 RECORD_PROPERTY = "/transports/0/record"
 FORMAT_PROPERTY = "/system/format"
+TRANSPORT_MODE_PROPERTY = "/transports/0"
+PLAYBACK_PROPERTY = "/transports/0/playback"
+TIMELINE_PATH = "/timelines/0"
+TIMELINE_ADD_PATH = "/timelines/0/add"
 
 
 def _websocket_url(base_url: str) -> str:
@@ -264,6 +278,52 @@ def _parse_clip(entry: dict) -> Clip:
     )
 
 
+def _transport_mode(value: Any) -> str | None:
+    """Extract `/transports/0`'s `{"mode": "InputPreview"|"InputRecord"|
+    "Output"}` shape — confirmed real by `tools/rest/probe_endpoints.py`'s
+    write catalog, which reshapes a `GET /transports/0` body by echoing
+    back exactly this field (`docs/rest/transport.md`'s reshaping table)."""
+    if isinstance(value, dict) and isinstance(value.get("mode"), str):
+        return value["mode"]
+    return None
+
+
+def _contains(value: Any, expected: dict[str, Any]) -> bool:
+    """Whether `value` (a WS event value or a `GET` readback body) is a
+    dict containing every key/value pair in `expected`. A generic
+    structural dual-check, used only for `/transports/0/playback` (Phase
+    7) — contrast `_recording_flag`/`_format_matches`, which parse named,
+    sweep-confirmed fields. `/transports/0/playback`'s own body has never
+    been independently captured on real hardware (docs/rest/session.md);
+    `expected`'s keys are this migration's plan-derived hypothesis, not a
+    confirmed sample. A field-name mismatch makes this correctly return
+    `False` — `shuttle()`/`seek()` then raise `BMDVerificationError` rather
+    than reporting a success this method cannot actually attest to."""
+    return isinstance(value, dict) and all(value.get(k) == v for k, v in expected.items())
+
+
+def _parse_timeline_clip_ids(body: Any) -> list[int]:
+    """Best-effort extraction of the clip ids `GET /timelines/0` reports.
+    Shape unconfirmed (`docs/rest/session.md` — `/timelines/0` is in
+    `tools/rest/probe_endpoints.py`'s `NEVER_WRITE` list, so only its `GET`
+    side has ever been swept, not what a populated timeline's body looks
+    like). Tries a flat id list under `"clips"` first, then falls back to
+    `/clips/list`'s own confirmed `{"clipUniqueId": ...}` dict-list
+    convention, on the hypothesis the two endpoints share a vocabulary."""
+    if not isinstance(body, dict):
+        return []
+    entries = body.get("clips")
+    if not isinstance(entries, list):
+        return []
+    ids: list[int] = []
+    for entry in entries:
+        if isinstance(entry, int):
+            ids.append(entry)
+        elif isinstance(entry, dict) and isinstance(entry.get("clipUniqueId"), int):
+            ids.append(entry["clipUniqueId"])
+    return ids
+
+
 # ── Session ──────────────────────────────────────────────────────────────────
 
 
@@ -358,6 +418,8 @@ class RestCameraSession:
             )
             await self._router.subscribe(RECORD_PROPERTY)
             await self._router.subscribe(FORMAT_PROPERTY)
+            await self._router.subscribe(TRANSPORT_MODE_PROPERTY)
+            await self._router.subscribe(PLAYBACK_PROPERTY)
             connected = True
         finally:
             if not connected:
@@ -822,3 +884,192 @@ class RestCameraSession:
                 "has no way to choose between them yet (pass sensor_resolution to disambiguate)"
             )
         return matches[0]
+
+    # ── Writes (Phase 7 — playback and gallery) ───────────────────────────
+
+    async def set_timeline(
+        self, clip_unique_ids: list[int], *, poll_interval_s: float = 0.5
+    ) -> None:
+        """Build the active timeline from `clip_unique_ids` (`Clip.clip_unique_id`,
+        from `clips()`, Phase 3) — `DELETE /timelines/0` clears whatever
+        timeline exists, then one `POST /timelines/0/add` per id, in order.
+        Required before `enter_playback()`/`play()` can show anything.
+
+        **Unswept — this method is the first real evidence either way.**
+        `/timelines/0` (DELETE) and `/timelines/0/add` (POST) are both in
+        `tools/rest/probe_endpoints.py`'s `NEVER_WRITE` list: a delete or
+        add is destructive regardless of value, so the idempotent
+        same-value probe that proved `/system/format`/`/transports/0`/
+        `/transports/0/playback` writable structurally cannot touch them
+        (design principle 6's REST sibling — the same position
+        `/transports/0/record` was in before Phase 4 proved it out). The
+        `POST` body shape (`{"clipUniqueId": id}`) reuses the field name
+        `/clips/list` already confirmed real (`docs/rest/transport.md`), on
+        the hypothesis the two endpoints share a vocabulary — not an
+        independently captured `/timelines/0/add` sample.
+
+        Verified by polling `GET /timelines/0` until its reported clip ids
+        match `clip_unique_ids` exactly, or `verify_timeout_s` elapses
+        (`BMDVerificationError`) — no WS event shape is known for this
+        resource, so unlike every other write in this session, there is no
+        primary/secondary dual-check here, only a readback poll (the same
+        shape `rest/media.py`'s `wait_for_new_still()` uses for a resource
+        with no known event channel either).
+        """
+        endpoint = self.profile.rest_endpoint(TIMELINE_PATH)
+        if endpoint is None or not endpoint.supported:
+            raise BMDUnsupportedError(
+                f"[{self.host}] {TIMELINE_PATH} is not confirmed present in the "
+                f"{self.profile.model_key} {self.profile.firmware} rest/ profile — run "
+                "tools/rest/probe_endpoints.py against this camera first."
+            )
+
+        await self._rest_client.delete(TIMELINE_PATH)
+        for clip_id in clip_unique_ids:
+            await self._rest_client.post(TIMELINE_ADD_PATH, {"clipUniqueId": clip_id})
+
+        deadline = time.monotonic() + self.verify_timeout_s
+        current_ids: list[int] = []
+        while True:
+            body = await self._rest_client.get(TIMELINE_PATH)
+            current_ids = _parse_timeline_clip_ids(body)
+            if current_ids == list(clip_unique_ids):
+                return
+            if time.monotonic() >= deadline:
+                raise BMDVerificationError(
+                    f"set_timeline({clip_unique_ids}): GET {TIMELINE_PATH} never reported "
+                    f"matching clip ids within {self.verify_timeout_s}s "
+                    f"(last read: {current_ids})"
+                )
+            await asyncio.sleep(poll_interval_s)
+
+    async def enter_playback(self) -> None:
+        """Switch the camera into playback mode — `PUT /transports/0
+        {"mode": "Output"}`. `set_timeline()` should be called first; there
+        is nothing to show otherwise."""
+        await self._set_transport_mode("Output")
+
+    async def exit_playback(self) -> None:
+        """Leave playback mode, back to live view — `PUT /transports/0
+        {"mode": "InputPreview"}`."""
+        await self._set_transport_mode("InputPreview")
+
+    async def _set_transport_mode(self, mode: str) -> None:
+        """`PUT /transports/0 {"mode": mode}`, dual-check verified exactly
+        like `_set_recording_state`/`set_camera_format`: a WS
+        `propertyValueChanged` event on `TRANSPORT_MODE_PROPERTY` primary,
+        a `GET` readback secondary.
+
+        Only `"InputPreview"` and `"Output"` are valid here — `"InputRecord"`
+        is read-only on this endpoint and is set through
+        `/transports/0/record` instead
+        (`tools/rest/probe_endpoints.py`'s write catalog skips this
+        endpoint's same-value probe whenever the camera currently reports
+        `InputRecord`, since its own `PUT` cannot accept that value back —
+        `docs/rest/transport.md`'s reshaping table). This method does not
+        enforce that itself; the camera's own rejection is the real guard,
+        surfacing here as a failed verification.
+        """
+        endpoint = self.profile.rest_endpoint(TRANSPORT_MODE_PROPERTY)
+        if endpoint is None or not endpoint.put_supported:
+            raise BMDUnsupportedError(
+                f"[{self.host}] PUT {TRANSPORT_MODE_PROPERTY} is not confirmed supported in "
+                f"the {self.profile.model_key} {self.profile.firmware} rest/ profile — run "
+                "tools/rest/probe_endpoints.py --probe-writes against this camera first."
+            )
+        self._router.arm(TRANSPORT_MODE_PROPERTY)
+        await self._rest_client.put(TRANSPORT_MODE_PROPERTY, {"mode": mode})
+        event_value = await self._router.wait_for(
+            TRANSPORT_MODE_PROPERTY, timeout=self.verify_timeout_s
+        )
+        confirmed = _transport_mode(event_value)
+        if confirmed is None:
+            body = await self._rest_client.get(TRANSPORT_MODE_PROPERTY)
+            confirmed = _transport_mode(body)
+        if confirmed != mode:
+            raise BMDVerificationError(
+                f"transport mode -> {mode!r}: neither a WS '{TRANSPORT_MODE_PROPERTY}' "
+                f"propertyValueChanged event nor a GET readback confirmed mode={mode!r} "
+                f"within {self.verify_timeout_s}s"
+            )
+
+    async def play(self) -> None:
+        """Start normal-speed forward playback — `shuttle(1.0)`, not the
+        dedicated `/transports/0/play` trigger. That path is real
+        (confirmed present by the read sweep, `docs/rest/transport.md`)
+        but has zero write evidence: it sits in `tools/rest/
+        probe_endpoints.py`'s `NEVER_WRITE` list (the same position
+        `/transports/0/record` was in before Phase 4 proved it out), and
+        neither its request body nor a way to verify it has ever been
+        captured on real hardware. `/transports/0/playback`, by contrast,
+        already has a confirmed `204` same-value `PUT` (design principle
+        6's REST sibling) — routing through it here trades a small amount
+        of API-surface fidelity to the original plan for a write path this
+        session already has real evidence works."""
+        await self.shuttle(1.0)
+
+    async def stop(self) -> None:
+        """Stop playback by leaving playback mode entirely — an alias for
+        `exit_playback()`, for the same reason `play()` isn't
+        `/transports/0/play`: `/transports/0/stop`'s body and verification
+        shape are equally unconfirmed, while `exit_playback()`'s body
+        (`{"mode": "InputPreview"}`) is sweep-confirmed real."""
+        await self.exit_playback()
+
+    async def pause(self) -> None:
+        """Halt playback at the current position — `shuttle(0.0)`."""
+        await self.shuttle(0.0)
+
+    async def shuttle(self, speed: float) -> None:
+        """`PUT /transports/0/playback {"speed": speed}` — positive shuttles
+        forward, negative shuttles backward, magnitude sets the rate (the
+        migration plan's own hypothesis: `2.0`/`-1.0` for forward/backward,
+        `0` for pause). Dual-check verified: a WS `propertyValueChanged`
+        event on `PLAYBACK_PROPERTY` primary, a `GET` readback secondary,
+        checking the reported body contains `{"speed": speed}` via the
+        generic `_contains` helper.
+
+        **Unconfirmed field name.** `docs/rest/transport.md` never captured
+        a real sample of this endpoint's body — only that `GET` returns
+        `200` and `PUT` returns `204` on a same-value probe (design
+        principle 6's REST sibling: existence and same-value-accepted are
+        confirmed, a *changing* write's actual field names are not, the
+        same gap `/system/format` had before Phase 5's first real
+        retarget). If the real field is spelled differently, this
+        correctly raises `BMDVerificationError` instead of reporting a
+        success it cannot attest to.
+        """
+        await self._put_playback({"speed": speed}, action=f"shuttle(speed={speed})")
+
+    async def seek(self, timecode: int, *, clip: int = 0) -> None:
+        """`PUT /transports/0/playback {"timecode": timecode, "clip": clip}`
+        — reuses the exact field names `GET /transports/0/timecode`
+        already confirmed real (`{"clip": 0, "timecode": 274153986}`,
+        `docs/rest/transport.md`), on the hypothesis that seeking within
+        `/playback` shares timecode's own vocabulary rather than a new
+        `"position"` field the migration plan never pinned down. Same
+        dual-check, and same unconfirmed-field-name caveat, as `shuttle()`.
+        """
+        body = {"timecode": timecode, "clip": clip}
+        await self._put_playback(body, action=f"seek(timecode={timecode}, clip={clip})")
+
+    async def _put_playback(self, body: dict[str, Any], *, action: str) -> None:
+        endpoint = self.profile.rest_endpoint(PLAYBACK_PROPERTY)
+        if endpoint is None or not endpoint.put_supported:
+            raise BMDUnsupportedError(
+                f"[{self.host}] PUT {PLAYBACK_PROPERTY} is not confirmed supported in the "
+                f"{self.profile.model_key} {self.profile.firmware} rest/ profile — run "
+                "tools/rest/probe_endpoints.py --probe-writes against this camera first."
+            )
+        self._router.arm(PLAYBACK_PROPERTY)
+        await self._rest_client.put(PLAYBACK_PROPERTY, body)
+        event_value = await self._router.wait_for(PLAYBACK_PROPERTY, timeout=self.verify_timeout_s)
+        confirmed = _contains(event_value, body)
+        if not confirmed:
+            readback = await self._rest_client.get(PLAYBACK_PROPERTY)
+            confirmed = _contains(readback, body)
+        if not confirmed:
+            raise BMDVerificationError(
+                f"{action}: neither a WS '{PLAYBACK_PROPERTY}' propertyValueChanged event "
+                f"nor a GET readback confirmed {body} within {self.verify_timeout_s}s"
+            )
