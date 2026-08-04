@@ -813,6 +813,22 @@ each other since both ran in every reverting test so far. Final narrowing test:
 `exit_playback()` at all — pins the trigger on whichever side of that boundary the format
 is still switched vs. already reverted.
 
+**Tenth real-hardware evidence, `POCKET_6K_G2 v8.6`, 2026-08-04, the ninth finding's own
+final narrowing test — and the answer:** `select_clip()` + `enter_playback()` alone, no
+`exit_playback()` call at all, left the camera at the switched format (`BRaw:5_1 @
+6144x3456p25`) — no revert. Combined with the eighth and ninth findings, this fully
+isolates the cause: **`exit_playback()` — leaving playback mode via
+`PUT /transports/0 {"mode": "InputPreview"}` — is what reverts the camera's format to
+whatever preceded entry into `Output` mode.** `select_clip()`, `set_camera_format()`, and
+`enter_playback()` are all ruled out; `stop()` triggers the same revert since it's a
+direct alias for `exit_playback()` right now. One caveat: `select_clip()` was the only
+format-changing call in every test, so "reverts to pre-`select_clip()`" and "reverts to
+whatever preceded `Output` mode" remain indistinguishable from this evidence — they're the
+same value in every run so far. `exit_playback()` does not compensate for this or expose
+an opt-out; a caller needing a specific format after playback must call
+`set_camera_format()` again explicitly. See docs/rest/session.md's `enter_playback()` /
+`exit_playback()` section for the full four-run trail.
+
 ---
 
 ## Library surface (Phase 2)

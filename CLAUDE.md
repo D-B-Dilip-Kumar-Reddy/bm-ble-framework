@@ -205,18 +205,21 @@ src/bmd_camera/
                               # surfaced something unexpected: after exit_playback(), the
                               # camera's format had reverted to what it was before
                               # select_clip() ran, though nothing explicitly requested that.
-                              # Two follow-ups narrowed it further: select_clip() called
-                              # alone (playback steps skipped entirely) left the camera at
-                              # the switched format with no revert, ruling out
-                              # select_clip()/set_camera_format() themselves; then
-                              # select_clip() + enter_playback() + immediate
-                              # exit_playback() (play/pause/seek/shuttle/stop all skipped)
-                              # reverted anyway, ruling those out too — only
-                              # enter_playback() and exit_playback() remain candidates,
-                              # still not distinguished from each other — see
-                              # docs/rest/session.md for the full trail and exactly which
-                              # endpoints/field names are sweep-confirmed vs. this
-                              # migration's own plan-derived hypotheses
+                              # Three follow-up runs isolated the cause conclusively:
+                              # select_clip() alone, and select_clip()+enter_playback()
+                              # alone, both left the camera at the switched format with no
+                              # revert (ruling out select_clip()/set_camera_format() and
+                              # enter_playback()); only removing exit_playback() from the
+                              # sequence removed the revert. CONFIRMED: exit_playback()
+                              # (PUT /transports/0 {"mode": "InputPreview"}) restores
+                              # whatever format preceded entry into Output/playback mode —
+                              # stop() triggers the same revert since it's an alias for
+                              # exit_playback(). No opt-out exposed; a caller needing a
+                              # specific post-playback format must call
+                              # set_camera_format() again explicitly — see
+                              # docs/rest/session.md for the full four-run trail and
+                              # exactly which endpoints/field names are sweep-confirmed vs.
+                              # this migration's own plan-derived hypotheses
     mapping.py                 # Codec name derivation between the BLE profile's vocabulary
                               # and REST's own spelling — confirmed strings always win
                               # (design principle 1); this is a fallback seed only.
@@ -313,13 +316,13 @@ examples/
                             # own set_camera_format() switch branch and surfaced an
                             # unexpected finding: the camera's format reverted to its
                             # pre-select_clip() value after exit_playback(), unrequested by
-                            # anything in this script. Two follow-ups narrowed it: select_clip()
-                            # alone (playback steps skipped) saw no revert, ruling out
-                            # select_clip()/set_camera_format() themselves; then select_clip() +
-                            # enter_playback() + immediate exit_playback() (play/pause/seek/
-                            # shuttle/stop all skipped) reverted anyway, ruling those out too —
-                            # only enter_playback()/exit_playback() remain candidates, still not
-                            # distinguished from each other. Now brackets its run with GET /system/format
+                            # anything in this script. Three follow-up runs isolated the cause
+                            # conclusively: select_clip() alone, and select_clip()+
+                            # enter_playback() alone, both left the camera at the switched
+                            # format with no revert; only removing exit_playback() from the
+                            # sequence removed it. CONFIRMED: exit_playback() (stop() is its
+                            # alias) restores whatever format preceded playback mode — no
+                            # opt-out exposed. Brackets its run with GET /system/format
                             # snapshots (before select_clip, after exit_playback) to make
                             # this visible, and gives stop() (currently an alias for
                             # exit_playback()) a longer dedicated pause so an operator can
