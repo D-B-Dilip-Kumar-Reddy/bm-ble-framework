@@ -66,6 +66,12 @@ FIRMWARE = "v8.6"
 
 PLAY_DURATION_S = 3.0
 PAUSE_BETWEEN_STEPS_S = 2.0
+# stop() is currently an alias for exit_playback() (see session.py's docstring for why) —
+# both send the identical PUT /transports/0 {"mode": "InputPreview"}. Whatever's visible on
+# the camera screen happens at the "stop" step; this longer pause just gives an operator
+# time to actually look before the (functionally redundant) "exit_playback" step re-fires
+# the same call.
+STOP_TO_EXIT_PAUSE_S = 8.0
 
 
 async def _print_format(session: RestCameraSession, label: str) -> None:
@@ -131,7 +137,8 @@ async def main() -> int:
                 results.append((label, ok))
                 if not ok:
                     break
-                await asyncio.sleep(PAUSE_BETWEEN_STEPS_S)
+                pause_s = STOP_TO_EXIT_PAUSE_S if label == "stop" else PAUSE_BETWEEN_STEPS_S
+                await asyncio.sleep(pause_s)
 
         await _print_format(session, "Format after exit_playback")
 
