@@ -1238,7 +1238,17 @@ class RestCameraSession:
         and `Clip` (`clips()`, Phase 3) carries no `sensorResolution` field
         to disambiguate with even if it did. A clip recorded at one of
         these ambiguous resolutions cannot be selected via this method
-        unless the camera already happens to be at a matching format.
+        unless the camera already happens to be at a matching format —
+        deliberately: this method still raises immediately rather than
+        guessing (design principle 7). `examples/rest_playback.py` composes
+        a retry around this exact boundary instead: catches the
+        `BMDUnsupportedError`, re-derives the real candidate
+        `sensorResolution` values from `supported_formats()`, and tries
+        `set_camera_format()` with each — since this method's own format
+        comparison above never checks `sensorResolution`, a second call
+        after a candidate is set sees the format as already matching. See
+        `docs/rest/session.md`'s "What's deliberately out of scope" for the
+        full write-up.
 
         Verified by polling `GET /timelines/0` (default every 0.5s,
         `poll_interval_s`) until `_parse_timeline_clip_ids()`'s reading

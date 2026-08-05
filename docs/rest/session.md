@@ -1318,8 +1318,18 @@ timestamp, rather than the first one found in ascending order.
   `ProRes:Proxy @ 1920x1080p23.98` format is exactly this ambiguous combination raised the
   same `BMDUnsupportedError`, since `Clip` (from `clips()`) carries no `sensorResolution`
   field to disambiguate with even if `select_clip()` wanted to pass one through. A clip
-  recorded at one of this ambiguous combination's resolutions cannot currently be selected
-  unless the camera already happens to be at a matching format.
+  recorded at one of this ambiguous combination's resolutions cannot be selected via
+  `select_clip()` alone unless the camera already happens to be at a matching format —
+  deliberately: an unsupported operation should raise immediately, not guess (design
+  principle 7). `examples/rest_playback.py` composes a retry around that strict boundary
+  instead of weakening it: `_select_clip_trying_all_sensor_resolutions()` (added
+  2026-08-05) catches the `BMDUnsupportedError`, independently re-derives the real
+  candidate `sensorResolution` values from `supported_formats()`, and tries
+  `set_camera_format()` with each in turn — `select_clip()`'s own format comparison never
+  checks `sensorResolution`, so once a candidate is set, a second `select_clip()` call sees
+  the format as already matching and proceeds normally. Example-level, not library-level,
+  on purpose — the library still raises loudly on the first attempt; only the caller that
+  chooses to retry pays for the extra requests. Not yet run against real hardware.
 - **No storage precondition on `record_stop()`.** Only `record_start()` checks
   `storage_state()` — matching CLAUDE.md design principle 10's wording ("before recording
   or photo capture"), which names starting an operation, not ending one.

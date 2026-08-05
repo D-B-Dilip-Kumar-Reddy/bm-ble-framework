@@ -413,7 +413,19 @@ examples/
                             # exit_playback step re-fires the same call. Confirmation here
                             # is via this session's own dual-checks; watching the camera
                             # screen is still the independent ground truth, see
-                            # docs/rest/session.md and docs/rest/transport.md
+                            # docs/rest/session.md and docs/rest/transport.md.
+                            # _select_clip_trying_all_sensor_resolutions() (2026-08-05):
+                            # select_clip() has no way to disambiguate a clip whose
+                            # (codec, resolution, fps) pairs with more than one
+                            # sensorResolution and raises BMDUnsupportedError rather than
+                            # guess (design principle 7) — kept a library-level restriction
+                            # on purpose. This example composes a retry around that strict
+                            # boundary instead: catches the error, re-derives the real
+                            # candidate sensorResolution values from supported_formats(),
+                            # and tries set_camera_format() with each in turn, relying on
+                            # select_clip()'s own format check never comparing
+                            # sensorResolution so a second call after a candidate is set
+                            # proceeds normally. Not yet run against real hardware
   check_timeline_stale_entries.py  # Takes two clip_unique_ids of differing format,
                             # switches between them via select_clip(), and reads back
                             # RestCameraSession.timeline_clip_ids() (new read verb) after

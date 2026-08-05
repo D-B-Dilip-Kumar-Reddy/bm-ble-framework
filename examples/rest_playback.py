@@ -58,6 +58,32 @@ select_clip() section, finding #7 — this script's own passing runs are
 still real evidence the end-to-end sequence works, just not proof of what
 specifically inside it is doing the work.
 
+SENSOR-RESOLUTION AMBIGUITY RETRY, ADDED 2026-08-05
+------------------------------------------------------
+`select_clip()` has no `sensor_resolution` parameter of its own (see its
+docstring's third gap) — real case, `POCKET_6K_G2 v8.6`: `ProRes:HQ` at
+`1920x1080p25` pairs with three (`2880x1512`, `5376x3024`, `6144x3456`),
+and `select_clip()` raises `BMDUnsupportedError` rather than guess.
+Deliberately kept a library-level restriction, not fixed there — an
+example script is the right place to compose a retry around a strict
+library call, not the library itself (design principle 7: an unsupported
+operation raises immediately, no silent guessing).
+
+`_select_clip_trying_all_sensor_resolutions()` below: try `select_clip()`
+plain first (the fast, unambiguous path). If it raises `BMDUnsupportedError`,
+independently re-derive the real candidate `sensorResolution` values from
+`supported_formats()` (never by parsing the exception string) using the
+same filter `set_camera_format()` applies internally. If there's genuinely
+more than one, call `set_camera_format()` directly with each candidate in
+turn — `select_clip()`'s own format comparison never checks
+`sensorResolution` (only codec/resolution/fps), so once a candidate is set,
+calling `select_clip()` again sees the format as already matching and skips
+straight to its `POST`/poll, no re-triggering the ambiguity check. Stops at
+the first candidate whose `select_clip()` call succeeds. If the original
+error wasn't really the ambiguity case (0 or 1 real candidates), does not
+retry — that would just repeat a failure retrying can't fix. Not yet run
+against real hardware.
+
 Usage:
     python examples/rest_playback.py
 """
@@ -68,6 +94,8 @@ import sys
 
 from bmd_camera import BMDUnsupportedError, BMDVerificationError, RestCameraSession
 from bmd_camera.exceptions import BMDStorageError
+from bmd_camera.rest.mapping import resolve_ble_codec_name
+from bmd_camera.rest.session import Clip, _parse_video_format, _resolution_name_for_dimensions
 
 HOST = "pocket-cinema-camera-6k-g2.local"
 MODEL_KEY = "POCKET_6K_G2"
@@ -90,6 +118,79 @@ async def _print_format(session: RestCameraSession, label: str) -> None:
     fmt = await session.get_format()
     width, height = fmt.record_resolution
     print(f"{label}: {fmt.codec} @ {width}x{height}p{fmt.frame_rate}")
+
+
+async def _select_clip_trying_all_sensor_resolutions(
+    session: RestCameraSession, clip: Clip
+) -> None:
+    """`select_clip(clip.clip_unique_id)`, but on the one gap its own
+    docstring names and declines to work around — a `(codec, resolution,
+    fps)` combination pairing with more than one `sensorResolution` — tries
+    every real candidate `set_camera_format()` reports instead of giving up
+    after the first `BMDUnsupportedError`. See this module's own docstring
+    for why this lives here and not in `select_clip()` itself."""
+    try:
+        await session.select_clip(clip.clip_unique_id)
+        return
+    except BMDUnsupportedError as exc:
+        original_exc = exc
+        print(f"  select_clip() raised {type(exc).__name__}: {exc}")
+        print("  checking whether this is the sensor-resolution ambiguity case...")
+
+    parsed = _parse_video_format(clip.video_format)
+    if parsed is None:
+        raise BMDUnsupportedError(
+            f"clip_unique_id={clip.clip_unique_id}'s videoFormat {clip.video_format!r} "
+            "doesn't match the confirmed '<width>x<height>p<fps>' shape"
+        )
+    width, height, fps_str = parsed
+
+    formats = await session.supported_formats()
+    candidates = [
+        f.sensor_resolution
+        for f in formats
+        if f.record_resolution == (width, height)
+        and clip.codec in f.codecs
+        and fps_str in f.frame_rates
+    ]
+    if len(candidates) <= 1:
+        # Not the ambiguity case (or genuinely unsupported) — retrying with
+        # a sensor_resolution wouldn't change anything. Let the original
+        # failure stand rather than silently reporting a different one.
+        raise original_exc
+    print(f"  {len(candidates)} candidate sensorResolution values: {candidates}")
+
+    ble_pair = resolve_ble_codec_name(session.profile.rest.format_names, clip.codec)
+    if ble_pair is None:
+        raise BMDUnsupportedError(
+            f"codec {clip.codec!r} has no confirmed reverse mapping in this profile"
+        )
+    family, variant = ble_pair
+    resolution_name = _resolution_name_for_dimensions(session.profile.resolutions, width, height)
+    if resolution_name is None:
+        raise BMDUnsupportedError(
+            f"{width}x{height} has no matching entry in this profile's resolutions table"
+        )
+
+    last_exc: Exception | None = None
+    for sensor_resolution in candidates:
+        print(f"  trying sensor_resolution={sensor_resolution}...")
+        try:
+            await session.set_camera_format(
+                family, variant, resolution_name, fps_str, sensor_resolution=sensor_resolution
+            )
+            await session.select_clip(clip.clip_unique_id)
+        except (BMDUnsupportedError, BMDVerificationError) as exc:
+            print(f"    failed: {type(exc).__name__}: {exc}")
+            last_exc = exc
+            continue
+        print(f"  succeeded with sensor_resolution={sensor_resolution}")
+        return
+
+    raise BMDUnsupportedError(
+        f"clip_unique_id={clip.clip_unique_id}: none of {len(candidates)} candidate "
+        f"sensorResolution values worked ({candidates}); last error: {last_exc}"
+    )
 
 
 async def _step(label: str, action) -> bool:
@@ -123,7 +224,10 @@ async def main() -> int:
         await _print_format(session, "Format before select_clip")
 
         steps: list[tuple[str, object]] = [
-            ("select_clip", lambda: session.select_clip(target_clip.clip_unique_id)),
+            (
+                "select_clip",
+                lambda: _select_clip_trying_all_sensor_resolutions(session, target_clip),
+            ),
             ("enter_playback", session.enter_playback),
             ("play", session.play),
         ]
