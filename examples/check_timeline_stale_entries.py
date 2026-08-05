@@ -29,12 +29,20 @@ otherwise muddy what this script is trying to isolate.
 Usage:
     python examples/check_timeline_stale_entries.py <clip_id_a> <clip_id_b>
 
-<clip_id_a> and <clip_id_b> are Clip.clip_unique_id values — run
-examples/rest_read_state.py first, or check a prior rest_playback.py run's
-"Selecting clip_unique_id=..." line, to find them. The two clips should
-have different codec/resolution/fps (Clip.codec / Clip.video_format from
-clips()) — the script warns if they don't, since the test is meaningless
-otherwise.
+<clip_id_a> and <clip_id_b> are Clip.clip_unique_id values. WARNING, real-hardware-
+confirmed (POCKET_6K_G2 v8.6, 2026-08-05, docs/rest/session.md's clips()
+section): clipUniqueId is not stable across reconnects — the same two files
+reported different ids across two separate sessions minutes apart, no
+reformat or recording in between. An id from an earlier run of
+examples/rest_read_state.py, or an earlier rest_playback.py's "Selecting
+clip_unique_id=..." line, may already be stale by the time this script
+connects. There is no fully safe way to look up an id ahead of time from a
+separate process; run examples/rest_read_state.py or rest_playback.py
+immediately before this script, in the same terminal session, and accept
+that even that carries some residual risk given the instability above. The
+two clips should have different codec/resolution/fps (Clip.codec /
+Clip.video_format from clips()) — the script warns if they don't, since the
+test is meaningless otherwise.
 
 PICK CLIPS select_clip() CAN ACTUALLY SWITCH TO: some (codec, resolution,
 fps) combinations pair with more than one sensorResolution in
