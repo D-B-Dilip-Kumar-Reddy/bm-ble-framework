@@ -144,7 +144,39 @@ composes several of these together end to end — `set_camera_format`, a full-le
 snapshots taken before and after — to record a real test clip at a chosen combination and
 report the clip it produced (name, length, storage consumed), identified by diffing
 `clips()` before against after since `GET /clips/list` has no "just-written" flag of its
-own. No new library surface; not yet run against real hardware.
+own. No new library surface. It prints state at three points, not two — "BEFORE any
+changes" (the camera as found, before `set_camera_format` touches anything), "BEFORE
+recording", and "AFTER recording" — which is what surfaced the stale-estimate finding
+below.
+
+**Real-hardware findings, `POCKET_6K_G2 v8.6`, 2026-08-05** (first run of this script
+against a camera; BRAW 5:1 / 4K DCI / 23.98, 60s, 1TB card with 996GB free):
+
+1. **`remaining_record_time` is stale immediately after a format change.** Read straight
+   after `set_camera_format()` returned confirmed, the active device reported `50858`s
+   (14h07m) — implying ~19.6 MB/s, the *pre-switch* format's bitrate. After the recording,
+   the same card with 992.48 GB free reported `15251`s (4h14m), implying ~65 MB/s, which
+   matches the clip actually written (3525050368 B / 61 s = 57.8 MB/s). The camera had not
+   recomputed the estimate for the new format. `remaining_space` stayed accurate
+   throughout. This matters for `_require_storage_ready()`, which gates `record_start()` on
+   `remaining_record_time > 0`, and for any future threshold built on that field — read it
+   as a pre-switch leftover, not a current number, until a recording has started.
+
+2. **`record_stop` can outrun its verification window while the clip is fine.** The first
+   run raised `BMDVerificationError` from `record_stop`, but the clip was written and saved
+   — the next run's own "before" state showed the clip count had gone 2 -> 3. The second
+   run's DEBUG transport log shows why the window is tight: `PUT /transports/0/record`
+   took **2 ms** for `record_start` and **1143 ms** for `record_stop` (09:47:25.884 ->
+   09:47:27.027), because stop is I/O-bound — the camera is closing the `.braw` and writing
+   its index. `_set_recording_state` starts its `verify_timeout_s` budget *after* the PUT
+   returns and fires the secondary `GET` readback **once, with no retry**, so a
+   finalization that keeps the camera at `recording: true` past ~5s misses both channels
+   and raises on a recording that succeeded. The operator also observed a warning indicator
+   and flickering timecode on the camera's own screen during the failed run — consistent
+   with media write pressure at finalization, but **no REST property reports it** (nothing
+   in either camera's 46/48 subscribable properties covers write margin or dropped frames),
+   so the camera displayed something the API never exposed. This is the same gap Phase 8's
+   frame-drop item records as unavailable.
 
 Every read verb (`get_format`, `supported_formats`, `storage_state`, `clips`, `timecode`)
 is a plain `GET`, fetched fresh on every call — there is no background cache to go stale.

@@ -20,15 +20,29 @@ stops on its own (e.g. a full card) rather than blindly sleeping — see
 examples/rest_record_start_stop.py, which this script's recording step is
 modeled on.
 
-BEFORE/AFTER STATE: format (camera settings), storage_state() (media —
-device name, total/remaining space, remaining record time, clip count),
-and clips() (clip inventory) are all read and printed both before
-set_camera_format() runs and after record_stop() confirms. The clip
-inventory taken before recording is kept so the newly-written clip can be
-identified afterward by clip_unique_id — GET /clips/list has no
-"just-written" flag of its own (design principle 9: reads are best-effort,
-not proof of anything not directly reported), so a before/after diff is
-the only way to name which clip is new.
+STATE IS PRINTED AT THREE POINTS, not two: "BEFORE any changes" (the
+camera exactly as this script found it, before set_camera_format() touches
+anything), "BEFORE recording" (after the format switch, immediately before
+record_start()), and "AFTER recording" (after record_stop() confirms).
+Each prints format (camera settings), storage_state() (media — device
+name, total/remaining space, remaining record time, clip count), and
+clips() (clip inventory).
+
+The first two are NOT redundant, and the gap between them is itself worth
+reading: on a real run (POCKET_6K_G2 v8.6, 2026-08-05) the active device's
+remaining_record_time was still reporting the PRE-switch format's estimate
+immediately after set_camera_format() returned confirmed — 50858s (14h07m)
+for a card that, once recording actually started, reported 15251s (4h14m)
+for the same 996GB free. The camera had not recomputed the estimate for
+the new format yet. remaining_record_time immediately after a format
+change is therefore a stale number, not a current one; storage_state()'s
+remaining_space stayed accurate throughout.
+
+The clip inventory taken before recording is kept so the newly-written
+clip can be identified afterward by clip_unique_id — GET /clips/list has
+no "just-written" flag of its own (design principle 9: reads are
+best-effort, not proof of anything not directly reported), so a
+before/after diff is the only way to name which clip is new.
 
 AFTER RECORDING: the new clip's file_path (name) and duration_timecode
 (length) come straight from its own Clip entry; "memory used" is computed
@@ -112,6 +126,8 @@ async def _print_state(session: RestCameraSession, label: str):
 
 async def main() -> int:
     async with RestCameraSession(HOST, MODEL_KEY, FIRMWARE) as session:
+        await _print_state(session, "BEFORE any changes")
+
         try:
             await session.set_camera_format(CODEC, VARIANT, RESOLUTION, FPS)
         except (ValueError, BMDUnsupportedError, BMDVerificationError) as exc:
