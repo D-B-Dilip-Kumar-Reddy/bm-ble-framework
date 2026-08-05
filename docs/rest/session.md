@@ -958,6 +958,22 @@ own `PUT`. Silence at `INFO` during `select_clip()` now reliably means the forma
 matched, per design principle for logging ("Operation boundaries" at `INFO`) that this
 path had been missing.
 
+**Open failure, `POCKET_6K_G2 v8.6`, 2026-08-05, on a freshly-reformatted 128GB card.**
+Two back-to-back runs of `examples/rest_playback.py` both failed identically at
+`select_clip()`: no format switch was attempted (the camera's current format already
+matched `clips()[0]`'s own, per the log), `DELETE` returned the expected `501`, `POST
+/timelines/0/add {"clips": [{"clipUniqueId": 1}]}` raised no error — but `GET
+/timelines/0` came back genuinely empty (`{"clips": []}`) on every read within the 5s poll
+budget, not "other clips but not mine". Every earlier confirmed run of this exact write
+path (findings #1-#6 above) was against a card already holding several clips in the
+target format; this is the first attempt against a freshly-reformatted card with only a
+handful, and whether that's the relevant variable is genuinely unknown — `select_clip()`'s
+5s timeout gives up too fast to distinguish "stuck empty" from "just slower than 5s here".
+`tools/rest/diagnose_timeline.py` (`docs/rest/transport.md`) is the diagnostic built to
+answer this: removes the 5s limit, polls up to 30s by default printing every read, and
+adds the full `clips()` listing and `get_format()` `select_clip()` itself doesn't surface.
+Not yet run.
+
 ### `enter_playback()` / `exit_playback()`
 
 `PUT /transports/0 {"mode": "Output"}` / `{"mode": "InputPreview"}`, via the shared
