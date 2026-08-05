@@ -1137,7 +1137,22 @@ the full `clips()` listing, `get_format()`, and the pre-write baseline, so the f
 is visible rather than inferred. Reaches into `RestCameraSession._rest_client` directly for
 the raw `POST`/`DELETE` calls (no public wrapper exists for just that half of what
 `select_clip()` does) — deliberate, since inspecting exactly that write path is this tool's
-whole purpose. Not yet run against real hardware.
+whole purpose.
+
+**First run, `POCKET_6K_G2 v8.6`, 2026-08-05, found the mechanism.** Targeted
+`clip_unique_id=15` (`ProRes:HQ @ 1920x1080p25`) while the camera sat at `BRaw:3_1 @
+2880x1512p25` (clip 16's own format) — deliberately, since this tool makes no
+format-matching check `select_clip()` does. `POST /timelines/0/add` raised no error, but
+`GET /timelines/0` — already `(16,)` *before* this run's own `POST` — stayed exactly
+`(16,)` for the full 30s poll, clip 15 never appearing. **`POST /timelines/0/add` is a
+no-op when the target clip's format doesn't match the camera's live format** — it doesn't
+raise, doesn't change the timeline, and doesn't eventually catch up. See
+docs/rest/session.md's `select_clip()` section (finding #7) for the full write-up,
+including why this means every earlier confirmed success (findings #1-#6) can't actually
+distinguish "the `POST` did the selecting" from "the prior format switch alone already
+would have populated the timeline, `POST` or not" — genuinely unresolved, and clip 15 is
+now sitting on the card as the next real test (`select_clip()` itself, not this bypass
+tool, against a clip already confirmed mismatched).
 
 ---
 

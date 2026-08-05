@@ -958,21 +958,55 @@ own `PUT`. Silence at `INFO` during `select_clip()` now reliably means the forma
 matched, per design principle for logging ("Operation boundaries" at `INFO`) that this
 path had been missing.
 
-**Open failure, `POCKET_6K_G2 v8.6`, 2026-08-05, on a freshly-reformatted 128GB card.**
-Two back-to-back runs of `examples/rest_playback.py` both failed identically at
+**Failure, `POCKET_6K_G2 v8.6`, 2026-08-05, on a freshly-reformatted 128GB card.** Two
+back-to-back runs of `examples/rest_playback.py` both failed identically at
 `select_clip()`: no format switch was attempted (the camera's current format already
 matched `clips()[0]`'s own, per the log), `DELETE` returned the expected `501`, `POST
 /timelines/0/add {"clips": [{"clipUniqueId": 1}]}` raised no error — but `GET
 /timelines/0` came back genuinely empty (`{"clips": []}`) on every read within the 5s poll
-budget, not "other clips but not mine". Every earlier confirmed run of this exact write
-path (findings #1-#6 above) was against a card already holding several clips in the
-target format; this is the first attempt against a freshly-reformatted card with only a
-handful, and whether that's the relevant variable is genuinely unknown — `select_clip()`'s
-5s timeout gives up too fast to distinguish "stuck empty" from "just slower than 5s here".
-`tools/rest/diagnose_timeline.py` (`docs/rest/transport.md`) is the diagnostic built to
-answer this: removes the 5s limit, polls up to 30s by default printing every read, and
-adds the full `clips()` listing and `get_format()` `select_clip()` itself doesn't surface.
-Not yet run.
+budget, not "other clips but not mine". That specific card and clip no longer exist (the
+card has since been reformatted again), so the exact original cause can't be
+retroactively confirmed — but `tools/rest/diagnose_timeline.py`'s first run, below,
+uncovered the general mechanism this failure is almost certainly an instance of.
+
+**Real-hardware finding #7, `POCKET_6K_G2 v8.6`, 2026-08-05, `tools/rest/diagnose_timeline.py`
+(built for the failure above), the mechanism itself.** Two clips on a reformatted card:
+`clip_unique_id=15` (`ProRes:HQ @ 1920x1080p25`), `clip_unique_id=16` (`BRaw:3_1 @
+2880x1512p25`). Camera's live format at the time: `BRaw:3_1 @ 2880x1512p25` — exactly
+clip 16's own. `GET /timelines/0` *before this run made any write at all* already read
+`(16,)`. This tool, unlike `select_clip()`, deliberately makes no format-matching check
+and attempts no switch — it targeted clip 15 directly, `POST`ing
+`{"clips": [{"clipUniqueId": 15}]}` against a camera still sitting at clip 16's format.
+The `POST` raised no error, but polled every 1s for the full 30s: `(16,)`, unchanged,
+every single read — clip 15 never appeared.
+
+**`POST /timelines/0/add` is a no-op when the requested clip's format does not match the
+camera's live current format — it does not raise, does not change the timeline, and does
+not eventually catch up given more time.** This refines finding #4's conclusion rather
+than replacing it: the timeline is not "every clip matching the *requested* clip's own
+format" so much as it is *continuously* every clip matching the camera's *live* format,
+`POST` or no `POST` — the pre-write baseline in this same run already showed `(16,)` with
+no POST behind it in this session at all. Every one of findings #1-#6's confirmed
+successes switched the camera's format to match the target clip *before* `POST`ing (via
+`set_camera_format()`, either by `select_clip()` itself or by the operator manually) — so
+none of them, on their own, distinguish "the `POST` did the selecting" from "the format
+switch alone was already enough, and the `POST` never mattered." This diagnostic's
+negative result is the first evidence pointing at the second reading. Not yet tested
+directly (switch format with zero `POST` at all, confirm the timeline populates from the
+switch alone) — the honest next step to fully settle whether `POST /timelines/0/add` ever
+does anything on this firmware, versus being pure formality riding on a switch that would
+have populated the timeline by itself either way.
+
+**Immediately available next test, same card**: `clip_unique_id=15` is now a
+real, confirmed-mismatched clip sitting on the card — exactly the case finding #5 flagged
+as untested (`select_clip()`'s own `set_camera_format()` branch, forced by a genuine
+mismatch). Since `clips()[0]` is clip 15 on this card, a plain run of
+`examples/rest_playback.py` right now should exercise it: `select_clip()`'s comparison
+(`'ProRes:HQ' != 'BRaw:3_1'`, unambiguous, no shared-spelling edge case) should detect the
+mismatch, log it at `INFO` (the fix above), call `set_camera_format()`, and only then
+`POST`. If that succeeds, it closes finding #5 and confirms `select_clip()`'s own
+switch-then-sync sequence handles the exact scenario this diagnostic just proved matters —
+not yet run.
 
 ### `enter_playback()` / `exit_playback()`
 

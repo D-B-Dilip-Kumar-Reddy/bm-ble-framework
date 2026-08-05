@@ -196,12 +196,17 @@ src/bmd_camera/
                               # last open question: two runs (opposite directions, two real
                               # format pairs) confirmed POST /timelines/0/add fully replaces
                               # the timeline's contents even though DELETE never runs (501),
-                              # no stale cross-format entries left behind. A new, separate
-                              # open failure surfaced 2026-08-05 on a freshly-reformatted
-                              # 128GB card: POST raised no error but GET /timelines/0 came
-                              # back genuinely empty within the 5s poll budget —
-                              # tools/rest/diagnose_timeline.py is the not-yet-run diagnostic
-                              # for it, see docs/rest/session.md's select_clip() section);
+                              # no stale cross-format entries left behind); tools/rest/
+                              # diagnose_timeline.py's first run (2026-08-05, built for a real
+                              # select_clip() failure on a freshly-reformatted 128GB card)
+                              # then found POST /timelines/0/add is a no-op whenever the
+                              # target clip's format doesn't match the camera's live format —
+                              # which puts the "POST fully replaces the timeline" reading
+                              # above in question too: every confirmed success, including the
+                              # stale-entries one, switched format to match the target clip
+                              # first, so none can distinguish the POST doing the work from
+                              # the format switch alone already doing it. See
+                              # docs/rest/session.md's select_clip() section, finding #7;
                               # writes —
                               # record_start/record_stop (Phase 4, real-hardware-
                               # confirmed; record_stop's secondary GET readback is polled
@@ -326,15 +331,17 @@ tools/
                             # real /media/workingset push, not the immediate-return shortcut)
                             # both confirmed; only the shortcut itself has no dedicated run
                             # yet), and diagnose_timeline.py (built for a real select_clip()
-                            # failure, POCKET_6K_G2 v8.6, 2026-08-05: POST /timelines/0/add
-                            # raised no error but GET /timelines/0 came back genuinely empty
-                            # within select_clip()'s 5s poll budget, on a freshly-reformatted
-                            # 128GB card with only a handful of clips — every earlier confirmed
-                            # run of this write path was against a card already holding more
-                            # clips. Removes the 5s limit and prints every poll instead of
-                            # failing silently, so a slow-but-correct timeline and a
-                            # genuinely-stuck-empty one look different in the output; not yet
-                            # run against real hardware). See docs/rest/transport.md
+                            # failure, POCKET_6K_G2 v8.6, 2026-08-05, then found the actual
+                            # mechanism on its first run: POST /timelines/0/add is a no-op
+                            # when the target clip's format doesn't match the camera's live
+                            # format — no error, no timeline change, no eventual catch-up
+                            # even after 30s. Puts every earlier confirmed select_clip()
+                            # success in question, in a specific way: all of them switched
+                            # format to match the target clip before POSTing, so none can
+                            # distinguish "the POST selected the clip" from "the format
+                            # switch alone already would have populated the timeline" — see
+                            # docs/rest/session.md's select_clip() section, finding #7).
+                            # See docs/rest/transport.md
   captures/                 # Runtime output of sniffers/, control/, and rest/ scripts (gitignored)
 
 Tools are grouped by folder according to what kind of thing they do — read-only
