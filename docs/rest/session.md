@@ -565,14 +565,19 @@ event) — not intended for concurrent calls from multiple tasks on the same ses
 armed threshold is always cleared in a `finally` block so a later unrelated push can never
 be mistaken for a stale earlier call's crossing.
 
-Not yet run against real hardware — the WS push shape is confirmed live, but
-`wait_for_low_storage()` itself (the threshold-crossing logic, the immediate-return
-shortcut, the multi-run threshold-clearing discipline) has only been exercised against the
-injected-fake test suite so far. `tools/rest/verify_low_storage.py` is the real-hardware
-verification script for exactly this gap (`docs/rest/transport.md`'s own tool section has
-the full write-up) — recommends a smaller card (128GB) than the 1TB card every other
-real-hardware run in this doc used, since a meaningful threshold is otherwise impractical
-to reach in one session.
+**Partially confirmed against real hardware, `POCKET_6K_G2 v8.6`, 2026-08-05** (128GB card,
+`tools/rest/verify_low_storage.py`, `--min-space-bytes 10000000000 --timeout 1800`): a real
+concurrent recording consumed the card from `117.57 GB` remaining down to `55.02 GB` over
+the full 1800s (~34.75 MB/s, a plausible real bitrate — `last_known_storage` tracked this
+continuously and correctly via the WS push throughout), but never crossed the 10GB
+threshold, so `wait_for_low_storage()` correctly returned `False` after the full timeout.
+This confirms the "storage stays healthy" branch — the method waited out its full budget
+without a false-positive threshold trip. **The threshold-*crossing* branch is still
+unconfirmed**: neither the immediate-return shortcut (already low when called) nor a live
+crossing arriving mid-wait has been exercised on real hardware yet, since this run's
+threshold was never actually reached. A follow-up run with a threshold close to (or above)
+current remaining space is the fast way to close that gap — no need to wait out another
+long timeout.
 
 ---
 

@@ -1099,7 +1099,15 @@ thresholds given on the command line, and reports the result, elapsed time, and 
 running a real recording concurrently (`examples/rest_record_test_clip.py` or the camera
 body), which is why this tool's own docstring recommends a smaller card (128GB) than the
 1TB card every other real-hardware run in this doc used — a meaningful threshold is
-otherwise impractical to reach in one session. Not yet run against real hardware itself.
+otherwise impractical to reach in one session.
+
+**First real run, `POCKET_6K_G2 v8.6`, 2026-08-05** (128GB card, `--min-space-bytes
+10000000000 --timeout 1800`): a real concurrent recording took the card from `117.57 GB`
+down to `55.02 GB` remaining, tracked correctly and continuously throughout, but never
+reached the 10GB threshold — `False` after the full 1800s, correctly. Confirms the
+"storage stays healthy" branch only; the threshold-*crossing* branch (immediate-return
+shortcut, a live crossing mid-wait) is still unconfirmed — see docs/rest/session.md's
+`last_known_storage`/`wait_for_low_storage()` section.
 
 ---
 
