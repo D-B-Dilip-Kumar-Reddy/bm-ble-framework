@@ -179,7 +179,8 @@ src/bmd_camera/
                               # history with wait_while_recording's inverted-contract bug —
                               # see docs/rest/session.md's last_known_storage/
                               # wait_for_low_storage() section; not yet run against real
-                              # hardware itself),
+                              # hardware itself — tools/rest/verify_low_storage.py is the
+                              # real-hardware verification script for this gap specifically),
                               # timeline_clip_ids — a plain GET /timelines/0, added to let
                               # a caller inspect the timeline independently of
                               # select_clip()'s own membership poll — closed select_clip()'s
