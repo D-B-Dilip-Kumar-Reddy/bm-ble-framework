@@ -205,9 +205,14 @@ src/bmd_camera/
                               # above in question too: every confirmed success, including the
                               # stale-entries one, switched format to match the target clip
                               # first, so none can distinguish the POST doing the work from
-                              # the format switch alone already doing it. See
-                              # docs/rest/session.md's select_clip() section, finding #7;
-                              # writes —
+                              # the format switch alone already doing it. Closed same day via
+                              # diagnose_timeline.py --skip-post: a format switch with zero
+                              # DELETE/POST sent populated the timeline on its own — POST
+                              # /timelines/0/add has never been shown to do anything on this
+                              # firmware (single-matching-clip case only; the multi-clip
+                              # seven-clips-share-a-format scenario remains untested with POST
+                              # fully absent). See docs/rest/session.md's select_clip()
+                              # section, finding #7; writes —
                               # record_start/record_stop (Phase 4, real-hardware-
                               # confirmed; record_stop's secondary GET readback is polled
                               # against a wider dedicated budget, stop_verify_timeout_s
@@ -379,7 +384,17 @@ tools/
                             # docs/rest/session.md's select_clip() section, finding #7;
                             # --skip-post isolates the answer directly: switches format via
                             # set_camera_format() then reads the timeline with no DELETE/POST
-                            # ever sent, not yet run), and verify_playback_interrupt.py
+                            # ever sent. Run, POCKET_6K_G2 v8.6, 2026-08-05: answered — the
+                            # format switch alone populated the timeline with the target clip,
+                            # zero DELETE/POST sent; POST /timelines/0/add has never been shown
+                            # to do anything on this firmware (confirmed for the
+                            # single-matching-clip case; the multi-clip
+                            # seven-clips-share-a-format scenario remains untested with POST
+                            # fully absent). First attempt hit the known select_clip()
+                            # sensor-resolution ambiguity on its default clip; the operator
+                            # deleted that clip from the card to route around it, then the
+                            # re-run against the one remaining clip gave the decisive result),
+                            # and verify_playback_interrupt.py
                             # (Phase 8 item 2, part 2 — real-hardware verification for
                             # RestCameraSession.playback_interrupted /
                             # wait_for_playback_interrupt(). Two phases: a self-requested

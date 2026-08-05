@@ -853,8 +853,10 @@ the camera's format (to clip B's, then back to clip A's) before `POST`ing. Since
 /timelines/0/add` is now known to be a no-op when the target clip's format doesn't already
 match, these two runs can't distinguish "the `POST` replaced the timeline's contents" from
 "the format switch alone already had, and the `POST` never mattered." The "no stale
-entries" observation itself still stands; the causal reading of *why* does not, until a
-run tests a format switch with no `POST` at all.
+entries" observation itself still stands; the causal reading of *why* does not.
+**Closed, same day, `tools/rest/diagnose_timeline.py --skip-post`:** a format switch with
+zero `DELETE`/`POST` sent populated the timeline correctly on its own — see finding #7's
+own write-up below for the decisive run.
 
 ### `select_clip(clip_unique_id)`
 
@@ -956,7 +958,9 @@ it. **Skipping the `DELETE` clear does not leave stale cross-format entries** �
 /timelines/0/add` fully replaces the timeline's contents on this firmware regardless.
 *(Caveat added 2026-08-05 — finding #7 below: both runs here switched format before
 `POST`ing, so this can't distinguish the `POST` doing the replacing from the format switch
-alone already having done it. The "no stale entries" result stands regardless.)*
+alone already having done it. The "no stale entries" result stands regardless. **Closed,
+same day**: `tools/rest/diagnose_timeline.py --skip-post` confirmed the format switch alone
+does the work — see finding #7's write-up below.)*
 
 No WS event shape is known for `/timelines/0`, so verification there isn't the usual
 primary/secondary dual-check — it's a poll: `GET /timelines/0` repeatedly (default every
@@ -1015,11 +1019,31 @@ successes switched the camera's format to match the target clip *before* `POST`i
 `set_camera_format()`, either by `select_clip()` itself or by the operator manually) — so
 none of them, on their own, distinguish "the `POST` did the selecting" from "the format
 switch alone was already enough, and the `POST` never mattered." This diagnostic's
-negative result is the first evidence pointing at the second reading. Not yet tested
-directly (switch format with zero `POST` at all, confirm the timeline populates from the
-switch alone) — the honest next step to fully settle whether `POST /timelines/0/add` ever
-does anything on this firmware, versus being pure formality riding on a switch that would
-have populated the timeline by itself either way.
+negative result is the first evidence pointing at the second reading.
+
+**Closed, `POCKET_6K_G2 v8.6`, 2026-08-05, `tools/rest/diagnose_timeline.py --skip-post`
+(added the same day for exactly this test): the format switch alone populates the
+timeline — `POST /timelines/0/add` has never been shown to do anything on this firmware.**
+First attempt targeted the default clip (`clips()[0]`, `clip_unique_id=1`,
+`ProRes:HQ @ 1920x1080p25`) and hit the already-known sensor-resolution ambiguity
+(`set_camera_format` refusing to guess among 3 candidate `sensorResolution` values — this
+tool, unlike `examples/rest_playback.py`, doesn't compose the retry) — not a new finding,
+the same gap noted below. The operator then deleted that clip from the card to route
+around it (not a bug workaround in this codebase, an operator action on the camera itself),
+leaving one clip, `clip_unique_id=2` (`BRaw:3_1 @ 2880x1512p25`). Re-run: `get_format()`
+before any write showed a genuinely mismatched `ProRes:HQ @ 3840x2160p25`,
+`GET /timelines/0` before any write was empty (`()`), `set_camera_format('BRAW', '3:1',
+'2.8K 17:9', '25')` confirmed with **zero `DELETE` and zero `POST` sent**, and
+`GET /timelines/0` immediately after — still no `POST` anywhere in this session — already
+read `(2,)`. The format switch by itself is what populates the timeline; `POST
+/timelines/0/add` is confirmed dead weight for the single-matching-clip case tested here.
+`select_clip()` still sends the `POST` (harmless — a `204` either way) but nothing in any
+run to date, including this one, has shown it doing real work. **One case this run doesn't
+cover**: finding #4's seven-clips-share-a-format scenario — whether the format switch alone
+surfaces *every* matching clip, or only some, when more than one shares the target format,
+remains untested with `POST` fully absent; every multi-clip observation on record
+(finding #4, and `check_timeline_stale_entries.py`'s both directions) had a `POST`
+in the sequence.
 
 **Immediately available next test, same card**: `clip_unique_id=15` is now a
 real, confirmed-mismatched clip sitting on the card — exactly the case finding #5 flagged

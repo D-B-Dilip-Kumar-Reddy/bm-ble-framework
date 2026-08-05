@@ -1453,10 +1453,19 @@ class RestCameraSession:
         (2026-08-05, `docs/rest/session.md`'s finding #7) since found `POST`
         is a no-op when the target clip's format doesn't already match the
         camera's live one, which means this "fully replaces" reading, like
-        every other confirmed success here, can't actually distinguish the
-        `POST` doing that replacement from the *format switch* that
+        every other confirmed success here, couldn't at the time distinguish
+        the `POST` doing that replacement from the *format switch* that
         preceded it (both stale-entries runs switched format first) already
-        having done so on its own. `resolve_ble_codec_name`
+        having done so on its own — **closed, `POCKET_6K_G2 v8.6`,
+        2026-08-05, `tools/rest/diagnose_timeline.py --skip-post`**: switched
+        format to match a clip with zero `DELETE`/`POST` ever sent, and `GET
+        /timelines/0` immediately after already reported that clip — the
+        format switch alone populates the timeline; `POST /timelines/0/add`
+        has never been shown to do anything on this firmware, in any run to
+        date. `select_clip()` still sends it (harmless, and this run only
+        tested the single-matching-clip case, not finding #4's
+        seven-clips-share-a-format scenario), but it is confirmed
+        dead weight, not confirmed necessary. `resolve_ble_codec_name`
         (`mapping.py`) can raise
         `BMDUnsupportedError` if a clip's REST codec string isn't in the
         profile's confirmed `format_names` table (no derivation fallback

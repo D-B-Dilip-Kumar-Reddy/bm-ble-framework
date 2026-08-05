@@ -1167,7 +1167,21 @@ match the target clip via `set_camera_format()` — the same resolution path
 — then reads `GET /timelines/0` immediately, with no `DELETE` and no `POST` ever sent. If
 the target clip already appears, the format switch alone populates the timeline and
 `POST /timelines/0/add` may never have mattered in any confirmed run to date; if it
-doesn't, `POST` does real work. Not yet run.
+doesn't, `POST` does real work.
+
+**Run, `POCKET_6K_G2 v8.6`, 2026-08-05: answered — the format switch alone does it.**
+First attempt (default clip, `clip_unique_id=1`) hit the already-known sensor-resolution
+ambiguity this tool doesn't retry around; the operator deleted that clip from the card to
+route past it, leaving a single clip (`clip_unique_id=2`, `BRaw:3_1 @ 2880x1512p25`).
+Re-run against a genuinely mismatched starting format (`ProRes:HQ @ 3840x2160p25`):
+`GET /timelines/0` before any write was empty, `set_camera_format()` confirmed with zero
+`DELETE`/`POST` sent, and `GET /timelines/0` immediately after already reported the target
+clip. **`POST /timelines/0/add` has never been shown to do anything on this firmware** — a
+format switch alone is sufficient, at least for the single-matching-clip case this run
+tested. Untested: whether the format switch alone surfaces *every* clip sharing a format
+when more than one does (the seven-clip case from `select_clip()`'s finding #4) — every
+multi-clip observation on record had a `POST` in the sequence. See
+`docs/rest/session.md`'s `select_clip()` finding #7 for the full write-up.
 
 ### `tools/rest/verify_playback_interrupt.py`
 
