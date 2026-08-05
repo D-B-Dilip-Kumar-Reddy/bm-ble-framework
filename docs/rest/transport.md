@@ -665,6 +665,20 @@ No tool bugs found in this run. No camera setting changed.
   sweep answers it.
 - **Untethered operation.** BLE needs nothing plugged in; REST currently needs the cable.
   This is the reason the BLE stack stays functional rather than being retired.
+- **"IF CARD DROPS FRAME" policy (`Alert` / `Stop Recording`) and any dropped-frame
+  count.** Body-menu-only setting, confirmed absent from this profile's REST surface —
+  checked against all 76 swept endpoints and all 46 `websocket_properties`, no
+  `dropFrame`/`timelapse`/`detailSharpening`/`recordLutToClip` path of any kind (the
+  other fields on that same settings page). Real-hardware-confirmed, `POCKET_6K_G2 v8.6`,
+  2026-08-05: recording `BRAW 3:1`/`6K` above 23.98fps triggered the camera's own
+  `Stop Recording` policy twice, ~2.5-2.8s in each time. No signal reports the drop
+  itself, but when the policy is `Stop Recording`, its *consequence* is already fully
+  observable — `RestCameraSession.is_recording`/`wait_while_recording()` caught both
+  auto-stops correctly with no code changes. If the policy is `Alert`, recording
+  continues and nothing in the swept surface reports it at all. See
+  docs/rest/session.md's `is_recording`/`wait_while_recording()` section for the full
+  write-up, including a real edge case (the faster of the two auto-stops left no listed
+  clip in `clips()` at all).
 
 ## New capability REST brings
 
