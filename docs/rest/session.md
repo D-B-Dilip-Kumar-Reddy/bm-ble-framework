@@ -434,6 +434,48 @@ disambiguated for `/transports/0/record` specifically — a caller wanting a sam
 cross-check today should read the transport mode/state directly rather than relying on
 `is_recording` being populated on connect.
 
+**Real-hardware finding — the camera's own dropped-frame policy, and how it does (and
+doesn't) surface over REST, `POCKET_6K_G2 v8.6`, 2026-08-05.** The camera body has a
+`RECORD` settings page field, **"IF CARD DROPS FRAME"**, with two values: `Alert` (show a
+warning, keep recording) and `Stop Recording`. This session's camera had it set to
+`Stop Recording`. **No endpoint or subscribable property anywhere in this profile's swept
+surface exposes this setting or a drop-frame count** — checked directly against all 76
+swept endpoint paths and all 46 `websocket_properties`; there is no `dropFrame`,
+`timelapse`, `detailSharpening`, or `recordLutToClip` path of any kind (the other fields on
+that same settings page), confirming this is a body-menu-only setting with zero REST
+surface, not something merely unswept.
+
+Two back-to-back runs at a deliberately demanding combination (`BRAW 3:1` / `6K`
+(6144x3456) — the least-compressed BRAW variant at the largest resolution this profile
+offers) reproduced the policy directly:
+
+- **`50fps`**: `/transports/0/record` went `True` at `11:00:12.593` and `False` at
+  `11:00:15.124` — a ~2.5s recording, nowhere near the requested 300s.
+  `wait_while_recording(300)` correctly returned `False` (early stop), `record_stop()`
+  correctly no-op'd (design principle 4: `is_recording` was already `False` from the real
+  event), and `clips()` reported one real new clip: 00:00:01:06 long, 283MB. The same
+  combination at `23.98fps` had already run clean for the full 300s twice with no issue —
+  isolating the trigger to fps, not the codec/resolution alone.
+- **`30fps`**: same shape, `True` at `11:00:45.127` -> `False` at `11:00:47.944` (~2.8s),
+  `wait_while_recording` again correctly returned early — but this time **`clips()`
+  reported no new clip at all**. The recording was short-lived enough that nothing was ever
+  indexed as a listed clip, a real edge case worth carrying forward: a caller diffing
+  `clips()` before/after can silently conclude "nothing happened" on a drop-triggered stop
+  this fast, even though the camera genuinely attempted and then aborted a recording.
+
+**What this means for anomaly detection**: there is no direct "a frame was dropped"
+signal, and there never will be one within the swept surface — confirmed absent, not
+merely undiscovered. But when the camera's own policy is `Stop Recording` (this session's
+setting), the *consequence* of a drop is already fully observable with existing code and
+no new library surface: `is_recording`'s WS-driven tracking and
+`wait_while_recording()`'s early-return contract caught both runs above correctly, with
+zero changes. If the policy is `Alert` instead, recording continues and nothing in the
+swept surface reports it — consistent with (though not proof of) the original
+`record_stop` finding above, where the operator saw a warning and timecode flicker but the
+recording ran the full requested duration with no early WS stop event. Which policy was
+active during that original run is unknown; the two are not confirmed to be the same
+mechanism, only consistent with being so.
+
 ---
 
 ## Write verbs (Phases 4-5)
