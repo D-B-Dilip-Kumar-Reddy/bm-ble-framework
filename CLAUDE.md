@@ -196,7 +196,13 @@ src/bmd_camera/
                               # last open question: two runs (opposite directions, two real
                               # format pairs) confirmed POST /timelines/0/add fully replaces
                               # the timeline's contents even though DELETE never runs (501),
-                              # no stale cross-format entries left behind); writes —
+                              # no stale cross-format entries left behind. A new, separate
+                              # open failure surfaced 2026-08-05 on a freshly-reformatted
+                              # 128GB card: POST raised no error but GET /timelines/0 came
+                              # back genuinely empty within the 5s poll budget —
+                              # tools/rest/diagnose_timeline.py is the not-yet-run diagnostic
+                              # for it, see docs/rest/session.md's select_clip() section);
+                              # writes —
                               # record_start/record_stop (Phase 4, real-hardware-
                               # confirmed; record_stop's secondary GET readback is polled
                               # against a wider dedicated budget, stop_verify_timeout_s
