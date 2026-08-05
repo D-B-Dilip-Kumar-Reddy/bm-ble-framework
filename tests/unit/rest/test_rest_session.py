@@ -2069,6 +2069,23 @@ class TestPlaybackInterrupted:
 
         assert not session.playback_interrupted.is_set()
 
+    def test_speed_drop_ignored_while_transport_mode_write_in_flight(self):
+        """Regression test for a real-hardware-confirmed defect
+        (POCKET_6K_G2 v8.6, 2026-08-05, tools/rest/verify_playback_interrupt.py's
+        own sanity phase): leaving "Output" mode (_set_transport_mode, e.g.
+        via stop()/exit_playback()) also pushes a side-effect PLAYBACK_PROPERTY
+        event reporting speed=0 — the original guard only checked
+        _playback_write_in_flight, which is False during a
+        _set_transport_mode() write, so this side-effect push incorrectly
+        set playback_interrupted on a purely self-requested stop()."""
+        session = make_session(make_profile())
+        session._in_playback = True
+        session._transport_mode_write_in_flight = True
+
+        session._on_event(PLAYBACK_PROPERTY, {"speed": 0.0})
+
+        assert not session.playback_interrupted.is_set()
+
     def test_speed_drop_ignored_when_not_in_playback(self):
         session = make_session(make_profile())
         session._in_playback = False
@@ -2101,6 +2118,21 @@ class TestPlaybackInterrupted:
         session = make_session(make_profile())
         session._in_playback = True
         session._transport_mode_write_in_flight = True
+
+        session._on_event(TRANSPORT_MODE_PROPERTY, {"mode": "InputPreview"})
+
+        assert not session.playback_interrupted.is_set()
+        assert session._in_playback is True
+
+    def test_mode_leaving_output_ignored_while_playback_write_in_flight(self):
+        """Symmetric precaution to the regression above — no real-hardware
+        evidence yet of a _put_playback() write causing a side-effect
+        TRANSPORT_MODE_PROPERTY push, but checking both flags here too
+        avoids assuming these two write paths are more independent than the
+        one real-hardware run actually showed."""
+        session = make_session(make_profile())
+        session._in_playback = True
+        session._playback_write_in_flight = True
 
         session._on_event(TRANSPORT_MODE_PROPERTY, {"mode": "InputPreview"})
 
@@ -2190,6 +2222,48 @@ class TestPlaybackInterrupted:
 
         assert not session.playback_interrupted.is_set()
         assert session._in_playback is False  # exit_playback() itself sets this
+
+    @pytest.mark.asyncio
+    async def test_stop_with_side_effect_playback_event_does_not_set_interrupted(self):
+        """Reproduces the exact real-hardware sequence that exposed the
+        original single-flag guard bug (POCKET_6K_G2 v8.6, 2026-08-05):
+        stop()'s own TRANSPORT_MODE_PROPERTY confirmation arrives alongside
+        a side-effect PLAYBACK_PROPERTY speed=0 push the camera sends when
+        leaving "Output" mode. Both must be absorbed without setting
+        playback_interrupted."""
+        client = FakeRestClient({TRANSPORT_MODE_PROPERTY: {"mode": "InputPreview"}})
+        session = make_session(make_playback_profile(), client=client)
+        session._in_playback = True
+
+        async def deliver_events():
+            await asyncio.sleep(0.01)
+            session._router.handle_event(
+                {
+                    "type": "event",
+                    "data": {
+                        "action": "propertyValueChanged",
+                        "property": TRANSPORT_MODE_PROPERTY,
+                        "value": {"mode": "InputPreview"},
+                    },
+                }
+            )
+            session._router.handle_event(
+                {
+                    "type": "event",
+                    "data": {
+                        "action": "propertyValueChanged",
+                        "property": PLAYBACK_PROPERTY,
+                        "value": {"speed": 0.0},
+                    },
+                }
+            )
+
+        asyncio.create_task(deliver_events())
+        await session.stop()
+        await asyncio.sleep(0.02)  # let the side-effect event above land
+
+        assert not session.playback_interrupted.is_set()
+        assert session._in_playback is False
 
 
 class TestWaitForPlaybackInterrupt:

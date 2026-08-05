@@ -1186,7 +1186,19 @@ operator to pull the SD card or press stop/pause directly on the camera body, th
 `wait_for_playback_interrupt()` and reports the result alongside `last_known_play`/
 `last_known_stop` (the corroborating signal) and a fresh `GET /transports/0` readback.
 Always attempts `exit_playback()` in a `finally` to leave the camera in preview mode.
-Follows `verify_low_storage.py`'s precedent for shape and reporting. Not yet run.
+Follows `verify_low_storage.py`'s precedent for shape and reporting.
+
+**First run, `POCKET_6K_G2 v8.6`, 2026-08-05: found and fixed a real defect in phase 1.**
+`stop()` reported `OK` but `playback_interrupted` was set anyway — the guard's own
+in-flight check only covered a write's *own* property, not a side-effect push on the
+*other* one, and leaving `"Output"` mode real-hardware-confirmed also pushes a
+`PLAYBACK_PROPERTY` `speed: 0` event as a side effect. Fixed same day — see
+`docs/rest/session.md`'s `playback_interrupted` section for the full write-up. This run's
+`select_clip()` step separately hit the already-documented sensor-resolution ambiguity on
+its default clip pick (`clip_unique_id=1`, the known `ProRes:HQ @ 1920x1080p25` three-way
+case) — expected, unrelated to this feature, and not yet worked around in this tool (it
+doesn't compose the retry `examples/rest_playback.py` uses). Phase 2 (the real
+camera-initiated interrupt) not yet reached.
 
 ---
 

@@ -270,18 +270,25 @@ src/bmd_camera/
                               # is_recording/wait_while_recording, set only from a
                               # /transports/0/playback speed-drop or /transports/0
                               # mode-left-"Output" event that arrived with none of this
-                              # session's own writes in flight (_playback_write_in_flight /
-                              # _transport_mode_write_in_flight guard _put_playback()/
-                              # _set_transport_mode() for exactly this, race-free against the
-                              # self-requested confirming event itself — see session.py's
-                              # _on_event docstring). PLAY_PROPERTY/STOP_PROPERTY (Phase 8
-                              # item 2 part 1's confirmed-real push shape) are now subscribed
-                              # by __aenter__ and tracked as last_known_play/last_known_stop,
-                              # a corroborating signal only — not the trigger, since neither
-                              # has an ordering guarantee relative to _put_playback()'s own
-                              # dual-check the way PLAYBACK_PROPERTY does. Built and
-                              # unit-tested only; tools/rest/verify_playback_interrupt.py is
-                              # the real-hardware verification script, not yet run
+                              # session's own writes in flight — both _playback_write_in_flight
+                              # and _transport_mode_write_in_flight guard *both* branches, not
+                              # just the one matching their own property, after a real-hardware
+                              # find (POCKET_6K_G2 v8.6, 2026-08-05, this tool's own sanity
+                              # phase): leaving "Output" mode also pushes a side-effect
+                              # PLAYBACK_PROPERTY speed=0 event, which the original per-property
+                              # guard didn't cover — fixed same day; see session.py's _on_event
+                              # docstring. PLAY_PROPERTY/STOP_PROPERTY (Phase 8 item 2 part 1's
+                              # confirmed-real push shape) are subscribed by __aenter__ and
+                              # tracked as last_known_play/last_known_stop, a corroborating
+                              # signal only — not the trigger, since neither has an ordering
+                              # guarantee relative to _put_playback()'s own dual-check the way
+                              # PLAYBACK_PROPERTY does. tools/rest/verify_playback_interrupt.py
+                              # is the real-hardware verification script; its sanity phase
+                              # (phase 1) found and confirmed the fix for the defect above —
+                              # phase 2 (the real camera-initiated interrupt) not yet reached,
+                              # since phase 1 also hit the already-documented select_clip()
+                              # sensor-resolution ambiguity on its default clip pick, unrelated
+                              # to this feature
     mapping.py                 # Codec name derivation between the BLE profile's vocabulary
                               # and REST's own spelling — confirmed strings always win
                               # (design principle 1); this is a fallback seed only.

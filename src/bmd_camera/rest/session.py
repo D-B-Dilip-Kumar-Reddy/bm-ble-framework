@@ -604,6 +604,28 @@ class RestCameraSession:
         mode without this session asking — the same "arrived while nothing
         of mine was in flight" test, applied to the other write path
         `enter_playback()`/`exit_playback()` use.
+
+        **Both branches check *both* in-flight flags, not just their own
+        write path's — real-hardware-confirmed defect this fixes
+        (`POCKET_6K_G2 v8.6`, 2026-08-05,
+        `tools/rest/verify_playback_interrupt.py`'s own sanity phase, the
+        first real run of this feature).** The first version of this method
+        gated the `PLAYBACK_PROPERTY` branch on `_playback_write_in_flight`
+        alone. A self-requested `stop()` (`exit_playback()` ->
+        `_set_transport_mode("InputPreview")`) sets only
+        `_transport_mode_write_in_flight` — but leaving `"Output"` mode
+        real-hardware-confirmed also pushes a `/transports/0/playback`
+        event reporting `speed: 0` as a side effect (the camera stopping
+        transport motion on its way out of playback), independent of
+        anything `_put_playback()` did. That side-effect push arrived while
+        `_playback_write_in_flight` was `False` (correctly — no
+        `_put_playback()` call was active) and `_in_playback` was still
+        `True`, so the original single-flag guard incorrectly set
+        `playback_interrupted` on a call the sanity phase asserts should
+        never trip it. The fix widens each branch to require *neither*
+        flag in flight, since a write to either property can apparently
+        cause a real push on the other — the two write paths are not as
+        independent as the original per-property guard assumed.
         """
         if prop == RECORD_PROPERTY and isinstance(value, dict):
             recording = value.get("recording")
@@ -628,6 +650,7 @@ class RestCameraSession:
                 and speed == 0
                 and self._in_playback
                 and not self._playback_write_in_flight
+                and not self._transport_mode_write_in_flight
             ):
                 self.playback_interrupted.set()
         elif prop == TRANSPORT_MODE_PROPERTY and isinstance(value, dict):
@@ -637,6 +660,7 @@ class RestCameraSession:
                 and mode != "Output"
                 and self._in_playback
                 and not self._transport_mode_write_in_flight
+                and not self._playback_write_in_flight
             ):
                 self.playback_interrupted.set()
                 self._in_playback = False
@@ -1625,12 +1649,14 @@ class RestCameraSession:
         surfacing here as a failed verification.
 
         Holds `_transport_mode_write_in_flight = True` for the duration of
-        the write and its own dual-check (Phase 8 item 2, part 2) — the
-        guard `_on_event`'s mode-left-`"Output"` interrupt check relies on
-        to tell a self-requested `exit_playback()`/`stop()` apart from a
-        camera-initiated one. See `_on_event`'s docstring for why this is
-        race-free even though the guard is cleared before this method
-        returns.
+        the write and its own dual-check (Phase 8 item 2, part 2) — checked
+        by *both* of `_on_event`'s interrupt branches, not just
+        `TRANSPORT_MODE_PROPERTY`'s own: real-hardware-confirmed
+        (`POCKET_6K_G2 v8.6`, 2026-08-05), leaving `"Output"` mode also
+        pushes a `PLAYBACK_PROPERTY` event reporting `speed: 0` as a side
+        effect, so this flag has to shield that branch too, not only the
+        one it shares a name with. See `_on_event`'s docstring for the full
+        finding.
         """
         endpoint = self.profile.rest_endpoint(TRANSPORT_MODE_PROPERTY)
         if endpoint is None or not endpoint.put_supported:
@@ -1759,11 +1785,17 @@ class RestCameraSession:
         this call attests to.
 
         Holds `_playback_write_in_flight = True` for the duration of the
-        write and its own dual-check (Phase 8 item 2, part 2) — the guard
-        `_on_event`'s speed-drop interrupt check relies on to tell a
-        self-requested `pause()`/`shuttle(0.0)` apart from a camera-initiated
-        one. See `_on_event`'s docstring for why this is race-free even
-        though the guard is cleared before this method returns.
+        write and its own dual-check (Phase 8 item 2, part 2) — checked by
+        both of `_on_event`'s interrupt branches, not just
+        `PLAYBACK_PROPERTY`'s own, mirroring `_set_transport_mode`'s guard
+        widening after the real-hardware finding that a transport-mode
+        write can push a side-effect `PLAYBACK_PROPERTY` event. No
+        real-hardware evidence yet of the reverse (a `_put_playback()`
+        write causing a `TRANSPORT_MODE_PROPERTY` side-effect push), but
+        checking both flags here too costs nothing and avoids assuming
+        these two write paths are more independent than the one
+        real-hardware run actually showed. See `_on_event`'s docstring for
+        the full finding.
         """
         endpoint = self.profile.rest_endpoint(PLAYBACK_PROPERTY)
         if endpoint is None or not endpoint.put_supported:
