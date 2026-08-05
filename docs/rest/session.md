@@ -1244,7 +1244,10 @@ the exact real-hardware sequence, delivering both the confirming `TRANSPORT_MODE
 event and the side-effect `PLAYBACK_PROPERTY` event together). The symmetric direction (a
 `_put_playback()` write causing a side-effect `TRANSPORT_MODE_PROPERTY` push) has no
 real-hardware evidence either way yet, but both branches now guard against it defensively —
-see `_on_event`'s own docstring for the full finding.
+see `_on_event`'s own docstring for the full finding. `__init__`'s comment block and
+`wait_for_playback_interrupt()`'s two docstrings (module-level and the method's own) are
+kept in sync with this finding too — they no longer describe the original single-flag-per-
+property design or claim the sanity-phase half of verification "hasn't run yet."
 
 This same run's `select_clip()` step failed on the already-documented sensor-resolution
 ambiguity (the default clip this tool picked, `clip_unique_id=1`, was the exact

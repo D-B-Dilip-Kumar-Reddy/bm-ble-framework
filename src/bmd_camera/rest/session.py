@@ -53,8 +53,10 @@ every call — there is no background cache to go stale.
 recording — set only from a `/transports/0/playback` speed-drop or
 `/transports/0` mode-left-`"Output"` event that arrived with none of this
 session's own writes in flight, never inferred from a `pause()`/`stop()`
-call this session itself made. Not yet run against real hardware — see
-`docs/rest/session.md`'s Phase 8 item 2 section.
+call this session itself made. First real-hardware run (`POCKET_6K_G2
+v8.6`, 2026-08-05) found and fixed a false-positive in this guard — see
+`_on_event`'s docstring; the real camera-initiated-interrupt case (Phase 2
+of `tools/rest/verify_playback_interrupt.py`) has not run yet.
 """
 
 from __future__ import annotations
@@ -464,11 +466,14 @@ class RestCameraSession:
         # enter_playback()'s docstring). `_playback_write_in_flight` and
         # `_transport_mode_write_in_flight` are the arm-adjacent guards
         # _put_playback()/_set_transport_mode() hold True for the duration
-        # of their own dual-check, so the exact event that confirms a
-        # self-requested pause()/stop() is never mistaken for a
-        # camera-initiated one — see _on_event's own docstring for why this
-        # is race-free. `last_known_play`/`last_known_stop` are purely
-        # observational (Phase 8 item 2 part 1 confirmed both track
+        # of their own dual-check — and, real-hardware-confirmed
+        # (POCKET_6K_G2 v8.6, 2026-08-05), _on_event checks *both* flags in
+        # *both* interrupt branches, not just the one matching a write's own
+        # property, since leaving "Output" mode was found to also push a
+        # side-effect PLAYBACK_PROPERTY speed=0 event a single-flag guard
+        # missed. See _on_event's own docstring for the full finding.
+        # `last_known_play`/`last_known_stop` are purely observational
+        # (Phase 8 item 2 part 1 confirmed both track
         # /transports/0/playback's speed field precisely) and never drive
         # playback_interrupted themselves — see _on_event.
         self.playback_interrupted = asyncio.Event()
@@ -826,11 +831,13 @@ class RestCameraSession:
         item 3 write-up) — a caller wanting the reason still has to look at
         the camera itself.
 
-        Not yet run against real hardware — see `docs/rest/session.md`'s
-        Phase 8 item 2 section for the plan's own verification bullet
-        (pull the card, or stop/pause on the camera body, mid-`play()`, and
-        confirm this returns `True`; confirm a normal `pause()`/`stop()`
-        does not set it).
+        The self-requested half of the verification plan — confirming a
+        normal `pause()`/`stop()` never sets `playback_interrupted` — has
+        run (`POCKET_6K_G2 v8.6`, 2026-08-05) and found a real false-positive
+        this method's own trigger had, since fixed (see `_on_event`'s
+        docstring). The positive half — pull the card, or stop/pause on the
+        camera body, mid-`play()`, and confirm this returns `True` — has not
+        run yet. See `docs/rest/session.md`'s Phase 8 item 2 section.
         """
         if self.playback_interrupted.is_set():
             return True
