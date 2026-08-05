@@ -240,7 +240,16 @@ src/bmd_camera/
                               # a (family, variant) set_camera_format() accepts
     timecode.py                # REST TIMECODE decode — BCD HH:MM:SS:FF, big-endian,
                               # byte-reversed relative to BLE; reuses ble/timecode.py's
-                              # Timecode dataclass and duration_seconds() as-is
+                              # Timecode dataclass and duration_seconds() as-is. Cannot
+                              # show a dropped frame — real-hardware-confirmed,
+                              # POCKET_6K_G2 v8.6, 2026-08-05: decoded across a full
+                              # recording containing an operator-witnessed drop, the
+                              # timecode field advanced perfectly smoothly throughout
+                              # (zero backwards jumps, zero gaps beyond normal polling
+                              # cadence) — it is a wall-clock/fps position counter, not
+                              # a record of what was actually written. See
+                              # docs/rest/session.md's is_recording/wait_while_recording()
+                              # section
     media.py                  # Photo-capture confirmation (Phase 6, real-hardware-
                               # confirmed) — resolve_active_mount, stills_marker,
                               # wait_for_new_still; confirms via the Stills subdirectory's
