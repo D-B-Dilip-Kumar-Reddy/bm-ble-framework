@@ -612,6 +612,18 @@ class RestCameraSession:
         body = await self._rest_client.get("/transports/0/timecode")
         return decode_rest_timecode(body["timecode"])
 
+    async def clip_timecode(self) -> Timecode:
+        """Position within the current clip — `GET /transports/0/timecode`'s
+        `clip` field, same BCD `HH:MM:SS:FF` encoding as `timecode()`'s
+        `timecode` field, decoded with the same function. See
+        `rest/timecode.py`'s module docstring for the spec citation and
+        real-hardware confirmation. Like `timecode()`, this cannot show a
+        dropped frame — it is a time-based position counter, confirmed
+        empirically to advance smoothly through a real, operator-witnessed
+        drop (`docs/rest/session.md`)."""
+        body = await self._rest_client.get("/transports/0/timecode")
+        return decode_rest_timecode(body["clip"])
+
     async def list_mount(self, path: str) -> tuple[dict[str, Any], ...]:
         """Raw directory listing at `path` — entries exactly as the camera
         reports them: `{"name": ..., "type": "file"|"directory", "mtime": ...}`,

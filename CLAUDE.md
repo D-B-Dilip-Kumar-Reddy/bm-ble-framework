@@ -166,7 +166,7 @@ src/bmd_camera/
     exceptions.py            # BMDRestError + re-exports of the shared exception types
     session.py                # RestCameraSession — user-facing API. Read verbs
                               # (get_format, supported_formats, storage_state, clips,
-                              # timecode, notification-driven is_recording,
+                              # timecode, clip_timecode, notification-driven is_recording,
                               # timeline_clip_ids — a plain GET /timelines/0, added to let
                               # a caller inspect the timeline independently of
                               # select_clip()'s own membership poll — closed select_clip()'s
@@ -240,14 +240,18 @@ src/bmd_camera/
                               # a (family, variant) set_camera_format() accepts
     timecode.py                # REST TIMECODE decode — BCD HH:MM:SS:FF, big-endian,
                               # byte-reversed relative to BLE; reuses ble/timecode.py's
-                              # Timecode dataclass and duration_seconds() as-is. Cannot
-                              # show a dropped frame — real-hardware-confirmed,
-                              # POCKET_6K_G2 v8.6, 2026-08-05: decoded across a full
-                              # recording containing an operator-witnessed drop, the
-                              # timecode field advanced perfectly smoothly throughout
-                              # (zero backwards jumps, zero gaps beyond normal polling
-                              # cadence) — it is a wall-clock/fps position counter, not
-                              # a record of what was actually written. See
+                              # Timecode dataclass and duration_seconds() as-is. The same
+                              # decode_rest_timecode also handles GET /transports/0/timecode's
+                              # second field, clip (position within the current clip,
+                              # confirmed by the official Notification.yaml spec and real
+                              # hardware to share the identical BCD encoding — exposed as
+                              # RestCameraSession.clip_timecode()). Neither field can show
+                              # a dropped frame — real-hardware-confirmed, POCKET_6K_G2
+                              # v8.6, 2026-08-05: both decoded across a full recording
+                              # containing an operator-witnessed drop, advanced perfectly
+                              # smoothly throughout (zero backwards jumps, zero gaps beyond
+                              # normal polling cadence) — both are wall-clock/fps position
+                              # counters, not a record of what was actually written. See
                               # docs/rest/session.md's is_recording/wait_while_recording()
                               # section
     media.py                  # Photo-capture confirmation (Phase 6, real-hardware-

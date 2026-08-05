@@ -14,10 +14,26 @@ docs/rest/transport.md): `{"timecode": 274153986}` == `0x10574202` ==
 
 The `Timecode` dataclass and `duration_seconds()` are reused as-is from
 `bmd_camera.ble.timecode` — only the wire decode differs; the resulting
-value and the clip-duration math are transport-agnostic. `clip` (a second
-BCD-packed timecode, the position within the current clip rather than
-time-of-day) is not yet decoded — no confirmed use for it yet, and its
-field is otherwise unused.
+value and the clip-duration math are transport-agnostic.
+
+`clip` — a second BCD-packed reading, the position within the current clip
+rather than time-of-day — decodes with this exact same function
+(`decode_rest_timecode`). Confirmed by the official `Notification.yaml`
+AsyncAPI spec ("The position of the clip timecode in units of
+binary-coded decimal (BCD)") and cross-checked against real hardware
+(`POCKET_6K_G2 v8.6`, 2026-08-05): decoded across 3,281 real
+`propertyValueChanged` pushes from one ~5-minute recording, every sample's
+four BCD nibbles were valid digits, the value reset near zero at
+`record_start` and advanced smoothly and monotonically to match the
+clip's own `duration_timecode` at `record_stop` — one single backwards
+reading at the very first push, consistent with a stale pre-record-start
+value rather than a decode error. See
+`RestCameraSession.clip_timecode()` and `docs/rest/session.md`'s
+`is_recording`/`wait_while_recording()` section for the full write-up,
+including why — like `timecode` — this field cannot show a dropped frame
+either: it is also a time-based position counter, not a record of what
+was actually written, confirmed empirically against a run containing a
+real, operator-witnessed drop.
 """
 
 from __future__ import annotations

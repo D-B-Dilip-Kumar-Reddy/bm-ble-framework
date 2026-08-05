@@ -194,7 +194,8 @@ against a camera; BRAW 5:1 / 4K DCI / 23.98, 60s, 1TB card with 996GB free):
    same as before this change. See "`record_start()` / `record_stop()`" below for the
    library-surface description.
 
-Every read verb (`get_format`, `supported_formats`, `storage_state`, `clips`, `timecode`)
+Every read verb (`get_format`, `supported_formats`, `storage_state`, `clips`, `timecode`,
+`clip_timecode`)
 is a plain `GET`, fetched fresh on every call — there is no background cache to go stale.
 `is_recording` is the one exception: it is tracked continuously from
 `/transports/0/record` `propertyValueChanged` events, mirroring the BLE `CameraSession`'s
@@ -299,6 +300,14 @@ returning valid (if all-empty) data (confirmed the same run), which is exactly w
 `GET /transports/0/timecode`, decoded via `rest/timecode.py`'s `decode_rest_timecode` —
 see "Timecode decode" below. Reuses the BLE `Timecode` dataclass and `duration_seconds()`
 as-is; only the wire decode differs between transports.
+
+### `clip_timecode()` → `Timecode`
+
+`GET /transports/0/timecode`'s `clip` field — position within the current clip rather than
+time-of-day — decoded with the exact same `decode_rest_timecode` function as `timecode()`.
+Confirmed by the official `Notification.yaml` spec and real hardware; see the "Real-hardware
+finding" under `is_recording`/`wait_while_recording()` below for the full decode
+confirmation and why, like `timecode()`, it cannot show a dropped frame.
 
 ### `list_mount(path)` → `tuple[dict, ...]` / `mount_names()` → `tuple[str, ...]`
 
@@ -482,9 +491,22 @@ beyond the normal ~100ms polling cadence — a perfectly smooth, monotonic advan
 drop occurred. This confirms directly, not just by design-level reasoning, that `timecode`
 is a wall-clock/frame-rate position counter that advances independent of whether the
 encoder actually wrote every frame — it structurally cannot show a drop, even one that
-demonstrably happened. (The event body's second field, `clip`, has never been decoded or
-confirmed by this codebase — its raw values move irregularly in this same log, but with no
-confirmed meaning for the field, that is not read as evidence of anything here.)
+demonstrably happened.
+
+**Correction**: an earlier version of this finding treated the event body's second field,
+`clip`, as raw/undecoded and declined to read anything into its irregular-looking values.
+That was wrong — `clip` is BCD-packed in the exact same `HH:MM:SS:FF` format as `timecode`
+(the official `Notification.yaml` AsyncAPI spec confirms this directly: "The position of
+the clip timecode in units of binary-coded decimal (BCD)"), decodable with the identical
+function. Decoded properly across the same 3,281 pushes: every sample's four BCD nibbles
+are valid digits, the value resets near zero right at `record_start` and advances smoothly
+and monotonically to `05:01:01`, matching the clip's own reported `duration_timecode`
+(`00:05:01:05`) — one single backwards reading at the very first push, consistent with a
+stale pre-`record_start` value rather than a decode error. `RestCameraSession` now exposes
+this as `clip_timecode()`, alongside `timecode()`. The conclusion is unchanged and now
+doubly confirmed: `clip`, like `timecode`, is a time-based position counter and cannot show
+a dropped frame either — checked directly against the same run containing a real,
+operator-witnessed drop, not merely assumed from the field being formerly undecoded.
 
 **What this means for anomaly detection**: there is no direct "a frame was dropped"
 signal, and there never will be one within the swept surface — confirmed absent, not

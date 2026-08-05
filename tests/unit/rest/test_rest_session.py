@@ -578,6 +578,22 @@ class TestTimecode:
         assert (tc.hours, tc.minutes, tc.seconds, tc.frames) == (10, 57, 42, 2)
 
 
+class TestClipTimecode:
+    @pytest.mark.asyncio
+    async def test_decodes_real_captured_value(self):
+        """clip=258 == 0x00000102 == 00:00:01:02 — a real value captured
+        moments after record_start on POCKET_6K_G2 v8.6, 2026-08-05 (the
+        Alert-mode stress-test run, docs/rest/session.md). Confirms clip
+        decodes with the exact same BCD function as timecode's own field,
+        per the Notification.yaml spec."""
+        client = FakeRestClient({"/transports/0/timecode": {"clip": 258, "timecode": 0}})
+        session = make_session(make_profile(), client=client)
+
+        tc = await session.clip_timecode()
+
+        assert (tc.hours, tc.minutes, tc.seconds, tc.frames) == (0, 0, 1, 2)
+
+
 class TestMountNames:
     @pytest.mark.asyncio
     async def test_parses_real_shape(self):
