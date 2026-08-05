@@ -46,6 +46,18 @@ it is not the same as an operator watching the footage actually play, so
 still watch the camera's own screen for that ground truth, the same way
 docs/rest/transport.md's own Phase 7 note says to.
 
+CAVEAT ADDED 2026-08-05, READ BEFORE TRUSTING "the POST selected the clip":
+tools/rest/diagnose_timeline.py found that POST /timelines/0/add is a
+no-op when the target clip's format doesn't already match the camera's
+live format — no error, no timeline change, ever. Every confirmed success
+above (this script's own run included) switched format to match the
+target clip before POSTing, so none of them can actually distinguish "the
+POST did the selecting" from "the format switch alone already would have
+populated the timeline, POST or not." See docs/rest/session.md's
+select_clip() section, finding #7 — this script's own passing runs are
+still real evidence the end-to-end sequence works, just not proof of what
+specifically inside it is doing the work.
+
 Usage:
     python examples/rest_playback.py
 """

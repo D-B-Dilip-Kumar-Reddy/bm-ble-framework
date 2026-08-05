@@ -423,10 +423,14 @@ examples/
                             # Deliberately never calls enter_playback()/exit_playback(),
                             # since exit_playback()'s confirmed format-revert would muddy
                             # the read. CONFIRMED, POCKET_6K_G2 v8.6, 2026-08-04, both
-                            # directions (two real format pairs): no stale entries — POST
-                            # /timelines/0/add fully replaces the timeline even without
-                            # DELETE ever running. See docs/rest/session.md's
-                            # timeline_clip_ids() and select_clip() sections
+                            # directions (two real format pairs): no stale entries. Causal
+                            # reading revised 2026-08-05: both runs switched format before
+                            # POSTing, and POST /timelines/0/add is now known to be a no-op
+                            # on a format mismatch, so this can't distinguish POST replacing
+                            # the timeline from the format switch alone already having done
+                            # so — the "no stale entries" result itself still stands. See
+                            # docs/rest/session.md's timeline_clip_ids() and select_clip()
+                            # sections (finding #7)
   rest_record_test_clip.py  # Sets a (codec, variant, resolution, fps) combination via
                             # set_camera_format(), records a real clip of configurable
                             # length (default 10 minutes), and prints camera

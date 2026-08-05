@@ -1210,7 +1210,14 @@ class RestCameraSession:
         confirmed, symmetrically in both directions, that `POST
         /timelines/0/add` fully replaces the timeline's contents even
         without `DELETE` ever running (see `timeline_clip_ids()`'s
-        docstring for the full readback). `resolve_ble_codec_name`
+        docstring for the full readback) — **though `tools/rest/diagnose_timeline.py`**
+        (2026-08-05, `docs/rest/session.md`'s finding #7) since found `POST`
+        is a no-op when the target clip's format doesn't already match the
+        camera's live one, which means this "fully replaces" reading, like
+        every other confirmed success here, can't actually distinguish the
+        `POST` doing that replacement from the *format switch* that
+        preceded it (both stale-entries runs switched format first) already
+        having done so on its own. `resolve_ble_codec_name`
         (`mapping.py`) can raise
         `BMDUnsupportedError` if a clip's REST codec string isn't in the
         profile's confirmed `format_names` table (no derivation fallback

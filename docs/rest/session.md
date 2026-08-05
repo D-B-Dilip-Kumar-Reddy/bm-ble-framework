@@ -835,6 +835,14 @@ reverse), each read the timeline right after switching. Both times the readback 
 clips. `POST /timelines/0/add` fully replaces the timeline's contents on this firmware,
 even though `DELETE` never runs.
 
+**Caveat added 2026-08-05, `select_clip()`'s finding #7 below:** both runs above switched
+the camera's format (to clip B's, then back to clip A's) before `POST`ing. Since `POST
+/timelines/0/add` is now known to be a no-op when the target clip's format doesn't already
+match, these two runs can't distinguish "the `POST` replaced the timeline's contents" from
+"the format switch alone already had, and the `POST` never mattered." The "no stale
+entries" observation itself still stands; the causal reading of *why* does not, until a
+run tests a format switch with no `POST` at all.
+
 ### `select_clip(clip_unique_id)`
 
 Makes one clip (`Clip.clip_unique_id`, from `clips()`, Phase 3) playable: switches the

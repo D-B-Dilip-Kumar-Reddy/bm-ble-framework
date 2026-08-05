@@ -864,6 +864,13 @@ though `DELETE /timelines/0` never runs (`501`).** This closes the one open ques
 docs/rest/session.md's `timeline_clip_ids()` and `select_clip()` sections for the full
 writeup.
 
+**Caveat, 2026-08-05** (`tools/rest/diagnose_timeline.py`'s first run, above): both runs
+here switched the camera's format before `POST`ing, and `POST /timelines/0/add` is now
+known to be a no-op when the target clip's format doesn't already match. The "no stale
+entries" result stands; whether the `POST` or the preceding format switch is what actually
+did the replacing is now open again — see docs/rest/session.md's `select_clip()` section,
+finding #7.
+
 ---
 
 ## Library surface (Phase 2)
