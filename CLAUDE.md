@@ -356,14 +356,26 @@ examples/
   rest_record_test_clip.py  # Sets a (codec, variant, resolution, fps) combination via
                             # set_camera_format(), records a real clip of configurable
                             # length (default 10 minutes), and prints camera
-                            # settings/media state/clip inventory both before and after —
-                            # then identifies the newly-written clip by diffing clips()
+                            # settings/media state/clip inventory at three points — before
+                            # any changes (the camera as found), before recording, and
+                            # after — then identifies the newly-written clip by diffing clips()
                             # before vs. after (GET /clips/list has no "just-written"
                             # flag), reporting its name (file_path), length
                             # (duration_timecode), and memory used (active storage
                             # device's remaining_space before minus after — Clip carries
                             # no size field of its own, the same gap Phase 6's
-                            # rest/media.py hit for stills)
+                            # rest/media.py hit for stills). First real-hardware run
+                            # (POCKET_6K_G2 v8.6, 2026-08-05) produced two findings, both
+                            # in docs/rest/session.md: remaining_record_time is STALE
+                            # immediately after a format change (reports the pre-switch
+                            # format's estimate until a recording starts; remaining_space
+                            # stays accurate) — which matters for _require_storage_ready()'s
+                            # gate on that field; and record_stop can raise
+                            # BMDVerificationError on a recording that actually succeeded,
+                            # since stop is I/O-bound (1143ms PUT vs record_start's 2ms,
+                            # closing the .braw and writing its index) and
+                            # _set_recording_state fires its secondary GET readback once
+                            # with no retry
   playback.py               # (planned)
 
 tests/
