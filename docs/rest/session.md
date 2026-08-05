@@ -474,6 +474,18 @@ feed (dense `/transports/0/timecode` pushes roughly every 100ms, `/media/working
 ~21s) shows **nothing outside the routine set** — no property fired that hadn't already
 fired identically at connect-time lens/aperture stabilization in every other run.
 
+**Timecode itself checked directly and cleared, not just assumed.** Decoding the
+confirmed `timecode` field (BCD `HH:MM:SS:FF`, per `rest/timecode.py`) across all 3,281
+pushes in this exact run's recording window shows zero backwards jumps and zero gaps
+beyond the normal ~100ms polling cadence — a perfectly smooth, monotonic advance from
+`11:10:51:33` through `11:15:52:35`, straight through the moment a real, operator-witnessed
+drop occurred. This confirms directly, not just by design-level reasoning, that `timecode`
+is a wall-clock/frame-rate position counter that advances independent of whether the
+encoder actually wrote every frame — it structurally cannot show a drop, even one that
+demonstrably happened. (The event body's second field, `clip`, has never been decoded or
+confirmed by this codebase — its raw values move irregularly in this same log, but with no
+confirmed meaning for the field, that is not read as evidence of anything here.)
+
 **What this means for anomaly detection**: there is no direct "a frame was dropped"
 signal, and there never will be one within the swept surface — confirmed absent, not
 merely undiscovered. When the camera's own policy is `Stop Recording`, the *consequence*
