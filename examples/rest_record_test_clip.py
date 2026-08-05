@@ -39,16 +39,28 @@ change is therefore a stale number, not a current one; storage_state()'s
 remaining_space stayed accurate throughout.
 
 The clip inventory taken before recording is kept so the newly-written
-clip can be identified afterward by clip_unique_id — GET /clips/list has
-no "just-written" flag of its own (design principle 9: reads are
-best-effort, not proof of anything not directly reported), so a
-before/after diff is the only way to name which clip is new.
+clip can be identified afterward — GET /clips/list has no "just-written"
+flag of its own (design principle 9: reads are best-effort, not proof of
+anything not directly reported), so a before/after diff is the only way to
+name which clip is new. This diff, plus the "memory used" computation
+(remaining_space before minus after, since Clip carries no size field —
+Phase 6's rest/media.py hit the same gap for stills), used to be done by
+hand in this script; both are now RestCameraSession.confirm_new_clip()
+(Phase 9), formalizing exactly the diff this script's own three real runs
+proved out. Real behavior change from the old manual version, not a pure
+refactor: the manual loop tolerated any number of "new" clips silently;
+confirm_new_clip() raises BMDVerificationError on both zero and more than
+one, on the grounds that guessing which one is "the" recording isn't this
+library's call to make (see its own docstring). confirm_new_clip() also
+only means what it claims within the same connected session this script
+already is — clip_unique_id is confirmed not stable across reconnects
+(docs/rest/session.md's clips() section).
 
-AFTER RECORDING: the new clip's file_path (name) and duration_timecode
-(length) come straight from its own Clip entry; "memory used" is computed
-as the active storage device's remaining_space before minus after — not a
-number the camera reports about the clip directly, since Clip carries no
-size field (Phase 6's rest/media.py hit the same gap for stills).
+Also the first real-hardware exercise of the storage precondition fix that
+shipped alongside confirm_new_clip(): _require_storage_ready() now gates
+solely on remaining_space, not the remaining_record_time this same
+module docstring already documented as stale immediately after a format
+switch — see _require_storage_ready()'s own docstring for the reasoning.
 
 Usage:
     python examples/rest_record_test_clip.py
@@ -94,8 +106,9 @@ def _format_seconds(seconds: int) -> str:
 
 async def _print_state(session: RestCameraSession, label: str):
     """Print camera settings, media state, and clip inventory. Returns
-    (clips, active_device) so callers can diff/compare without re-fetching
-    the same state a second time."""
+    (clips, storage) — the full StorageState, not just the active device,
+    since confirm_new_clip() takes a StorageState for its bytes-written
+    computation."""
     print(f"\n--- {label}: camera settings ---")
     fmt = await session.get_format()
     width, height = fmt.record_resolution
@@ -121,7 +134,7 @@ async def _print_state(session: RestCameraSession, label: str):
         print(f"  {exc}")
         clips = ()
 
-    return clips, device
+    return clips, storage
 
 
 async def main() -> int:
@@ -135,8 +148,7 @@ async def main() -> int:
             return 1
         print(f"Camera format set: {CODEC} {VARIANT} {RESOLUTION} {FPS}")
 
-        clips_before, device_before = await _print_state(session, "BEFORE recording")
-        ids_before = {clip.clip_unique_id for clip in clips_before}
+        clips_before, storage_before = await _print_state(session, "BEFORE recording")
 
         print(f"\n=== Recording for {RECORD_SECONDS}s ===")
         try:
@@ -157,27 +169,23 @@ async def main() -> int:
             return 1
         print("record_stop confirmed ✓")
 
-        clips_after, device_after = await _print_state(session, "AFTER recording")
-
-        new_clips = [clip for clip in clips_after if clip.clip_unique_id not in ids_before]
+        await _print_state(session, "AFTER recording")
 
         print("\n=== Captured clip ===")
-        if not new_clips:
-            print(
-                "No new clip found — GET /clips/list did not report one that wasn't "
-                "already there before recording started."
-            )
+        try:
+            result = await session.confirm_new_clip(clips_before, storage_before=storage_before)
+        except BMDVerificationError as exc:
+            print(f"confirm_new_clip failed: {exc}")
             return 1
-        for clip in new_clips:
-            print(f"  clip_unique_id: {clip.clip_unique_id}")
-            print(f"  name:           {clip.file_path}")
-            print(f"  length:         {clip.duration_timecode}")
-            print(f"  codec:          {clip.codec}")
-            print(f"  video format:   {clip.video_format}")
 
-        if device_before is not None and device_after is not None:
-            used = device_before.remaining_space - device_after.remaining_space
-            print(f"  memory used:    {_format_bytes(used)}")
+        clip = result.clip
+        print(f"  clip_unique_id: {clip.clip_unique_id}")
+        print(f"  name:           {clip.file_path}")
+        print(f"  length:         {clip.duration_timecode}")
+        print(f"  codec:          {clip.codec}")
+        print(f"  video format:   {clip.video_format}")
+        if result.bytes_written is not None:
+            print(f"  memory used:    {_format_bytes(result.bytes_written)}")
         else:
             print("  memory used:    unknown — no active storage device before/after")
 

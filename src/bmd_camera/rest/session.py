@@ -88,6 +88,7 @@ from .constants import MOUNTS_PATH, WS_PATH
 from .events import RestEventRouter
 from .exceptions import BMDRestError
 from .mapping import resolve_ble_codec_name, resolve_rest_codec_name
+from .state import CameraState, StorageDevice, StorageState
 from .timecode import Timecode, decode_rest_timecode
 
 logger = logging.getLogger(__name__)
@@ -154,36 +155,6 @@ class SupportedFormat:
 
 
 @dataclass(frozen=True)
-class StorageDevice:
-    """One member of `GET /media/workingset`'s fixed-size `workingset`
-    array — including empty slots (`device_name == ""`). Never assume
-    index 0 is the active device; the working set can (and on real
-    hardware does) hold the active disk at a different index."""
-
-    index: int
-    device_name: str
-    active: bool
-    total_space: int
-    remaining_space: int = 0
-    remaining_record_time: int = 0
-    clip_count: int = 0
-    volume: str | None = None
-
-
-@dataclass(frozen=True)
-class StorageState:
-    """Design principle 10's first real implementation — everything storage-
-    aware operations need: card presence (`devices`), the active member
-    (`active_device`, resolved from `GET /media/active` rather than by
-    guessing an index), remaining space, remaining record time, clip count.
-    `active_device` is `None` if no device in the working set reports
-    itself active."""
-
-    devices: tuple[StorageDevice, ...]
-    active_device: StorageDevice | None
-
-
-@dataclass(frozen=True)
 class Clip:
     """One entry of `GET /clips/list`'s `clipList` array — note the real
     key is `clipList`, not `clips` as the field's own name might suggest
@@ -198,6 +169,19 @@ class Clip:
     start_timecode: str | None
     duration_timecode: str | None
     video_format: str | None
+
+
+@dataclass(frozen=True)
+class RecordingResult:
+    """`confirm_new_clip()`'s return value (Phase 9) — a one-shot
+    verification result, not continuously-tracked state, so it lives here
+    with `Clip`/`Format`/`SupportedFormat` rather than on `CameraState`.
+    `bytes_written` is `None` whenever it couldn't be computed (see
+    `confirm_new_clip()`'s own docstring) — never a guessed or defaulted
+    number."""
+
+    clip: Clip
+    bytes_written: int | None
 
 
 # ── Parsing helpers ──────────────────────────────────────────────────────────
@@ -443,61 +427,104 @@ class RestCameraSession:
         self._client: RestClient | None = None
         self._router = RestEventRouter(on_event=self._on_event)
 
-        # Notification-derived, never inferred from a sent command (design
-        # principle 4) — None until the first /transports/0/record event
-        # arrives.
-        self.is_recording: bool | None = None
+        # `CameraState` (Phase 9) — every notification-driven field this
+        # session tracks continuously rather than fetching on demand,
+        # updated only from a real WS propertyValueChanged event (design
+        # principle 4), never inferred from a request this session itself
+        # made. See state.py's own module docstring for the full rationale;
+        # the properties immediately below expose each field under its
+        # original attribute name, so nothing outside this class needs to
+        # know `self.state` exists at all.
+        self.state = CameraState()
         self._recording_stopped = asyncio.Event()
 
-        # Notification-derived storage snapshot (design principle 4) — None
-        # until the first /media/workingset event arrives, never polled.
         # wait_for_low_storage() arms _low_storage_min_* and waits on
-        # _low_storage_event, which _on_event() sets when a pushed value
-        # crosses the currently armed threshold.
-        self.last_known_storage: StorageState | None = None
+        # _low_storage_event, which _on_event() sets when a pushed
+        # last_known_storage value crosses the currently armed threshold.
+        # Ephemeral per-call arming, not camera state — stays here, not on
+        # CameraState.
         self._low_storage_min_record_time_s: float | None = None
         self._low_storage_min_space_bytes: int | None = None
         self._low_storage_event = asyncio.Event()
 
-        # Camera-initiated playback interrupt detection (Phase 8 item 2,
-        # part 2) — notification-derived only (design principle 4), never
-        # set from a write this session itself made. `_in_playback` and
-        # `playback_interrupted` are both ground-truth-set by
-        # enter_playback()/exit_playback() as well as by _on_event, since a
-        # write confirmed only via its secondary GET readback never
-        # generates a WS event for _on_event to react to (see
-        # enter_playback()'s docstring). `_playback_write_in_flight` and
-        # `_transport_mode_write_in_flight` are the arm-adjacent guards
-        # _put_playback()/_set_transport_mode() hold True for the duration
-        # of their own dual-check — and, real-hardware-confirmed
-        # (POCKET_6K_G2 v8.6, 2026-08-05), _on_event checks *both* flags in
-        # *both* interrupt branches, not just the one matching a write's own
-        # property, since leaving "Output" mode was found to also push a
-        # side-effect PLAYBACK_PROPERTY speed=0 event a single-flag guard
-        # missed. See _on_event's own docstring for the full finding.
-        # `_expected_speed` is the speed value this session's own last
-        # confirmed enter_playback()/shuttle()/play()/pause() call actually
-        # set — _on_event flags any pushed speed that differs from it
-        # (not only a drop to 0), so a camera-initiated speed change that
+        # `_playback_write_in_flight`/`_transport_mode_write_in_flight` are
+        # the arm-adjacent guards _put_playback()/_set_transport_mode() hold
+        # True for the duration of their own dual-check — and,
+        # real-hardware-confirmed (POCKET_6K_G2 v8.6, 2026-08-05), _on_event
+        # checks *both* flags in *both* interrupt branches, not just the one
+        # matching a write's own property, since leaving "Output" mode was
+        # found to also push a side-effect PLAYBACK_PROPERTY speed=0 event a
+        # single-flag guard missed. See _on_event's own docstring for the
+        # full finding. `_expected_speed` is the speed value this session's
+        # own last confirmed enter_playback()/shuttle()/play()/pause() call
+        # actually set — _on_event flags any pushed speed that differs from
+        # it (not only a drop to 0), so a camera-initiated speed change that
         # lands somewhere other than 0 is caught too. Set to 0.0 by
         # enter_playback() (the camera opens paused) and updated by
-        # _put_playback() after each confirmed speed-changing write.
-        # `last_known_play`/`last_known_stop` are purely observational
-        # (Phase 8 item 2 part 1 confirmed both track
-        # /transports/0/playback's speed field precisely) and never drive
-        # playback_interrupted themselves — see _on_event.
-        self.playback_interrupted = asyncio.Event()
-        self._in_playback = False
+        # _put_playback() after each confirmed speed-changing write. All
+        # three are this session's own write-tracking bookkeeping, not
+        # camera-reported state — stay here, not on CameraState.
         self._playback_write_in_flight = False
         self._transport_mode_write_in_flight = False
         self._expected_speed: float | None = None
-        self.last_known_play: bool | None = None
-        self.last_known_stop: bool | None = None
 
     @property
     def base_url(self) -> str:
         netloc = f"{self.host}:{self.port}" if self.port else self.host
         return f"{self.scheme}://{netloc}"
+
+    # ── CameraState property delegation (Phase 9) ──────────────────────────
+    # Every field CameraState holds, exposed under its pre-refactor
+    # attribute name — external code (examples, tools, tests) is unaffected
+    # by `self.state` existing at all. See state.py's module docstring.
+
+    @property
+    def is_recording(self) -> bool | None:
+        return self.state.is_recording
+
+    @is_recording.setter
+    def is_recording(self, value: bool | None) -> None:
+        self.state.is_recording = value
+
+    @property
+    def last_known_storage(self) -> StorageState | None:
+        return self.state.last_known_storage
+
+    @last_known_storage.setter
+    def last_known_storage(self, value: StorageState | None) -> None:
+        self.state.last_known_storage = value
+
+    @property
+    def _in_playback(self) -> bool:
+        return self.state._in_playback
+
+    @_in_playback.setter
+    def _in_playback(self, value: bool) -> None:
+        self.state._in_playback = value
+
+    @property
+    def last_known_play(self) -> bool | None:
+        return self.state.last_known_play
+
+    @last_known_play.setter
+    def last_known_play(self, value: bool | None) -> None:
+        self.state.last_known_play = value
+
+    @property
+    def last_known_stop(self) -> bool | None:
+        return self.state.last_known_stop
+
+    @last_known_stop.setter
+    def last_known_stop(self, value: bool | None) -> None:
+        self.state.last_known_stop = value
+
+    @property
+    def playback_interrupted(self) -> asyncio.Event:
+        """No setter — a mutable `asyncio.Event`, mutated via its own
+        `.set()`/`.clear()`, never reassigned. `CameraState()`'s
+        `default_factory=asyncio.Event` gives every session its own Event
+        instance; `enter_playback()` clears it, `_on_event` sets it."""
+        return self.state.playback_interrupted
 
     async def __aenter__(self) -> RestCameraSession:
         """Real-hardware-confirmed failure mode this guards against
@@ -1041,8 +1068,34 @@ class RestCameraSession:
         """Design principle 10's REST implementation for the record write
         path: read `storage_state()` before allowing a start, raising
         `BMDStorageError` for no active device or an active device with no
-        remaining record time — rather than letting the camera silently
-        fail to save the clip."""
+        remaining space — rather than letting the camera silently fail to
+        save the clip.
+
+        **Gates on `remaining_space`, not `remaining_record_time` (Phase 9
+        fix).** The original version of this check gated on
+        `remaining_record_time <= 0` instead. Real-hardware finding
+        (`examples/rest_record_test_clip.py`, `POCKET_6K_G2 v8.6`,
+        2026-08-05, all three runs): `remaining_record_time` is stale
+        immediately after a `set_camera_format()` switch — it keeps
+        reporting the *pre-switch* format's estimate (`50858s`) until a
+        recording actually starts, at which point it snaps to the new
+        format's real estimate (`15251s`, for the identical `remaining_space`
+        the whole time). `remaining_space` itself stayed accurate throughout
+        every run to date, including immediately after a switch. Gating a
+        pre-flight check on the one field confirmed unreliable in exactly
+        the window this check runs risked either a false pass (a large
+        stale estimate masking a real shortage under the new format) or a
+        false block (a small stale estimate blocking a start the new
+        format could actually satisfy) — direction depends on which way the
+        switch's bitrate changed, and no run to date happened to land in
+        either failure mode, only the "stale, but still comfortably
+        positive" case documented above. Rather than build format-switch-
+        tracking machinery to detect staleness, this check now trusts the
+        field that has never been observed stale in any run: real bytes
+        free. `remaining_record_time` remains available via
+        `storage_state()` for informational use; it just no longer gates
+        this precondition.
+        """
         storage = await self.storage_state()
         device = storage.active_device
         if device is None:
@@ -1050,11 +1103,11 @@ class RestCameraSession:
                 f"[{self.host}] No active storage device in {self.profile.model_key} "
                 f"{self.profile.firmware} — cannot start recording"
             )
-        if device.remaining_record_time <= 0:
+        if device.remaining_space <= 0:
             raise BMDStorageError(
                 f"[{self.host}] Active storage device '{device.device_name}' in "
                 f"{self.profile.model_key} {self.profile.firmware} has no remaining "
-                f"record time ({device.remaining_record_time}) — cannot start recording"
+                f"space ({device.remaining_space} bytes) — cannot start recording"
             )
 
     async def _set_recording_state(self, *, recording: bool) -> None:
@@ -1119,6 +1172,91 @@ class RestCameraSession:
                 f"nor a GET readback confirmed recording={recording} within "
                 f"{overall_timeout}s"
             )
+
+    # ── Recording confirmation (Phase 9) ────────────────────────────────
+
+    async def confirm_new_clip(
+        self, clips_before: tuple[Clip, ...], storage_before: StorageState | None = None
+    ) -> RecordingResult:
+        """Identify the clip a `record_start()`/`record_stop()` cycle just
+        wrote, by diffing `clips_before` (a snapshot the caller took, e.g.
+        via `clips()`, before calling `record_start()`) against a fresh
+        `clips()` read taken now. Formalizes the diff
+        `examples/rest_record_test_clip.py` did by hand across three real
+        real-hardware runs (`POCKET_6K_G2 v8.6`, 2026-08-05) into a reusable
+        method.
+
+        **Why `clips_before` must be caller-supplied, not automatic.**
+        Unlike `is_recording`/`last_known_storage`/everything else on
+        `CameraState`, `GET /clips/list` has no WS event of any kind — this
+        cannot be notification-driven (design principle 4 has nothing to
+        observe here), and there is no "just written" flag on a `Clip`
+        either (design principle 9: reads are best-effort, not proof of
+        anything not directly reported). A before-snapshot the caller
+        already took is the only way to name which clip is new.
+
+        **Precondition, stated loudly rather than left implicit: same
+        connected session only.** `clip_unique_id` is real-hardware-
+        confirmed *not* stable across reconnects (`docs/rest/session.md`'s
+        `clips()` section: the same two physical files reported
+        `clipUniqueId` `15`/`16` in one session and `1`/`2` in a later one,
+        minutes apart, no reformat or recording in between). Passing a
+        `clips_before` snapshot captured in a *different* session than the
+        one this method runs in can produce a silently wrong "new clip" or
+        a false ambiguity — this only means what it claims to mean when
+        `clips_before` was captured earlier in the same `async with
+        RestCameraSession(...)` block.
+
+        Raises `BMDVerificationError` if zero new clips are found (the
+        recording never happened, or hasn't been indexed yet), and also if
+        **more than one** new clip appears — this method does not guess
+        which one is "the" recording, matching this codebase's established
+        refusal to guess under ambiguity (`_resolve_supported_format`'s
+        `sensor_resolution` ambiguity is the closest precedent).
+        `BMDVerificationError` rather than `BMDUnsupportedError` for both
+        cases: this is a verification question (can this session confirm
+        what it wrote), not a capability question (does the camera support
+        something). **Honestly unexercised**: no real-hardware run in this
+        codebase's history has ever produced more than one new clip from a
+        single `record_start`/`record_stop` cycle — this branch is
+        defensive, not confirmed-necessary.
+
+        If `storage_before` is given and both it and a fresh
+        `storage_state()` report an `active_device`, `bytes_written` is
+        `storage_before.active_device.remaining_space` minus the fresh
+        reading's — the same computation
+        `examples/rest_record_test_clip.py` did by hand, since `Clip` has
+        no size field of its own (the same gap Phase 6's `rest/media.py`
+        hit for stills). `None` if `storage_before` is omitted or either
+        snapshot has no active device.
+        """
+        clips_after = await self.clips()
+        ids_before = {clip.clip_unique_id for clip in clips_before}
+        new_clips = [clip for clip in clips_after if clip.clip_unique_id not in ids_before]
+
+        if not new_clips:
+            raise BMDVerificationError(
+                f"[{self.host}] confirm_new_clip(): no new clip found in GET /clips/list "
+                f"— {len(clips_before)} clips before, {len(clips_after)} now"
+            )
+        if len(new_clips) > 1:
+            new_ids = [clip.clip_unique_id for clip in new_clips]
+            raise BMDVerificationError(
+                f"[{self.host}] confirm_new_clip(): {len(new_clips)} new clips found "
+                f"({new_ids}) — cannot tell which one is the recording just confirmed"
+            )
+        clip = new_clips[0]
+
+        bytes_written: int | None = None
+        if storage_before is not None and storage_before.active_device is not None:
+            storage_after = await self.storage_state()
+            if storage_after.active_device is not None:
+                bytes_written = (
+                    storage_before.active_device.remaining_space
+                    - storage_after.active_device.remaining_space
+                )
+
+        return RecordingResult(clip=clip, bytes_written=bytes_written)
 
     # ── Writes (Phase 5) ─────────────────────────────────────────────────
 

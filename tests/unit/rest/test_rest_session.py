@@ -38,9 +38,9 @@ from bmd_camera.rest.session import (
     Clip,
     Format,
     RestCameraSession,
-    StorageState,
     SupportedFormat,
 )
+from bmd_camera.rest.state import CameraState, StorageDevice, StorageState
 
 MODEL_KEY = "POCKET_6K_G2"
 FIRMWARE = "v8.6"
@@ -328,20 +328,67 @@ def make_session(
     session._owns_session = True
     session._client = client
     session._router = RestEventRouter(on_event=session._on_event)
-    session.is_recording = None
+    session.state = CameraState()
     session._recording_stopped = asyncio.Event()
-    session.last_known_storage = None
     session._low_storage_min_record_time_s = None
     session._low_storage_min_space_bytes = None
     session._low_storage_event = asyncio.Event()
-    session.playback_interrupted = asyncio.Event()
-    session._in_playback = False
     session._playback_write_in_flight = False
     session._transport_mode_write_in_flight = False
     session._expected_speed = None
-    session.last_known_play = None
-    session.last_known_stop = None
     return session
+
+
+class TestCameraStateDelegation:
+    """Phase 9: is_recording/last_known_storage/_in_playback/last_known_play/
+    last_known_stop/playback_interrupted moved onto CameraState, exposed via
+    identically-named properties on RestCameraSession. Confirms the
+    delegation is real in both directions, and that playback_interrupted
+    (a mutable asyncio.Event, never reassigned) has no setter."""
+
+    def test_is_recording_round_trips_through_state(self):
+        session = make_session(make_profile())
+
+        session.is_recording = True
+
+        assert session.state.is_recording is True
+        session.state.is_recording = False
+        assert session.is_recording is False
+
+    def test_last_known_storage_round_trips_through_state(self):
+        session = make_session(make_profile())
+        storage = StorageState(devices=(), active_device=None)
+
+        session.last_known_storage = storage
+
+        assert session.state.last_known_storage is storage
+
+    def test_in_playback_round_trips_through_state(self):
+        session = make_session(make_profile())
+
+        session._in_playback = True
+
+        assert session.state._in_playback is True
+
+    def test_last_known_play_and_stop_round_trip_through_state(self):
+        session = make_session(make_profile())
+
+        session.last_known_play = True
+        session.last_known_stop = False
+
+        assert session.state.last_known_play is True
+        assert session.state.last_known_stop is False
+
+    def test_playback_interrupted_getter_returns_state_event(self):
+        session = make_session(make_profile())
+
+        assert session.playback_interrupted is session.state.playback_interrupted
+
+    def test_playback_interrupted_has_no_setter(self):
+        session = make_session(make_profile())
+
+        with pytest.raises(AttributeError):
+            session.playback_interrupted = asyncio.Event()
 
 
 class TestGetFormat:
@@ -831,7 +878,11 @@ class TestLastKnownStorageTracking:
 
 
 def _storage_client(
-    *, active: bool, remaining_record_time: int, extra_responses: dict[str, object] | None = None
+    *,
+    active: bool,
+    remaining_record_time: int,
+    remaining_space: int = 123,
+    extra_responses: dict[str, object] | None = None,
 ) -> FakeRestClient:
     device = {
         "activeDisk": active,
@@ -839,7 +890,7 @@ def _storage_client(
         "deviceName": "sd0" if active else "",
         "index": 0,
         "remainingRecordTime": remaining_record_time,
-        "remainingSpace": 123,
+        "remainingSpace": remaining_space,
         "totalSpace": 456,
         "volume": "A001" if active else None,
     }
@@ -866,14 +917,41 @@ class TestRecordStart:
         assert client.put_calls == []
 
     @pytest.mark.asyncio
-    async def test_raises_bmd_storage_error_when_no_remaining_record_time(self):
-        client = _storage_client(active=True, remaining_record_time=0)
+    async def test_raises_bmd_storage_error_when_no_remaining_space(self):
+        client = _storage_client(active=True, remaining_record_time=100, remaining_space=0)
         session = make_session(make_profile_with_record_confirmed(), client=client)
 
-        with pytest.raises(BMDStorageError, match="no remaining record time"):
+        with pytest.raises(BMDStorageError, match="no remaining space"):
             await session.record_start()
 
         assert client.put_calls == []
+
+    @pytest.mark.asyncio
+    async def test_does_not_raise_when_remaining_record_time_is_stale_zero(self):
+        """Phase 9 fix: remaining_record_time is confirmed stale immediately
+        after a format switch (docs/rest/session.md) — _require_storage_ready()
+        no longer gates on it. A stale remaining_record_time=0 alongside a
+        healthy remaining_space must not block record_start()."""
+        client = _storage_client(active=True, remaining_record_time=0, remaining_space=123)
+        session = make_session(make_profile_with_record_confirmed(), client=client)
+
+        async def deliver_event():
+            await asyncio.sleep(0.01)
+            session._router.handle_event(
+                {
+                    "type": "event",
+                    "data": {
+                        "action": "propertyValueChanged",
+                        "property": RECORD_PROPERTY,
+                        "value": {"recording": True},
+                    },
+                }
+            )
+
+        asyncio.create_task(deliver_event())
+        await session.record_start()
+
+        assert client.put_calls == [(RECORD_PROPERTY, {"recording": True})]
 
     @pytest.mark.asyncio
     async def test_raises_bmd_unsupported_when_endpoint_not_confirmed_in_profile(self):
@@ -1035,6 +1113,127 @@ class TestStopVerifyTimeoutDefault:
             "cam.local", MODEL_KEY, FIRMWARE, verify_timeout_s=5.0, stop_verify_timeout_s=20.0
         )
         assert session.stop_verify_timeout_s == 20.0
+
+
+def _clip(clip_unique_id: int) -> Clip:
+    return Clip(
+        clip_unique_id=clip_unique_id,
+        file_path=f"/mnt/sd0/A001/clip_{clip_unique_id}.braw",
+        codec="BRaw:5_1",
+        container="BRAW",
+        start_timecode="00:00:00:00",
+        duration_timecode="00:00:10:00",
+        video_format="4096x2160p23.98",
+    )
+
+
+def _clip_list_body(*clip_unique_ids: int) -> dict:
+    return {
+        "clipList": [
+            {
+                "clipUniqueId": cid,
+                "filePath": f"/mnt/sd0/A001/clip_{cid}.braw",
+                "codecFormat": {"codec": "BRaw:5_1", "container": "BRAW"},
+                "startTimecode": "00:00:00:00",
+                "durationTimecode": "00:00:10:00",
+                "videoFormat": "4096x2160p23.98",
+            }
+            for cid in clip_unique_ids
+        ]
+    }
+
+
+class TestConfirmNewClip:
+    """Phase 9: formalizes the before/after clips() diff
+    examples/rest_record_test_clip.py did by hand across three real
+    real-hardware runs."""
+
+    @pytest.mark.asyncio
+    async def test_returns_the_one_new_clip(self):
+        client = FakeRestClient({"/clips/list": _clip_list_body(1, 2)})
+        session = make_session(make_profile(), client=client)
+
+        result = await session.confirm_new_clip(clips_before=(_clip(1),))
+
+        assert result.clip == _clip(2)
+        assert result.bytes_written is None
+
+    @pytest.mark.asyncio
+    async def test_raises_when_no_new_clip_found(self):
+        client = FakeRestClient({"/clips/list": _clip_list_body(1)})
+        session = make_session(make_profile(), client=client)
+
+        with pytest.raises(BMDVerificationError, match="no new clip"):
+            await session.confirm_new_clip(clips_before=(_clip(1),))
+
+    @pytest.mark.asyncio
+    async def test_raises_when_multiple_new_clips_found(self):
+        """Deliberately unguessed — see confirm_new_clip()'s own docstring
+        for why this raises rather than picking one. No real-hardware run
+        has ever produced this case; this is defensive coverage only."""
+        client = FakeRestClient({"/clips/list": _clip_list_body(1, 2, 3)})
+        session = make_session(make_profile(), client=client)
+
+        with pytest.raises(BMDVerificationError, match="2 new clips"):
+            await session.confirm_new_clip(clips_before=(_clip(1),))
+
+    @pytest.mark.asyncio
+    async def test_bytes_written_computed_from_storage_before_and_after(self):
+        client = _storage_client(active=True, remaining_record_time=100, remaining_space=700)
+        client.responses["/clips/list"] = _clip_list_body(1, 2)
+        session = make_session(make_profile(), client=client)
+        storage_before = StorageState(
+            devices=(),
+            active_device=StorageDevice(
+                index=0, device_name="sd0", active=True, total_space=456, remaining_space=1000
+            ),
+        )
+
+        result = await session.confirm_new_clip(
+            clips_before=(_clip(1),), storage_before=storage_before
+        )
+
+        assert result.clip == _clip(2)
+        assert result.bytes_written == 300
+
+    @pytest.mark.asyncio
+    async def test_bytes_written_is_none_when_storage_before_omitted(self):
+        client = FakeRestClient({"/clips/list": _clip_list_body(1, 2)})
+        session = make_session(make_profile(), client=client)
+
+        result = await session.confirm_new_clip(clips_before=(_clip(1),))
+
+        assert result.bytes_written is None
+
+    @pytest.mark.asyncio
+    async def test_bytes_written_is_none_when_storage_before_has_no_active_device(self):
+        client = FakeRestClient({"/clips/list": _clip_list_body(1, 2)})
+        session = make_session(make_profile(), client=client)
+        storage_before = StorageState(devices=(), active_device=None)
+
+        result = await session.confirm_new_clip(
+            clips_before=(_clip(1),), storage_before=storage_before
+        )
+
+        assert result.bytes_written is None
+
+    @pytest.mark.asyncio
+    async def test_bytes_written_is_none_when_storage_after_has_no_active_device(self):
+        client = _storage_client(active=False, remaining_record_time=0)
+        client.responses["/clips/list"] = _clip_list_body(1, 2)
+        session = make_session(make_profile(), client=client)
+        storage_before = StorageState(
+            devices=(),
+            active_device=StorageDevice(
+                index=0, device_name="sd0", active=True, total_space=456, remaining_space=1000
+            ),
+        )
+
+        result = await session.confirm_new_clip(
+            clips_before=(_clip(1),), storage_before=storage_before
+        )
+
+        assert result.bytes_written is None
 
 
 EXPECTED_MERGED_BODY = {

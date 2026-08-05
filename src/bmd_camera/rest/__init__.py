@@ -8,16 +8,18 @@ from .exceptions import BMDRestError
 from .session import (
     Clip,
     Format,
+    RecordingResult,
     RestCameraSession,
-    StorageDevice,
-    StorageState,
     SupportedFormat,
 )
+from .state import CameraState, StorageDevice, StorageState
 
 __all__ = [
     "BMDRestError",
+    "CameraState",
     "Clip",
     "Format",
+    "RecordingResult",
     "RestCameraSession",
     "RestClient",
     "RestEventRouter",

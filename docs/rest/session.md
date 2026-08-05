@@ -158,9 +158,11 @@ against a camera; BRAW 5:1 / 4K DCI / 23.98, 60s, 1TB card with 996GB free):
    the same card with 992.48 GB free reported `15251`s (4h14m), implying ~65 MB/s, which
    matches the clip actually written (3525050368 B / 61 s = 57.8 MB/s). The camera had not
    recomputed the estimate for the new format. `remaining_space` stayed accurate
-   throughout. This matters for `_require_storage_ready()`, which gates `record_start()` on
-   `remaining_record_time > 0`, and for any future threshold built on that field — read it
-   as a pre-switch leftover, not a current number, until a recording has started.
+   throughout. This matters for `_require_storage_ready()`, which gated `record_start()` on
+   `remaining_record_time > 0` — read it as a pre-switch leftover, not a current number,
+   until a recording has started. **Closed, Phase 9**: `_require_storage_ready()` now gates
+   on `remaining_space` alone, the field confirmed accurate in every run to date, including
+   this one — see the `record_start()`/`record_stop()` section below for the full reasoning.
 
 2. **`record_stop` raised `BMDVerificationError` once on a recording that actually
    succeeded.** The first run's `record_stop` raised, but the clip was written and saved —
@@ -415,6 +417,12 @@ no repeat.
 
 ### `is_recording` / `wait_while_recording(timeout)`
 
+**Backed by `CameraState` since Phase 9** — `session.is_recording` is now a property
+reading/writing `session.state.is_recording`; no external interface change, everything
+below still holds exactly as described. See `state.py`'s module docstring for the full
+extraction (`is_recording`, `last_known_storage`, `playback_interrupted`,
+`last_known_play`/`last_known_stop`, and `_in_playback` all moved the same way).
+
 `is_recording` starts `None` and updates only from a well-formed
 `/transports/0/record` `propertyValueChanged` event's `{"recording": bool}` value —
 `__aenter__` subscribes to this property automatically, so it is live for the whole
@@ -637,13 +645,32 @@ See the real-hardware finding below for why `record_stop` needed this and
 
 `record_start()` first calls `storage_state()` and raises `BMDStorageError` — design
 principle 10's REST implementation for the record write path — when there is no active
-storage device, or the active device reports `remaining_record_time <= 0`. `record_stop()`
+storage device, or **the active device reports `remaining_space <= 0`**. `record_stop()`
 carries no such check and is a no-op when `is_recording` already positively confirms the
 camera isn't recording, mirroring the BLE `CameraSession.record_stop`'s documented
 no-echo-on-redundant-write handling (`docs/ble/recording.md`) — whether this camera's REST
 endpoint behaves the same way on a redundant `PUT` is unconfirmed, but the guard is
 harmless either way since `is_recording` is only ever notification-derived (design
 principle 4), never assumed.
+
+**Gate changed from `remaining_record_time` to `remaining_space`, Phase 9.** The original
+version of this check gated on `remaining_record_time <= 0` instead. The real-hardware
+finding above (`examples/rest_record_test_clip.py`, three runs, `POCKET_6K_G2 v8.6`,
+2026-08-05) confirmed `remaining_record_time` is stale immediately after a
+`set_camera_format()` switch — it keeps reporting the *pre-switch* format's estimate until
+a recording actually starts — while `remaining_space` stayed accurate throughout every run
+to date, including immediately after a switch. Gating a pre-flight check on the one field
+confirmed unreliable in exactly the window this check runs risked either a false pass (a
+large stale estimate masking a real shortage under the new format) or a false block (a
+small stale estimate blocking a start the new format could actually satisfy) — which
+direction depends on which way the switch's bitrate changed, and no run to date happened to
+land in either failure mode, only the "stale but still comfortably positive" case documented
+above. **Stated honestly, not overclaimed**: no real-hardware run has ever directly observed
+`remaining_record_time` actually hit `<= 0` post-switch — only staleness in one direction.
+Rather than build format-switch-tracking machinery to detect staleness, this check now
+trusts the field that has never been observed stale in any run: real bytes free.
+`remaining_record_time` remains available via `storage_state()` for informational use; it
+just no longer gates this precondition.
 
 **Capability check is GET-only, deliberately.** Both methods refuse to run unless the
 target camera/firmware's `rest/<fw>.json` profile confirms `/transports/0/record`'s `GET`
@@ -674,6 +701,52 @@ going to be the only channel this endpoint ever got). This run is also what surf
 `wait_while_recording`'s return-value-inversion defect described above — the two findings
 came from the same run: the writes themselves were solid 6/6, only the surrounding
 hold-and-check helper had the bug.
+
+### `confirm_new_clip(clips_before, storage_before=None)` → `RecordingResult` (Phase 9)
+
+Formalizes the before/after `clips()` diff `examples/rest_record_test_clip.py` did by hand
+across its three real-hardware runs into a reusable method — identifies the clip a
+`record_start()`/`record_stop()` cycle just wrote, and (optionally) how many bytes it used.
+
+**Why `clips_before` must be caller-supplied, not automatic.** Unlike everything on
+`CameraState`, `GET /clips/list` has no WS event of any kind — this cannot be
+notification-driven (design principle 4 has nothing to observe here), and a `Clip` carries
+no "just written" flag either (design principle 9: reads are best-effort, not proof of
+anything not directly reported). A before-snapshot the caller already took — via `clips()`,
+before calling `record_start()` — is the only way to name which clip is new.
+
+**Precondition, stated loudly rather than left implicit: same connected session only.**
+`clip_unique_id` is real-hardware-confirmed *not* stable across reconnects (see `clips()`'s
+own section: the same two physical files reported `clipUniqueId` `15`/`16` in one session
+and `1`/`2` in a later one, minutes apart, no reformat or recording in between). A
+`clips_before` snapshot captured in a *different* session than the one `confirm_new_clip()`
+runs in can produce a silently wrong "new clip" or a false ambiguity — this only means what
+it claims within one `async with RestCameraSession(...)` block.
+
+Diffs `clips_before` against a fresh `clips()` read by `clip_unique_id`. Raises
+`BMDVerificationError` if zero new clips are found (the recording never happened, or hasn't
+been indexed yet), and **also** if more than one new clip appears — this method does not
+guess which one is "the" recording, matching this codebase's established refusal to guess
+under ambiguity (`_resolve_supported_format`'s `sensor_resolution` ambiguity is the closest
+precedent). `BMDVerificationError` rather than `BMDUnsupportedError` for both cases: this is
+a verification question (can this session confirm what it wrote), not a capability question
+(does the camera support something). **Honestly unexercised**: no real-hardware run in this
+codebase's history has ever produced more than one new clip from a single
+`record_start`/`record_stop` cycle — the >1 branch is defensive, not confirmed-necessary.
+
+If `storage_before` is given and both it and a fresh `storage_state()` report an
+`active_device`, `RecordingResult.bytes_written` is `storage_before.active_device.
+remaining_space` minus the fresh reading's — the same computation
+`examples/rest_record_test_clip.py` did by hand, since `Clip` has no size field of its own
+(the same gap Phase 6's `rest/media.py` hit for stills). `None` if `storage_before` is
+omitted or either snapshot has no active device — never a guessed or defaulted number.
+
+**Real behavior change from the manual version it replaces, not a pure refactor.** The old
+hand-written loop in `rest_record_test_clip.py` silently tolerated any number of "new"
+clips it found; `confirm_new_clip()` raises on both zero and more than one. Unit-tested
+(`TestConfirmNewClip`); the ported example script is the real-hardware re-verification
+harness — the manual-diff version already ran clean 3x, so a clean rerun against
+`confirm_new_clip()` confirms parity. **Not yet run against real hardware.**
 
 ### `set_camera_format(codec, variant, resolution, fps)`
 
@@ -1519,9 +1592,12 @@ timestamp, rather than the first one found in ascending order.
 - **No storage precondition on `record_stop()`.** Only `record_start()` checks
   `storage_state()` — matching CLAUDE.md design principle 10's wording ("before recording
   or photo capture"), which names starting an operation, not ending one.
-- **No caching.** Every read verb hits the camera fresh. A future phase may add a
-  `CameraState`-style cached view if a real use case needs one; nothing here assumes it
-  will.
+- **No caching of plain `GET`-backed read verbs.** `get_format()`, `storage_state()`,
+  `clips()`, `timecode()`, `supported_formats()` all hit the camera fresh on every call —
+  this hasn't changed. `CameraState` (Phase 9) exists only for the notification-driven
+  subset (`is_recording`, `last_known_storage`, `playback_interrupted`, `last_known_play`/
+  `last_known_stop`) — the fields that were already tracked continuously before the
+  refactor, not a general cache over the read surface.
 - **No dedicated `/transports/0/play`/`/transports/0/stop` support.** `play()`/`stop()`
   are aliases (`shuttle(1.0)`/`exit_playback()`) rather than wrappers around these two
   endpoints — see "`play()`/`pause()`/`stop()`" above for why. If a real hardware run shows
