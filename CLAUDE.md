@@ -616,3 +616,4 @@ python -m ruff check . && python -m ruff format --check .
 - Never poll storage state in a loop — read once on connect, update from notifications
 - Never log raw BLE bytes as plain integers or Python `repr` — use uppercase hex pairs to match sniffer output
 - Never omit the camera identity prefix from operation log lines
+- Never reuse a REST `clip_unique_id` across a reconnect — real-hardware-confirmed, `POCKET_6K_G2 v8.6`, 2026-08-05: the same two files reported different `clipUniqueId` values (`15`/`16`, then `1`/`2`) across two separate sessions minutes apart, no reformat or recording in between. Re-read `clips()` fresh in the current session immediately before using an id — see `docs/rest/session.md`'s `clips()` section

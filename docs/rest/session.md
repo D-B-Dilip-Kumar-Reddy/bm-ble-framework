@@ -296,6 +296,19 @@ itself never raises on a missing card — `/media/workingset` and `/media/active
 returning valid (if all-empty) data (confirmed the same run), which is exactly why
 `storage_state()`'s `active_device` is designed to come back `None` rather than error.
 
+**Real-hardware finding — `clipUniqueId` is not stable across sessions, `POCKET_6K_G2 v8.6`,
+2026-08-05.** Two separate `GET /clips/list` reads, minutes apart, no reformat or recording
+in between, on the identical two files (`A005_08051343_C001.mov`, `A005_08051345_C002.braw`,
+same card volume `A005` both times): the first read reported `clipUniqueId=15` and `16`;
+the second reported `clipUniqueId=1` and `2` for the exact same two files. No confirmed
+mechanism for *why* — logged here as a raw, repeatable observation, not a theory. Practical
+consequence: **a `clip_unique_id` captured from one `clips()` read must not be reused after
+reconnecting** — every caller in this codebase that takes a `clip_unique_id` as an argument
+(`select_clip()`, `tools/rest/diagnose_timeline.py`, `examples/check_timeline_stale_entries.py`)
+assumes the id a prior session read is still valid; this finding says it might not be.
+Re-read `clips()` fresh within the same connected session immediately before using an id,
+rather than caching one across a reconnect.
+
 ### `timecode()` → `Timecode`
 
 `GET /transports/0/timecode`, decoded via `rest/timecode.py`'s `decode_rest_timecode` —

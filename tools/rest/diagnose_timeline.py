@@ -242,7 +242,12 @@ def parse_args() -> argparse.Namespace:
         "--clip-id",
         type=int,
         default=None,
-        help="clip_unique_id to target. Default: clips()[0], matching rest_playback.py.",
+        help="clip_unique_id to target. Default: clips()[0], matching rest_playback.py. "
+        "WARNING: clipUniqueId is not stable across reconnects (real-hardware-confirmed, "
+        "docs/rest/session.md's clips() section) — a value printed by an earlier run of "
+        "this tool, or by any other script, may no longer be valid by the time this run "
+        "connects. Re-run without --clip-id first if unsure; there is no way to know the "
+        "current id before this tool's own connection is already open.",
     )
     parser.add_argument(
         "--poll-timeout",
