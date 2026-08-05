@@ -175,7 +175,11 @@ src/bmd_camera/
                               # the timeline's contents even though DELETE never runs (501),
                               # no stale cross-format entries left behind); writes —
                               # record_start/record_stop (Phase 4, real-hardware-
-                              # confirmed) and set_camera_format (Phase 5, dual-check
+                              # confirmed; record_stop's secondary GET readback is polled
+                              # against a wider dedicated budget, stop_verify_timeout_s
+                              # (default verify_timeout_s * 3), instead of fired once —
+                              # see docs/rest/session.md's record_start()/record_stop()
+                              # section) and set_camera_format (Phase 5, dual-check
                               # verified, live-capability-gated via supported_formats(),
                               # optional sensor_resolution param for disambiguating
                               # among several camera-offered pairings — see
@@ -364,18 +368,26 @@ examples/
                             # (duration_timecode), and memory used (active storage
                             # device's remaining_space before minus after — Clip carries
                             # no size field of its own, the same gap Phase 6's
-                            # rest/media.py hit for stills). First real-hardware run
+                            # rest/media.py hit for stills). Three real-hardware runs
                             # (POCKET_6K_G2 v8.6, 2026-08-05) produced two findings, both
                             # in docs/rest/session.md: remaining_record_time is STALE
                             # immediately after a format change (reports the pre-switch
                             # format's estimate until a recording starts; remaining_space
-                            # stays accurate) — which matters for _require_storage_ready()'s
-                            # gate on that field; and record_stop can raise
-                            # BMDVerificationError on a recording that actually succeeded,
-                            # since stop is I/O-bound (1143ms PUT vs record_start's 2ms,
-                            # closing the .braw and writing its index) and
-                            # _set_recording_state fires its secondary GET readback once
-                            # with no retry
+                            # stays accurate) — confirmed all three runs — which matters for
+                            # _require_storage_ready()'s gate on that field; and record_stop
+                            # raised BMDVerificationError once on a recording that actually
+                            # succeeded (clip count already incremented next run). The two
+                            # follow-up runs disproved the original "verification window is
+                            # structurally tight" reading — PUT /transports/0/record's
+                            # round-trip time (1143-1161ms across all three) was never close
+                            # to exhausting the 5s budget — leaving a one-off camera-side
+                            # finalization delay (an on-screen warning + timecode flicker
+                            # appeared only on the failed run, and no REST property reports
+                            # it) as the honest explanation. Fixed anyway: record_stop now
+                            # gets its own wider budget, stop_verify_timeout_s (default
+                            # verify_timeout_s * 3), with its secondary GET polled instead
+                            # of fired once — record_start's single-shot behavior is
+                            # unchanged
   playback.py               # (planned)
 
 tests/

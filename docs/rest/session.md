@@ -162,21 +162,37 @@ against a camera; BRAW 5:1 / 4K DCI / 23.98, 60s, 1TB card with 996GB free):
    `remaining_record_time > 0`, and for any future threshold built on that field — read it
    as a pre-switch leftover, not a current number, until a recording has started.
 
-2. **`record_stop` can outrun its verification window while the clip is fine.** The first
-   run raised `BMDVerificationError` from `record_stop`, but the clip was written and saved
-   — the next run's own "before" state showed the clip count had gone 2 -> 3. The second
-   run's DEBUG transport log shows why the window is tight: `PUT /transports/0/record`
-   took **2 ms** for `record_start` and **1143 ms** for `record_stop` (09:47:25.884 ->
-   09:47:27.027), because stop is I/O-bound — the camera is closing the `.braw` and writing
-   its index. `_set_recording_state` starts its `verify_timeout_s` budget *after* the PUT
-   returns and fires the secondary `GET` readback **once, with no retry**, so a
-   finalization that keeps the camera at `recording: true` past ~5s misses both channels
-   and raises on a recording that succeeded. The operator also observed a warning indicator
-   and flickering timecode on the camera's own screen during the failed run — consistent
-   with media write pressure at finalization, but **no REST property reports it** (nothing
-   in either camera's 46/48 subscribable properties covers write margin or dropped frames),
-   so the camera displayed something the API never exposed. This is the same gap Phase 8's
+2. **`record_stop` raised `BMDVerificationError` once on a recording that actually
+   succeeded.** The first run's `record_stop` raised, but the clip was written and saved —
+   the next run's own "before" state showed the clip count had gone 2 -> 3. The *original*
+   write-up here read this as the verification window being structurally tight, based on
+   the second run's `PUT /transports/0/record` taking 1143 ms to return (vs.
+   `record_start`'s 2 ms) — reasoning that a finalization slower than that could plausibly
+   miss a ~5s budget. **Two further runs the same day correct that reading**: `PUT` took
+   1161 ms and 1159 ms respectively, both stops confirmed via the WS primary within the
+   original 5.0s budget with no retry needed, and both are far short of it. `PUT`'s
+   round-trip time alone was never close to exhausting `verify_timeout_s` — it was never
+   the bottleneck the first write-up implied. Across three runs, only one failed, and the
+   operator observed a warning indicator and flickering timecode on the camera's screen
+   *during that one run only* — the honest reading is a one-off, camera-side finalization
+   delay (possibly the same event behind that on-screen warning), not a timing budget that
+   is tight in general. **No REST property reports whatever that warning was** — nothing in
+   either camera's 46/48 subscribable properties covers write margin or dropped frames, so
+   the camera displayed something the API never exposed. This is the same gap Phase 8's
    frame-drop item records as unavailable.
+
+   **Fix applied regardless** (`session.py`, same day): even though three runs suggest the
+   default budget is usually enough, an occasional finalization anomaly with no REST-visible
+   cause is exactly the case a single-shot secondary check handles worst — one unlucky GET
+   right as the state flips is a real race, independent of how rare the anomaly is.
+   `record_stop` now gets its own wider overall budget, `stop_verify_timeout_s` (constructor
+   parameter, defaults to `verify_timeout_s * 3` = `15.0`s), and its secondary `GET` is
+   polled every `0.5`s for whatever time remains after the primary WS wait, instead of fired
+   once — the same poll-until-deadline shape `select_clip()` already uses for its timeline
+   membership check (`session.py:1167`). `record_start`'s behavior is unchanged: its overall
+   budget still equals `verify_timeout_s`, which reduces the poll loop to exactly one `GET`,
+   same as before this change. See "`record_start()` / `record_stop()`" below for the
+   library-surface description.
 
 Every read verb (`get_format`, `supported_formats`, `storage_state`, `clips`, `timecode`)
 is a plain `GET`, fetched fresh on every call — there is no background cache to go stale.
@@ -427,10 +443,20 @@ cross-check today should read the transport mode/state directly rather than rely
 `PUT /transports/0/record {"recording": bool}`, verified via the dual-check design
 principle 3 specifies for REST: a WS `propertyValueChanged` event on `/transports/0/record`
 primary, a `GET /transports/0/record` readback secondary. `204` on the `PUT` means
-accepted, not applied — if neither channel confirms the requested state within
-`verify_timeout_s` (constructor parameter, default `5.0`, distinct from `timeout_s`'s
-single-request timeout and `ws_timeout_s`'s WS connect timeout), `BMDVerificationError` is
-raised.
+accepted, not applied — if neither channel confirms the requested state within the
+overall budget, `BMDVerificationError` is raised.
+
+**`record_start()` and `record_stop()` use different overall budgets.** The primary WS
+wait always gets exactly `verify_timeout_s` (constructor parameter, default `5.0`,
+distinct from `timeout_s`'s single-request timeout and `ws_timeout_s`'s WS connect
+timeout) for both. Where they differ is the secondary readback: `record_start`'s overall
+budget equals `verify_timeout_s`, so — as before — it gets a single `GET` after the
+primary wait, no retry. `record_stop`'s overall budget is `stop_verify_timeout_s`
+(constructor parameter, defaults to `verify_timeout_s * 3` — `15.0`s at the library
+default), and its secondary `GET` is **polled** every `RECORD_POLL_INTERVAL_S` (`0.5`s)
+for whatever's left of that wider budget after the primary wait, rather than fired once.
+See the real-hardware finding below for why `record_stop` needed this and
+`record_start` didn't.
 
 `record_start()` first calls `storage_state()` and raises `BMDStorageError` — design
 principle 10's REST implementation for the record write path — when there is no active

@@ -86,6 +86,11 @@ PLAYBACK_PROPERTY = "/transports/0/playback"
 TIMELINE_PATH = "/timelines/0"
 TIMELINE_ADD_PATH = "/timelines/0/add"
 
+# How often _set_recording_state() re-polls the secondary GET readback once
+# the primary WS wait has used its slice of the budget — see record_stop's
+# widened timeout below.
+RECORD_POLL_INTERVAL_S = 0.5
+
 
 def _websocket_url(base_url: str) -> str:
     if base_url.startswith("https://"):
@@ -388,6 +393,7 @@ class RestCameraSession:
         timeout_s: float = 5.0,
         ws_timeout_s: float = 5.0,
         verify_timeout_s: float = 5.0,
+        stop_verify_timeout_s: float | None = None,
         session: Any | None = None,
     ) -> None:
         require_aiohttp()
@@ -402,6 +408,16 @@ class RestCameraSession:
         # back to a GET readback. Distinct from timeout_s (one HTTP request)
         # and ws_timeout_s (the WS connect handshake).
         self.verify_timeout_s = verify_timeout_s
+        # record_stop's overall verification budget — wider than
+        # verify_timeout_s because closing the .braw and writing its index is
+        # I/O-bound and real-hardware-confirmed slower than every other
+        # write's confirmation (docs/rest/session.md, 2026-08-05: PUT
+        # /transports/0/record itself took ~1.1-1.2s to return on 3 separate
+        # runs, against record_start's ~2ms). Defaults to 3x verify_timeout_s
+        # rather than sharing its budget with the fast writes.
+        self.stop_verify_timeout_s = (
+            stop_verify_timeout_s if stop_verify_timeout_s is not None else verify_timeout_s * 3
+        )
         self._log = logging.getLogger(f"{__name__}.{model_key}")
 
         # `session` may be injected (real or fake) for testing, mirroring
@@ -691,7 +707,7 @@ class RestCameraSession:
     async def _set_recording_state(self, *, recording: bool) -> None:
         """`PUT /transports/0/record`, verified via the REST dual-check
         design principle 3 specifies: a WS `propertyValueChanged` event
-        primary, a `GET` readback secondary. `204` on the `PUT` means
+        primary, a polled `GET` readback secondary. `204` on the `PUT` means
         accepted, not applied — neither check confirming raises
         `BMDVerificationError`.
 
@@ -703,6 +719,22 @@ class RestCameraSession:
         method's own verification below instead, on every call, the same
         way BLE's `record_start`/`record_stop` are verified without a
         profile-level "this command works" flag.
+
+        `record_stop` gets a wider overall budget (`stop_verify_timeout_s`)
+        than `record_start` — real-hardware finding, `POCKET_6K_G2 v8.6`,
+        2026-08-05: an early run raised `BMDVerificationError` from
+        `record_stop` on a recording that had actually succeeded (the next
+        run's own "before" state showed the clip count had already
+        incremented). `PUT /transports/0/record` itself is I/O-bound on stop
+        — closing the `.braw` and writing its index — and measured at
+        ~1.1-1.2s across three later runs, against `record_start`'s ~2ms.
+        The primary WS wait still gets exactly `verify_timeout_s`, same as
+        `record_start`; only the secondary readback's budget widens, and it
+        is now polled every `RECORD_POLL_INTERVAL_S` for whatever's left of
+        the overall budget instead of firing once — the same shape
+        `select_clip()` already uses for its own timeline-membership poll.
+        For `record_start`, the extra budget is zero, so this reduces to the
+        original single-shot secondary check exactly as before.
         """
         endpoint = self.profile.rest_endpoint(RECORD_PROPERTY)
         if endpoint is None or not endpoint.supported:
@@ -713,18 +745,26 @@ class RestCameraSession:
             )
 
         action = "record_start" if recording else "record_stop"
+        overall_timeout = self.verify_timeout_s if recording else self.stop_verify_timeout_s
+
         self._router.arm(RECORD_PROPERTY)
         await self._rest_client.put(RECORD_PROPERTY, {"recording": recording})
         event_value = await self._router.wait_for(RECORD_PROPERTY, timeout=self.verify_timeout_s)
         confirmed = _recording_flag(event_value)
-        if confirmed is None:
+
+        poll_deadline = time.monotonic() + max(0.0, overall_timeout - self.verify_timeout_s)
+        while confirmed != recording:
             body = await self._rest_client.get(RECORD_PROPERTY)
             confirmed = _recording_flag(body)
+            if confirmed == recording or time.monotonic() >= poll_deadline:
+                break
+            await asyncio.sleep(RECORD_POLL_INTERVAL_S)
+
         if confirmed != recording:
             raise BMDVerificationError(
                 f"{action}: neither a WS '{RECORD_PROPERTY}' propertyValueChanged event "
                 f"nor a GET readback confirmed recording={recording} within "
-                f"{self.verify_timeout_s}s"
+                f"{overall_timeout}s"
             )
 
     # ── Writes (Phase 5) ─────────────────────────────────────────────────

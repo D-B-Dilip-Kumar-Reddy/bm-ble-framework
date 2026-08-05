@@ -319,6 +319,7 @@ def make_session(
     session.timeout_s = 5.0
     session.ws_timeout_s = 5.0
     session.verify_timeout_s = 5.0
+    session.stop_verify_timeout_s = 5.0 * 3
     session._log = logging.getLogger("test.rest_session")
     session._session = None
     session._owns_session = True
@@ -870,6 +871,71 @@ class TestRecordStop:
 
         assert client.put_calls == [(RECORD_PROPERTY, {"recording": False})]
         assert session.is_recording is False
+
+    @pytest.mark.asyncio
+    async def test_polls_get_readback_past_verify_timeout_s(self):
+        """The scenario record_stop's widened budget exists for: the primary
+        WS wait times out (no event arrives before verify_timeout_s), and
+        the first secondary GET still reads the pre-stop value (the camera
+        is mid-finalization) — real-hardware-confirmed shape,
+        docs/rest/session.md 2026-08-05. A single-shot secondary would raise
+        here; the poll must keep retrying until stop_verify_timeout_s."""
+        client = FakeRestClient({RECORD_PROPERTY: {"recording": True}})
+        session = make_session(make_profile_with_record_confirmed(), client=client)
+        session.verify_timeout_s = 0.05
+        session.stop_verify_timeout_s = 0.3
+
+        async def flip_to_stopped_late():
+            await asyncio.sleep(0.15)
+            client.responses[RECORD_PROPERTY] = {"recording": False}
+
+        asyncio.create_task(flip_to_stopped_late())
+        await session.record_stop()
+
+        assert client.calls.count(RECORD_PROPERTY) >= 2
+
+    @pytest.mark.asyncio
+    async def test_raises_verification_error_after_stop_verify_timeout_s(self):
+        client = FakeRestClient({RECORD_PROPERTY: {"recording": True}})
+        session = make_session(make_profile_with_record_confirmed(), client=client)
+        session.verify_timeout_s = 0.02
+        session.stop_verify_timeout_s = 0.06
+
+        with pytest.raises(BMDVerificationError, match="record_stop"):
+            await session.record_stop()
+
+        assert client.calls.count(RECORD_PROPERTY) >= 2
+
+    @pytest.mark.asyncio
+    async def test_record_start_unaffected_by_stop_verify_timeout_s(self):
+        """record_start's overall budget is verify_timeout_s regardless of
+        stop_verify_timeout_s — a single secondary GET, exactly as before
+        this change."""
+        client = _storage_client(
+            active=True,
+            remaining_record_time=100,
+            extra_responses={RECORD_PROPERTY: {"recording": False}},
+        )
+        session = make_session(make_profile_with_record_confirmed(), client=client)
+        session.verify_timeout_s = 0.05
+        session.stop_verify_timeout_s = 5.0
+
+        with pytest.raises(BMDVerificationError, match="record_start"):
+            await session.record_start()
+
+        assert client.calls.count(RECORD_PROPERTY) == 1
+
+
+class TestStopVerifyTimeoutDefault:
+    def test_constructor_default_is_three_times_verify_timeout_s(self):
+        session = RestCameraSession("cam.local", MODEL_KEY, FIRMWARE, verify_timeout_s=4.0)
+        assert session.stop_verify_timeout_s == 12.0
+
+    def test_constructor_honors_explicit_override(self):
+        session = RestCameraSession(
+            "cam.local", MODEL_KEY, FIRMWARE, verify_timeout_s=5.0, stop_verify_timeout_s=20.0
+        )
+        assert session.stop_verify_timeout_s == 20.0
 
 
 EXPECTED_MERGED_BODY = {
