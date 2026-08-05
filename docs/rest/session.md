@@ -1114,6 +1114,22 @@ hardware run shows `/transports/0/play`/`/transports/0/stop` behave differently 
 `exit_playback()` section) applies to `stop()` identically — calling it also restores
 whatever format preceded playback mode.
 
+**`/transports/0/play` and `/transports/0/stop`'s WS push shape confirmed real,
+`POCKET_6K_G2 v8.6`, 2026-08-05 (Phase 8 item 2, `tools/rest/watch_events.py` run
+alongside a full `rest_playback.py` cycle)** — still writes-untested (the paragraph above
+is unchanged), but the *read* side now has direct evidence: both push plain booleans
+(`true`/`false`, not an object), matching `Notification.yaml`'s schema exactly, and their
+values track `/transports/0/playback`'s `speed` field precisely as that spec's own
+descriptions say — `play` went `true` the instant `speed` left `0` (both forward `1.0`/`2.0`
+and reverse `-1.0`), `stop` went `true` the instant `speed` returned to `0` (`pause()` and
+`stop()` alike). No unsubscribed-and-therefore-silent gap here: `RestCameraSession` doesn't
+subscribe these two by default, but a caller that subscribes them independently (as this
+run did) gets real, correctly-computed events. Still no channel of any kind reports *why* a
+transition happened — only that it did, the same ceiling every other camera-initiated-stop
+detection in this codebase has. `/transports/0/playback`'s own `position` field advanced
+smoothly through this run at a rate matching the clip's `25fps` at `speed=1.0` and roughly
+double/reverse at `speed=2.0`/`-1.0` — real, frame-position-accurate, not merely present.
+
 ### `shuttle(speed)` / `seek(position)`
 
 Both `PUT /transports/0/playback`, dual-check verified via the generic `_put_playback()`
@@ -1329,7 +1345,13 @@ timestamp, rather than the first one found in ascending order.
   checks `sensorResolution`, so once a candidate is set, a second `select_clip()` call sees
   the format as already matching and proceeds normally. Example-level, not library-level,
   on purpose — the library still raises loudly on the first attempt; only the caller that
-  chooses to retry pays for the extra requests. Not yet run against real hardware.
+  chooses to retry pays for the extra requests. **Real-hardware-confirmed, `POCKET_6K_G2
+  v8.6`, 2026-08-05**: `clip_unique_id=1` (`ProRes:HQ @ 1920x1080p25`, the same three-way
+  ambiguous combination) — the ambiguity error fired as expected, the retry found the same
+  3 candidates, and the *first* one tried (`sensor_resolution=(2880, 1512)`) succeeded on
+  the first attempt; the full remaining `rest_playback.py` sequence (`enter_playback`
+  through `exit_playback`) then passed clean. See `select_clip()`'s docstring, finding #5,
+  for why this run also closes that method's own remaining open branch.
 - **No storage precondition on `record_stop()`.** Only `record_start()` checks
   `storage_state()` — matching CLAUDE.md design principle 10's wording ("before recording
   or photo capture"), which names starting an operation, not ending one.

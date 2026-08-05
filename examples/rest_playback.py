@@ -81,8 +81,25 @@ calling `select_clip()` again sees the format as already matching and skips
 straight to its `POST`/poll, no re-triggering the ambiguity check. Stops at
 the first candidate whose `select_clip()` call succeeds. If the original
 error wasn't really the ambiguity case (0 or 1 real candidates), does not
-retry — that would just repeat a failure retrying can't fix. Not yet run
-against real hardware.
+retry — that would just repeat a failure retrying can't fix.
+
+**Real-hardware-confirmed, `POCKET_6K_G2 v8.6`, 2026-08-05:** `clip_unique_id=1`
+(`ProRes:HQ @ 1920x1080p25`, the exact three-way-ambiguous combination
+above) — `select_clip()` raised the ambiguity error as expected, the retry
+found the same 3 real candidates from `supported_formats()`, and the
+*first* candidate tried (`sensor_resolution=(2880, 1512)`) succeeded:
+`set_camera_format()` confirmed, the retried `select_clip()` call
+confirmed, and the full remaining sequence (`enter_playback` through
+`exit_playback`, all 9 steps) passed clean. This is also the first
+real-hardware run where `select_clip()`'s own `set_camera_format()` branch
+was exercised by a genuine mismatch rather than a manually-preset one —
+closing the gap finding #5 (`docs/rest/session.md`) flagged as the next
+case to confirm. `exit_playback()`'s confirmed format-revert (see below)
+reconfirmed too, this time reverting from a real switch this retry
+performed rather than one already known to have happened: format before
+`select_clip()` and format after `exit_playback()` were both `BRaw:3_1 @
+2880x1512p25`, even though the camera spent the whole playback sequence at
+`ProRes:HQ @ 1920x1080p25`.
 
 Usage:
     python examples/rest_playback.py

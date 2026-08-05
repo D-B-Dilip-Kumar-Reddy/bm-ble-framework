@@ -1204,7 +1204,16 @@ class RestCameraSession:
         (`clip_unique_id=1`) already matched the camera's format on both
         runs, so this specific run didn't exercise the `set_camera_format`
         branch — that piece's own evidence is still Phase 5's, not new
-        from this run. Finding #1's open question — whether skipping the
+        from this run. **Closed, `POCKET_6K_G2 v8.6`, 2026-08-05**: a later
+        run (`examples/rest_playback.py`'s
+        `_select_clip_trying_all_sensor_resolutions()`, added for the third
+        gap below) selected a *genuinely* mismatched `clip_unique_id=1`
+        (`ProRes:HQ @ 1920x1080p25` against a `BRaw:3_1` camera) and this
+        method's own `set_camera_format()` switch confirmed cleanly,
+        immediately followed by a successful `POST`/poll — this method's
+        switch branch now has direct real-hardware evidence of its own, not
+        just Phase 5's by extension. Finding #1's open question — whether
+        skipping the
         `DELETE` clear leaves stale cross-format entries in the timeline —
         is since closed: `examples/check_timeline_stale_entries.py`
         confirmed, symmetrically in both directions, that `POST
@@ -1248,7 +1257,11 @@ class RestCameraSession:
         comparison above never checks `sensorResolution`, a second call
         after a candidate is set sees the format as already matching. See
         `docs/rest/session.md`'s "What's deliberately out of scope" for the
-        full write-up.
+        full write-up. **Real-hardware-confirmed, `POCKET_6K_G2 v8.6`,
+        2026-08-05**: the exact `ProRes:HQ @ 1920x1080p25` combination
+        above, retried against real hardware — the ambiguity error fired,
+        the retry found the same 3 candidates, and the first one tried
+        succeeded on the first attempt.
 
         Verified by polling `GET /timelines/0` (default every 0.5s,
         `poll_interval_s`) until `_parse_timeline_clip_ids()`'s reading

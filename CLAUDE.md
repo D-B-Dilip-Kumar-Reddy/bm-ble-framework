@@ -425,7 +425,17 @@ examples/
                             # and tries set_camera_format() with each in turn, relying on
                             # select_clip()'s own format check never comparing
                             # sensorResolution so a second call after a candidate is set
-                            # proceeds normally. Not yet run against real hardware
+                            # proceeds normally. Confirmed here, POCKET_6K_G2 v8.6,
+                            # 2026-08-05, the exact ProRes:HQ @ 1920x1080p25 three-way-
+                            # ambiguous clip: the first candidate tried succeeded
+                            # immediately, and the full remaining sequence passed clean —
+                            # also the first real-hardware run of select_clip()'s own
+                            # set_camera_format() branch against a genuine mismatch (closes
+                            # its docstring's finding #5). Same run confirmed
+                            # /transports/0/play and /transports/0/stop push real,
+                            # correctly-computed booleans matching Notification.yaml
+                            # (Phase 8 item 2 — tools/rest/watch_events.py run alongside);
+                            # writes to those two paths remain untested
   check_timeline_stale_entries.py  # Takes two clip_unique_ids of differing format,
                             # switches between them via select_clip(), and reads back
                             # RestCameraSession.timeline_clip_ids() (new read verb) after
