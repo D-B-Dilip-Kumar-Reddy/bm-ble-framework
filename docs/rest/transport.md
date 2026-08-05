@@ -1118,6 +1118,27 @@ Only the immediate-return shortcut specifically (already-populated, already-low
 docs/rest/session.md's `last_known_storage`/`wait_for_low_storage()` section for the full
 write-up and how low-risk that residual gap is.
 
+### `tools/rest/diagnose_timeline.py`
+
+Diagnostic built for a real `select_clip()` failure, `POCKET_6K_G2 v8.6`, 2026-08-05: two
+back-to-back runs of `examples/rest_playback.py` against a freshly-reformatted 128GB card
+(the same card `verify_low_storage.py` above was run against) both failed identically —
+`POST /timelines/0/add {"clips": [{"clipUniqueId": 1}]}` raised no error, but
+`GET /timelines/0` came back genuinely empty (`{"clips": []}`) on every read within
+`select_clip()`'s 5s poll budget, not "other clips but not mine". Every earlier confirmed
+run of this exact write path was against a card already holding more clips; this is the
+first attempt against a freshly-reformatted card with only a handful, and the first data
+point either way on whether that's the relevant variable.
+
+`select_clip()`'s own 5s timeout gives up too fast to distinguish "genuinely stuck empty"
+from "correct, just slower than 5s on this card" — this tool removes that limit, printing
+every `GET /timelines/0` poll (default up to 30s) instead of failing silently at 5s, plus
+the full `clips()` listing, `get_format()`, and the pre-write baseline, so the failure mode
+is visible rather than inferred. Reaches into `RestCameraSession._rest_client` directly for
+the raw `POST`/`DELETE` calls (no public wrapper exists for just that half of what
+`select_clip()` does) — deliberate, since inspecting exactly that write path is this tool's
+whole purpose. Not yet run against real hardware.
+
 ---
 
 ## Security note

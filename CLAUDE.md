@@ -319,7 +319,16 @@ tools/
                             # crossing mid-wait" branch (True after 3.1s waiting on the first
                             # real /media/workingset push, not the immediate-return shortcut)
                             # both confirmed; only the shortcut itself has no dedicated run
-                            # yet). See docs/rest/transport.md
+                            # yet), and diagnose_timeline.py (built for a real select_clip()
+                            # failure, POCKET_6K_G2 v8.6, 2026-08-05: POST /timelines/0/add
+                            # raised no error but GET /timelines/0 came back genuinely empty
+                            # within select_clip()'s 5s poll budget, on a freshly-reformatted
+                            # 128GB card with only a handful of clips — every earlier confirmed
+                            # run of this write path was against a card already holding more
+                            # clips. Removes the 5s limit and prints every poll instead of
+                            # failing silently, so a slow-but-correct timeline and a
+                            # genuinely-stuck-empty one look different in the output; not yet
+                            # run against real hardware). See docs/rest/transport.md
   captures/                 # Runtime output of sniffers/, control/, and rest/ scripts (gitignored)
 
 Tools are grouped by folder according to what kind of thing they do — read-only
