@@ -1161,6 +1161,14 @@ would have populated the timeline, `POST` or not" — genuinely unresolved, and 
 now sitting on the card as the next real test (`select_clip()` itself, not this bypass
 tool, against a clip already confirmed mismatched).
 
+**`--skip-post`, added the same day to answer that question directly**: switches format to
+match the target clip via `set_camera_format()` — the same resolution path
+`select_clip()` uses internally (`resolve_ble_codec_name`, `_resolution_name_for_dimensions`)
+— then reads `GET /timelines/0` immediately, with no `DELETE` and no `POST` ever sent. If
+the target clip already appears, the format switch alone populates the timeline and
+`POST /timelines/0/add` may never have mattered in any confirmed run to date; if it
+doesn't, `POST` does real work. Not yet run.
+
 ---
 
 ## Security note

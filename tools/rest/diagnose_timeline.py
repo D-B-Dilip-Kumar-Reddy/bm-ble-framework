@@ -54,6 +54,18 @@ Usage:
     python tools/rest/diagnose_timeline.py \\
         --host pocket-cinema-camera-6k-g2.local \\
         --model-key POCKET_6K_G2 --firmware v8.6 --poll-timeout 30
+
+    # --skip-post: the decisive follow-up (docs/rest/session.md's select_clip()
+    # section, finding #7's open question). Switches the camera's format to
+    # match the target clip via set_camera_format() -- the same resolution
+    # this tool otherwise deliberately skips -- then reads GET /timelines/0
+    # immediately, with NO DELETE and NO POST ever sent. If the target clip
+    # already appears, the format switch alone populates the timeline and
+    # POST /timelines/0/add may never have mattered in any confirmed run to
+    # date; if it doesn't appear, POST is doing real work after all.
+    python tools/rest/diagnose_timeline.py \\
+        --host pocket-cinema-camera-6k-g2.local \\
+        --model-key POCKET_6K_G2 --firmware v8.6 --clip-id 16 --skip-post
 """
 
 from __future__ import annotations
@@ -62,16 +74,75 @@ import argparse
 import asyncio
 import time
 
-from bmd_camera import RestCameraSession
+from bmd_camera import BMDVerificationError, RestCameraSession
 from bmd_camera.exceptions import BMDConnectionError, BMDStorageError, BMDUnsupportedError
 from bmd_camera.rest.exceptions import BMDRestError
-from bmd_camera.rest.session import TIMELINE_ADD_PATH, TIMELINE_PATH
+from bmd_camera.rest.mapping import resolve_ble_codec_name
+from bmd_camera.rest.session import (
+    TIMELINE_ADD_PATH,
+    TIMELINE_PATH,
+    Clip,
+    _parse_video_format,
+    _resolution_name_for_dimensions,
+)
 
 # The raw RestClient calls below bypass select_clip()'s own error handling
 # deliberately (that's the point of this tool) — these are the specific
 # exceptions RestClient.delete()/.post() can raise, per its status-code
 # contract (docs/rest/transport.md).
 _REST_WRITE_ERRORS = (BMDUnsupportedError, BMDRestError, BMDConnectionError)
+
+
+async def _run_skip_post(session: RestCameraSession, target: Clip, target_id: int) -> int:
+    """The decisive test finding #7 (docs/rest/session.md) leaves open:
+    switch format to match `target` via the same resolution path
+    `select_clip()` uses internally, then read `GET /timelines/0`
+    immediately — no `DELETE`, no `POST`, ever. If `target_id` already
+    appears, the format switch alone populated the timeline."""
+    parsed = _parse_video_format(target.video_format)
+    if parsed is None:
+        print(f"\nclip_unique_id={target_id}'s videoFormat {target.video_format!r} unparseable.")
+        return 1
+    width, height, fps_str = parsed
+
+    ble_pair = resolve_ble_codec_name(session.profile.rest.format_names, target.codec)
+    if ble_pair is None:
+        print(f"\ncodec {target.codec!r} has no confirmed reverse mapping in this profile.")
+        return 1
+    family, variant = ble_pair
+
+    resolution_name = _resolution_name_for_dimensions(session.profile.resolutions, width, height)
+    if resolution_name is None:
+        print(f"\n{width}x{height} has no matching entry in this profile's resolutions table.")
+        return 1
+
+    print(
+        f"\n--- set_camera_format({family!r}, {variant!r}, {resolution_name!r}, {fps_str!r}) "
+        f"(no DELETE, no POST) ---"
+    )
+    try:
+        await session.set_camera_format(family, variant, resolution_name, fps_str)
+        print("  confirmed")
+    except (BMDUnsupportedError, BMDVerificationError, ValueError) as exc:
+        print(f"  {type(exc).__name__}: {exc}")
+        return 1
+
+    after = await session.timeline_clip_ids()
+    print(f"\n--- GET {TIMELINE_PATH} immediately after the switch, no write in between ---")
+    print(f"  {after}")
+
+    print("\n=== Result ===")
+    if target_id in after:
+        print(
+            f"clip_unique_id={target_id} already appears — the format switch alone "
+            "populated the timeline, with no POST /timelines/0/add ever sent."
+        )
+    else:
+        print(
+            f"clip_unique_id={target_id} does NOT appear — the format switch alone was "
+            "not sufficient; POST /timelines/0/add does real work after all."
+        )
+    return 0
 
 
 async def run(args: argparse.Namespace) -> int:
@@ -109,6 +180,9 @@ async def run(args: argparse.Namespace) -> int:
 
         before = await session.timeline_clip_ids()
         print(f"\n--- GET {TIMELINE_PATH} before any write ---\n  {before}")
+
+        if args.skip_post:
+            return await _run_skip_post(session, target, target_id)
 
         endpoint = session.profile.rest_endpoint(TIMELINE_PATH)
         if endpoint is None or not endpoint.supported:
@@ -175,6 +249,12 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=30.0,
         help="Seconds to poll GET /timelines/0 for, well past select_clip()'s 5s default.",
+    )
+    parser.add_argument(
+        "--skip-post",
+        action="store_true",
+        help="Switch format to match the target clip, then read the timeline with no "
+        "DELETE/POST at all — isolates whether the format switch alone populates it.",
     )
     return parser.parse_args()
 

@@ -340,8 +340,10 @@ tools/
                             # format to match the target clip before POSTing, so none can
                             # distinguish "the POST selected the clip" from "the format
                             # switch alone already would have populated the timeline" — see
-                            # docs/rest/session.md's select_clip() section, finding #7).
-                            # See docs/rest/transport.md
+                            # docs/rest/session.md's select_clip() section, finding #7;
+                            # --skip-post isolates the answer directly: switches format via
+                            # set_camera_format() then reads the timeline with no DELETE/POST
+                            # ever sent, not yet run). See docs/rest/transport.md
   captures/                 # Runtime output of sniffers/, control/, and rest/ scripts (gitignored)
 
 Tools are grouped by folder according to what kind of thing they do — read-only
