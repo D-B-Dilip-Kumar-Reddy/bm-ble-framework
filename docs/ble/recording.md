@@ -238,12 +238,17 @@ attempt the command.
 Storage characteristics to monitor are per-camera. Add them to the payload
 JSON under `storage` as they are confirmed via sniffer.
 
-**REST note:** `GET /media/workingset` and `GET /media/active` already
-return real numbers over REST (`remainingRecordTime`, `remainingSpace`,
-device/slot state) — see `docs/rest/transport.md`. Once a `RestCameraSession`
-exists, storage-aware operations may not need to wait on this BLE-only plan
-at all; that's a design decision for whichever phase builds it, not a claim
-this doc makes now.
+**REST note, decided (Phase 9):** `GET /media/workingset` and `GET /media/active`
+already return real numbers over REST (`remainingRecordTime`, `remainingSpace`,
+device/slot state) — see `docs/rest/transport.md`. Storage-aware operations
+did not wait on this BLE-only plan: `RestCameraSession` now has its own,
+independent implementation (`rest/state.py`'s `CameraState`/`StorageState`,
+`last_known_storage`/`wait_for_low_storage()` from Phase 8 item 1, the
+`_require_storage_ready()` precondition, and `confirm_new_clip()`'s
+post-recording confirmation) — see `docs/rest/session.md`. This BLE plan
+remains exactly what it was — design intent for the BLE side specifically —
+now confirmed as a parallel track rather than a prerequisite either side
+needed to wait on.
 
 ---
 
