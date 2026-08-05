@@ -297,7 +297,14 @@ tools/
                             # sweep_camera_format.py (Phase 5 — exhaustive codec/quality/
                             # resolution/fps/sensor-area verification sweep via
                             # RestCameraSession.set_camera_format(), the REST analogue of
-                            # tools/control/sweep_camera_format.py). See docs/rest/transport.md
+                            # tools/control/sweep_camera_format.py), and verify_low_storage.py
+                            # (Phase 8 item 1 — real-hardware verification for
+                            # wait_for_low_storage(), whose threshold-crossing logic had only
+                            # run against the fake-client unit suite; recommends a smaller card
+                            # than every other real-hardware run in this repo used, since a
+                            # meaningful threshold is otherwise impractical to reach in one
+                            # session; not yet run against real hardware itself). See
+                            # docs/rest/transport.md
   captures/                 # Runtime output of sniffers/, control/, and rest/ scripts (gitignored)
 
 Tools are grouped by folder according to what kind of thing they do — read-only

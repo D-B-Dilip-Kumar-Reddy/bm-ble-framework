@@ -1087,6 +1087,20 @@ section.
 confirmed, 16 unsupported, 0 unconfirmed — with per-combination timing now 0.0–0.2s (a
 handful of 1.1s outliers) instead of the uniform ~6.0s the pre-fix run showed.
 
+### `tools/rest/verify_low_storage.py`
+
+Real-hardware verification for `RestCameraSession.wait_for_low_storage()` (Phase 8 item 1,
+`docs/rest/session.md`'s `last_known_storage`/`wait_for_low_storage()` section) — built
+because that method's threshold-crossing logic, immediate-return shortcut, and
+return-value contract had only run against the injected-fake unit test suite. Connects,
+prints a baseline `storage_state()` snapshot, calls `wait_for_low_storage()` with the
+thresholds given on the command line, and reports the result, elapsed time, and the final
+`last_known_storage` snapshot. Records nothing itself — crossing a real threshold means
+running a real recording concurrently (`examples/rest_record_test_clip.py` or the camera
+body), which is why this tool's own docstring recommends a smaller card (128GB) than the
+1TB card every other real-hardware run in this doc used — a meaningful threshold is
+otherwise impractical to reach in one session. Not yet run against real hardware itself.
+
 ---
 
 ## Security note
