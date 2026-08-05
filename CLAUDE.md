@@ -264,7 +264,24 @@ src/bmd_camera/
                               # set_camera_format() again explicitly — see
                               # docs/rest/session.md for the full four-run trail and
                               # exactly which endpoints/field names are sweep-confirmed vs.
-                              # this migration's own plan-derived hypotheses
+                              # this migration's own plan-derived hypotheses;
+                              # playback_interrupted / wait_for_playback_interrupt(timeout)
+                              # (Phase 8 item 2, part 2) — the playback analogue of
+                              # is_recording/wait_while_recording, set only from a
+                              # /transports/0/playback speed-drop or /transports/0
+                              # mode-left-"Output" event that arrived with none of this
+                              # session's own writes in flight (_playback_write_in_flight /
+                              # _transport_mode_write_in_flight guard _put_playback()/
+                              # _set_transport_mode() for exactly this, race-free against the
+                              # self-requested confirming event itself — see session.py's
+                              # _on_event docstring). PLAY_PROPERTY/STOP_PROPERTY (Phase 8
+                              # item 2 part 1's confirmed-real push shape) are now subscribed
+                              # by __aenter__ and tracked as last_known_play/last_known_stop,
+                              # a corroborating signal only — not the trigger, since neither
+                              # has an ordering guarantee relative to _put_playback()'s own
+                              # dual-check the way PLAYBACK_PROPERTY does. Built and
+                              # unit-tested only; tools/rest/verify_playback_interrupt.py is
+                              # the real-hardware verification script, not yet run
     mapping.py                 # Codec name derivation between the BLE profile's vocabulary
                               # and REST's own spelling — confirmed strings always win
                               # (design principle 1); this is a fallback seed only.
@@ -343,7 +360,20 @@ tools/
                             # docs/rest/session.md's select_clip() section, finding #7;
                             # --skip-post isolates the answer directly: switches format via
                             # set_camera_format() then reads the timeline with no DELETE/POST
-                            # ever sent, not yet run). See docs/rest/transport.md
+                            # ever sent, not yet run), and verify_playback_interrupt.py
+                            # (Phase 8 item 2, part 2 — real-hardware verification for
+                            # RestCameraSession.playback_interrupted /
+                            # wait_for_playback_interrupt(), whose in-flight-guard race-free
+                            # logic had only run against the fake-client unit suite
+                            # (TestPlaybackInterrupted, TestWaitForPlaybackInterrupt). Two
+                            # phases: a self-requested sanity check (select_clip through
+                            # stop(), asserting playback_interrupted stays clear throughout —
+                            # the in-flight guards' own real-hardware test) followed by the
+                            # real positive case (play(), then pull the card or press
+                            # stop/pause on the camera body, then
+                            # wait_for_playback_interrupt()). Follows verify_low_storage.py's
+                            # precedent for shape and reporting; not yet run against real
+                            # hardware). See docs/rest/transport.md
   captures/                 # Runtime output of sniffers/, control/, and rest/ scripts (gitignored)
 
 Tools are grouped by folder according to what kind of thing they do — read-only

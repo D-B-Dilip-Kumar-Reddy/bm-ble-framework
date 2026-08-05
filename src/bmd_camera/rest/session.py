@@ -47,6 +47,14 @@ reads the event (and, secondarily, a `GET`) locally rather than setting
 ever sees a value the camera itself reported. Everything else (`get_format`,
 `storage_state`, `clips`, `timecode`) is a plain `GET`, fetched fresh on
 every call — there is no background cache to go stale.
+
+`playback_interrupted`/`wait_for_playback_interrupt()` (Phase 8 item 2, part
+2) hold the same discipline for playback that `is_recording` holds for
+recording — set only from a `/transports/0/playback` speed-drop or
+`/transports/0` mode-left-`"Output"` event that arrived with none of this
+session's own writes in flight, never inferred from a `pause()`/`stop()`
+call this session itself made. Not yet run against real hardware — see
+`docs/rest/session.md`'s Phase 8 item 2 section.
 """
 
 from __future__ import annotations
@@ -84,6 +92,8 @@ FORMAT_PROPERTY = "/system/format"
 TRANSPORT_MODE_PROPERTY = "/transports/0"
 PLAYBACK_PROPERTY = "/transports/0/playback"
 WORKINGSET_PROPERTY = "/media/workingset"
+PLAY_PROPERTY = "/transports/0/play"
+STOP_PROPERTY = "/transports/0/stop"
 TIMELINE_PATH = "/timelines/0"
 TIMELINE_ADD_PATH = "/timelines/0/add"
 
@@ -444,6 +454,30 @@ class RestCameraSession:
         self._low_storage_min_space_bytes: int | None = None
         self._low_storage_event = asyncio.Event()
 
+        # Camera-initiated playback interrupt detection (Phase 8 item 2,
+        # part 2) — notification-derived only (design principle 4), never
+        # set from a write this session itself made. `_in_playback` and
+        # `playback_interrupted` are both ground-truth-set by
+        # enter_playback()/exit_playback() as well as by _on_event, since a
+        # write confirmed only via its secondary GET readback never
+        # generates a WS event for _on_event to react to (see
+        # enter_playback()'s docstring). `_playback_write_in_flight` and
+        # `_transport_mode_write_in_flight` are the arm-adjacent guards
+        # _put_playback()/_set_transport_mode() hold True for the duration
+        # of their own dual-check, so the exact event that confirms a
+        # self-requested pause()/stop() is never mistaken for a
+        # camera-initiated one — see _on_event's own docstring for why this
+        # is race-free. `last_known_play`/`last_known_stop` are purely
+        # observational (Phase 8 item 2 part 1 confirmed both track
+        # /transports/0/playback's speed field precisely) and never drive
+        # playback_interrupted themselves — see _on_event.
+        self.playback_interrupted = asyncio.Event()
+        self._in_playback = False
+        self._playback_write_in_flight = False
+        self._transport_mode_write_in_flight = False
+        self.last_known_play: bool | None = None
+        self.last_known_stop: bool | None = None
+
     @property
     def base_url(self) -> str:
         netloc = f"{self.host}:{self.port}" if self.port else self.host
@@ -481,6 +515,23 @@ class RestCameraSession:
         — the primary channel `wait_for_low_storage()` depends on. Without
         this the property would never push to this connection at all, the
         same gap `/system/format` had before this fix.
+
+        Also subscribes to `/transports/0/play` and `/transports/0/stop`
+        (Phase 8 item 2) — confirmed real and pushing correctly-computed
+        booleans that track `/transports/0/playback`'s `speed` field
+        precisely (`POCKET_6K_G2 v8.6`, 2026-08-05,
+        `tools/rest/watch_events.py` run alongside `examples/rest_playback.py`
+        — see `docs/rest/session.md`'s `play()`/`pause()`/`stop()` section).
+        Prior to this fix these two were the same kind of dead channel
+        `/system/format` and `/media/workingset` were before their own
+        fixes above: real and observed pushing correctly by a caller that
+        subscribed independently, but never subscribed by this session
+        itself, so `last_known_play`/`last_known_stop` would otherwise never
+        update. `playback_interrupted`'s own detection does not depend on
+        either of these two (see `_on_event`'s docstring for why
+        `/transports/0/playback`'s own `speed` field is the interrupt
+        trigger instead) — they are tracked here purely as a second,
+        independent corroborating signal.
         """
         if self._session is None:
             self._session = aiohttp.ClientSession()
@@ -501,6 +552,8 @@ class RestCameraSession:
             await self._router.subscribe(TRANSPORT_MODE_PROPERTY)
             await self._router.subscribe(PLAYBACK_PROPERTY)
             await self._router.subscribe(WORKINGSET_PROPERTY)
+            await self._router.subscribe(PLAY_PROPERTY)
+            await self._router.subscribe(STOP_PROPERTY)
             connected = True
         finally:
             if not connected:
@@ -521,9 +574,37 @@ class RestCameraSession:
         self._log.info("[%s] Disconnected", self.host)
 
     def _on_event(self, prop: str, value: Any) -> None:
-        """Updates `is_recording` and `last_known_storage` only — never
-        inferred from a request this session itself made, only from what
-        the camera reports back (design principle 4)."""
+        """Updates `is_recording`, `last_known_storage`,
+        `last_known_play`/`last_known_stop`, and `playback_interrupted` —
+        never inferred from a request this session itself made, only from
+        what the camera reports back (design principle 4).
+
+        **Why `/transports/0/playback`'s own `speed` field is
+        `playback_interrupted`'s trigger, not `/transports/0/stop`** (Phase
+        8 item 2, part 2), even though Part 1 confirmed `stop` tracks
+        `speed` reaching `0` precisely: `_put_playback()` arms and waits on
+        `PLAYBACK_PROPERTY` for its own dual-check, so the exact WS delivery
+        that satisfies a self-requested `pause()`/`shuttle(0.0)` is the same
+        delivery this method receives — and `RestEventRouter.handle_event()`
+        always calls `on_event()` *before* it wakes any `wait_for()` waiter
+        (`events.py`), so `_playback_write_in_flight` is still `True` at the
+        exact moment this method sees that event. `/transports/0/stop` is a
+        second, independently-pushed property with no such ordering
+        guarantee relative to `_put_playback()`'s own completion — using it
+        as the trigger would leave a real race window between
+        `_playback_write_in_flight` being cleared and `stop`'s own push
+        arriving. `/transports/0/stop` is still subscribed and tracked
+        (`last_known_stop`) as a corroborating signal, just not the
+        authoritative one.
+
+        Symmetrically, `TRANSPORT_MODE_PROPERTY` reporting a mode other than
+        `"Output"` while `_in_playback` is `True` and no
+        `_set_transport_mode()` write is in flight
+        (`_transport_mode_write_in_flight`) means the camera left playback
+        mode without this session asking — the same "arrived while nothing
+        of mine was in flight" test, applied to the other write path
+        `enter_playback()`/`exit_playback()` use.
+        """
         if prop == RECORD_PROPERTY and isinstance(value, dict):
             recording = value.get("recording")
             if isinstance(recording, bool):
@@ -540,6 +621,29 @@ class RestCameraSession:
             storage = _parse_storage_state(value, None)
             self.last_known_storage = storage
             self._check_low_storage(storage)
+        elif prop == PLAYBACK_PROPERTY and isinstance(value, dict):
+            speed = value.get("speed")
+            if (
+                isinstance(speed, (int, float))
+                and speed == 0
+                and self._in_playback
+                and not self._playback_write_in_flight
+            ):
+                self.playback_interrupted.set()
+        elif prop == TRANSPORT_MODE_PROPERTY and isinstance(value, dict):
+            mode = value.get("mode")
+            if (
+                isinstance(mode, str)
+                and mode != "Output"
+                and self._in_playback
+                and not self._transport_mode_write_in_flight
+            ):
+                self.playback_interrupted.set()
+                self._in_playback = False
+        elif prop == PLAY_PROPERTY and isinstance(value, bool):
+            self.last_known_play = value
+        elif prop == STOP_PROPERTY and isinstance(value, bool):
+            self.last_known_stop = value
 
     def _check_low_storage(self, storage: StorageState) -> None:
         if (
@@ -666,6 +770,51 @@ class RestCameraSession:
         finally:
             self._low_storage_min_record_time_s = None
             self._low_storage_min_space_bytes = None
+
+    async def wait_for_playback_interrupt(self, timeout: float) -> bool:
+        """Wait up to `timeout` seconds for a camera-initiated playback
+        interrupt — a `/transports/0/playback` speed drop to `0`, or
+        `/transports/0` reporting a mode other than `"Output"`, that
+        arrived while this session had no matching write of its own in
+        flight (see `_on_event`'s docstring). This is Phase 8 item 2's
+        playback analogue of `wait_while_recording`'s camera-initiated-stop
+        detection — pulling the card, or pressing stop/pause on the camera
+        body, mid-playback.
+
+        **Contract, same polarity as `wait_for_low_storage`, not
+        `wait_while_recording`** (see that method's own docstring for why
+        this codebase states this explicitly every time): returns `True` if
+        an interrupt was observed — either already set when called, or a
+        qualifying event arrived before `timeout` elapsed. Returns `False`
+        if `timeout` elapses with nothing observed. Read the name, not a
+        sibling method, when using this.
+
+        Only meaningful while `_in_playback` is `True` — i.e. after
+        `enter_playback()` has confirmed and before `exit_playback()`/
+        `stop()` has. Calling this outside that window will simply time out,
+        since `_on_event` only ever sets `playback_interrupted` while
+        `_in_playback` is `True`.
+
+        **Honest ceiling, same as every other camera-initiated-stop
+        detection in this codebase**: this reports that playback stopped
+        unexpectedly, never why. There is no error/fault event channel on
+        this camera's REST API at all (`docs/rest/session.md`'s Phase 8
+        item 3 write-up) — a caller wanting the reason still has to look at
+        the camera itself.
+
+        Not yet run against real hardware — see `docs/rest/session.md`'s
+        Phase 8 item 2 section for the plan's own verification bullet
+        (pull the card, or stop/pause on the camera body, mid-`play()`, and
+        confirm this returns `True`; confirm a normal `pause()`/`stop()`
+        does not set it).
+        """
+        if self.playback_interrupted.is_set():
+            return True
+        try:
+            await asyncio.wait_for(self.playback_interrupted.wait(), timeout=timeout)
+        except TimeoutError:
+            return False
+        return True
 
     @property
     def _rest_client(self) -> RestClient:
@@ -1394,8 +1543,18 @@ class RestCameraSession:
         since — is expected to dual-check-fail with a `BMDVerificationError`
         (nothing observably changes) rather than a clearer diagnosis naming
         the mismatch.
+
+        Sets `_in_playback = True` and clears `playback_interrupted` on
+        success (Phase 8 item 2, part 2) — explicitly here, not left to
+        `_on_event`, since a call confirmed only via the secondary `GET`
+        readback never generates a WS event for `_on_event` to react to.
+        Clearing here means a stale `playback_interrupted` left `.set()` by
+        an *earlier* playback cycle's interrupt can never be mistaken for a
+        fresh one in this cycle.
         """
         await self._set_transport_mode("Output")
+        self._in_playback = True
+        self.playback_interrupted.clear()
 
     async def exit_playback(self) -> None:
         """Leave playback mode, back to live view — `PUT /transports/0
@@ -1439,8 +1598,15 @@ class RestCameraSession:
         `select_clip()`'s switch. See docs/rest/session.md's
         `enter_playback()` / `exit_playback()` section for the full
         three-run trail.
+
+        Sets `_in_playback = False` on success (Phase 8 item 2, part 2) —
+        explicitly here for the same reason `enter_playback()` sets it
+        `True` explicitly: a call confirmed only via the secondary `GET`
+        readback never generates a WS event for `_on_event`'s own
+        mode-left-`"Output"` branch to react to.
         """
         await self._set_transport_mode("InputPreview")
+        self._in_playback = False
 
     async def _set_transport_mode(self, mode: str) -> None:
         """`PUT /transports/0 {"mode": mode}`, dual-check verified exactly
@@ -1457,6 +1623,14 @@ class RestCameraSession:
         `docs/rest/transport.md`'s reshaping table). This method does not
         enforce that itself; the camera's own rejection is the real guard,
         surfacing here as a failed verification.
+
+        Holds `_transport_mode_write_in_flight = True` for the duration of
+        the write and its own dual-check (Phase 8 item 2, part 2) — the
+        guard `_on_event`'s mode-left-`"Output"` interrupt check relies on
+        to tell a self-requested `exit_playback()`/`stop()` apart from a
+        camera-initiated one. See `_on_event`'s docstring for why this is
+        race-free even though the guard is cleared before this method
+        returns.
         """
         endpoint = self.profile.rest_endpoint(TRANSPORT_MODE_PROPERTY)
         if endpoint is None or not endpoint.put_supported:
@@ -1465,15 +1639,19 @@ class RestCameraSession:
                 f"the {self.profile.model_key} {self.profile.firmware} rest/ profile — run "
                 "tools/rest/probe_endpoints.py --probe-writes against this camera first."
             )
-        self._router.arm(TRANSPORT_MODE_PROPERTY)
-        await self._rest_client.put(TRANSPORT_MODE_PROPERTY, {"mode": mode})
-        event_value = await self._router.wait_for(
-            TRANSPORT_MODE_PROPERTY, timeout=self.verify_timeout_s
-        )
-        confirmed = _transport_mode(event_value)
-        if confirmed is None:
-            body = await self._rest_client.get(TRANSPORT_MODE_PROPERTY)
-            confirmed = _transport_mode(body)
+        self._transport_mode_write_in_flight = True
+        try:
+            self._router.arm(TRANSPORT_MODE_PROPERTY)
+            await self._rest_client.put(TRANSPORT_MODE_PROPERTY, {"mode": mode})
+            event_value = await self._router.wait_for(
+                TRANSPORT_MODE_PROPERTY, timeout=self.verify_timeout_s
+            )
+            confirmed = _transport_mode(event_value)
+            if confirmed is None:
+                body = await self._rest_client.get(TRANSPORT_MODE_PROPERTY)
+                confirmed = _transport_mode(body)
+        finally:
+            self._transport_mode_write_in_flight = False
         if confirmed != mode:
             raise BMDVerificationError(
                 f"transport mode -> {mode!r}: neither a WS '{TRANSPORT_MODE_PROPERTY}' "
@@ -1579,6 +1757,13 @@ class RestCameraSession:
         fields this call actually asked to change), not the full merged
         body — the initial `GET`'s other fields are context, not something
         this call attests to.
+
+        Holds `_playback_write_in_flight = True` for the duration of the
+        write and its own dual-check (Phase 8 item 2, part 2) — the guard
+        `_on_event`'s speed-drop interrupt check relies on to tell a
+        self-requested `pause()`/`shuttle(0.0)` apart from a camera-initiated
+        one. See `_on_event`'s docstring for why this is race-free even
+        though the guard is cleared before this method returns.
         """
         endpoint = self.profile.rest_endpoint(PLAYBACK_PROPERTY)
         if endpoint is None or not endpoint.put_supported:
@@ -1589,13 +1774,19 @@ class RestCameraSession:
             )
         current = await self._rest_client.get(PLAYBACK_PROPERTY)
         body = {**current, **changes} if isinstance(current, dict) else dict(changes)
-        self._router.arm(PLAYBACK_PROPERTY)
-        await self._rest_client.put(PLAYBACK_PROPERTY, body)
-        event_value = await self._router.wait_for(PLAYBACK_PROPERTY, timeout=self.verify_timeout_s)
-        confirmed = _contains(event_value, changes)
-        if not confirmed:
-            readback = await self._rest_client.get(PLAYBACK_PROPERTY)
-            confirmed = _contains(readback, changes)
+        self._playback_write_in_flight = True
+        try:
+            self._router.arm(PLAYBACK_PROPERTY)
+            await self._rest_client.put(PLAYBACK_PROPERTY, body)
+            event_value = await self._router.wait_for(
+                PLAYBACK_PROPERTY, timeout=self.verify_timeout_s
+            )
+            confirmed = _contains(event_value, changes)
+            if not confirmed:
+                readback = await self._rest_client.get(PLAYBACK_PROPERTY)
+                confirmed = _contains(readback, changes)
+        finally:
+            self._playback_write_in_flight = False
         if not confirmed:
             raise BMDVerificationError(
                 f"{action}: neither a WS '{PLAYBACK_PROPERTY}' propertyValueChanged event "

@@ -27,8 +27,10 @@ from bmd_camera.rest.events import RestEventRouter
 from bmd_camera.rest.exceptions import BMDRestError
 from bmd_camera.rest.session import (
     FORMAT_PROPERTY,
+    PLAY_PROPERTY,
     PLAYBACK_PROPERTY,
     RECORD_PROPERTY,
+    STOP_PROPERTY,
     TIMELINE_ADD_PATH,
     TIMELINE_PATH,
     TRANSPORT_MODE_PROPERTY,
@@ -332,6 +334,12 @@ def make_session(
     session._low_storage_min_record_time_s = None
     session._low_storage_min_space_bytes = None
     session._low_storage_event = asyncio.Event()
+    session.playback_interrupted = asyncio.Event()
+    session._in_playback = False
+    session._playback_write_in_flight = False
+    session._transport_mode_write_in_flight = False
+    session.last_known_play = None
+    session.last_known_stop = None
     return session
 
 
@@ -1628,7 +1636,12 @@ class TestConnectionLifecycle:
         principle, ahead of wait_for_low_storage()'s own first real-hardware
         run — confirmed live and pushing on real hardware first
         (POCKET_6K_G2 v8.6, 2026-08-05, tools/rest/watch_events.py) before
-        this subscription was added, unlike the others above."""
+        this subscription was added, unlike the others above.
+        PLAY_PROPERTY/STOP_PROPERTY (Phase 8 item 2) subscribed the same
+        way — also confirmed live and pushing correctly-computed booleans
+        on real hardware first (POCKET_6K_G2 v8.6, 2026-08-05,
+        tools/rest/watch_events.py run alongside examples/rest_playback.py)
+        before this subscription was added."""
         fake_session = FakeAiohttpSession()
         session = RestCameraSession("cam.local", MODEL_KEY, FIRMWARE, session=fake_session)
 
@@ -1660,6 +1673,16 @@ class TestConnectionLifecycle:
                 "type": "request",
                 "id": 0,
                 "data": {"action": "subscribe", "properties": [WORKINGSET_PROPERTY]},
+            },
+            {
+                "type": "request",
+                "id": 0,
+                "data": {"action": "subscribe", "properties": [PLAY_PROPERTY]},
+            },
+            {
+                "type": "request",
+                "id": 0,
+                "data": {"action": "subscribe", "properties": [STOP_PROPERTY]},
             },
         ]
 
@@ -1793,6 +1816,33 @@ class TestEnterExitPlayback:
 
         with pytest.raises(BMDVerificationError, match="Output"):
             await session.enter_playback()
+
+    @pytest.mark.asyncio
+    async def test_enter_playback_sets_in_playback_and_clears_stale_interrupt(self):
+        """Phase 8 item 2, part 2: _in_playback and playback_interrupted are
+        set explicitly by enter_playback() itself, not left to _on_event —
+        this run confirms via the secondary GET readback, which generates
+        no WS event at all."""
+        client = FakeRestClient({TRANSPORT_MODE_PROPERTY: {"mode": "Output"}})
+        session = make_session(make_playback_profile(), client=client)
+        session.verify_timeout_s = 0.05
+        session.playback_interrupted.set()  # stale flag from an earlier cycle
+
+        await session.enter_playback()
+
+        assert session._in_playback is True
+        assert not session.playback_interrupted.is_set()
+
+    @pytest.mark.asyncio
+    async def test_exit_playback_clears_in_playback(self):
+        client = FakeRestClient({TRANSPORT_MODE_PROPERTY: {"mode": "InputPreview"}})
+        session = make_session(make_playback_profile(), client=client)
+        session.verify_timeout_s = 0.05
+        session._in_playback = True
+
+        await session.exit_playback()
+
+        assert session._in_playback is False
 
 
 class TestShuttleAndSeek:
@@ -1990,6 +2040,183 @@ class TestPlayPauseStop:
         await session.stop()
 
         assert client.put_calls == [(TRANSPORT_MODE_PROPERTY, {"mode": "InputPreview"})]
+
+
+class TestPlaybackInterrupted:
+    """playback_interrupted / wait_for_playback_interrupt() — Phase 8 item 2,
+    part 2's camera-initiated playback interrupt detection. Notification-
+    driven only (design principle 4): never set from a write this session
+    itself made. See _on_event's docstring for the race-free argument the
+    in-flight-guard tests below exercise directly."""
+
+    def test_speed_drop_sets_interrupted_when_in_playback_and_not_in_flight(self):
+        session = make_session(make_profile())
+        session._in_playback = True
+
+        session._on_event(PLAYBACK_PROPERTY, {"speed": 0.0})
+
+        assert session.playback_interrupted.is_set()
+
+    def test_speed_drop_ignored_while_write_in_flight(self):
+        """The in-flight guard _put_playback() holds for its own dual-check
+        — a self-requested pause()/shuttle(0.0) must never be misread as a
+        camera-initiated interrupt."""
+        session = make_session(make_profile())
+        session._in_playback = True
+        session._playback_write_in_flight = True
+
+        session._on_event(PLAYBACK_PROPERTY, {"speed": 0.0})
+
+        assert not session.playback_interrupted.is_set()
+
+    def test_speed_drop_ignored_when_not_in_playback(self):
+        session = make_session(make_profile())
+        session._in_playback = False
+
+        session._on_event(PLAYBACK_PROPERTY, {"speed": 0.0})
+
+        assert not session.playback_interrupted.is_set()
+
+    def test_nonzero_speed_does_not_set_interrupted(self):
+        session = make_session(make_profile())
+        session._in_playback = True
+
+        session._on_event(PLAYBACK_PROPERTY, {"speed": 1.0})
+
+        assert not session.playback_interrupted.is_set()
+
+    def test_mode_leaving_output_sets_interrupted_and_clears_in_playback(self):
+        session = make_session(make_profile())
+        session._in_playback = True
+
+        session._on_event(TRANSPORT_MODE_PROPERTY, {"mode": "InputPreview"})
+
+        assert session.playback_interrupted.is_set()
+        assert session._in_playback is False
+
+    def test_mode_leaving_output_ignored_while_transport_mode_write_in_flight(self):
+        """The in-flight guard _set_transport_mode() holds for its own
+        dual-check — a self-requested exit_playback()/stop() must never be
+        misread as a camera-initiated interrupt."""
+        session = make_session(make_profile())
+        session._in_playback = True
+        session._transport_mode_write_in_flight = True
+
+        session._on_event(TRANSPORT_MODE_PROPERTY, {"mode": "InputPreview"})
+
+        assert not session.playback_interrupted.is_set()
+        assert session._in_playback is True
+
+    def test_mode_still_output_does_not_set_interrupted(self):
+        session = make_session(make_profile())
+        session._in_playback = True
+
+        session._on_event(TRANSPORT_MODE_PROPERTY, {"mode": "Output"})
+
+        assert not session.playback_interrupted.is_set()
+        assert session._in_playback is True
+
+    def test_last_known_play_and_stop_track_events(self):
+        session = make_session(make_profile())
+
+        session._on_event(PLAY_PROPERTY, True)
+        assert session.last_known_play is True
+
+        session._on_event(STOP_PROPERTY, False)
+        assert session.last_known_stop is False
+
+    def test_play_stop_events_never_set_interrupted_directly(self):
+        """last_known_play/last_known_stop are purely observational — only
+        PLAYBACK_PROPERTY's own speed field and TRANSPORT_MODE_PROPERTY
+        drive playback_interrupted (_on_event's docstring explains why:
+        no ordering guarantee between these two independently-pushed
+        properties and _put_playback()'s own in-flight guard)."""
+        session = make_session(make_profile())
+        session._in_playback = True
+
+        session._on_event(STOP_PROPERTY, True)
+        session._on_event(PLAY_PROPERTY, False)
+
+        assert not session.playback_interrupted.is_set()
+
+    @pytest.mark.asyncio
+    async def test_pause_confirmed_by_ws_event_does_not_set_interrupted(self):
+        """Integration-level race check: the exact WS delivery that
+        confirms a self-requested pause() must not also flip
+        playback_interrupted, even though it carries speed=0.0."""
+        client = FakeRestClient({PLAYBACK_PROPERTY: {"speed": 0.0}})
+        session = make_session(make_playback_profile(), client=client)
+        session._in_playback = True
+
+        async def deliver_event():
+            await asyncio.sleep(0.01)
+            session._router.handle_event(
+                {
+                    "type": "event",
+                    "data": {
+                        "action": "propertyValueChanged",
+                        "property": PLAYBACK_PROPERTY,
+                        "value": {"speed": 0.0},
+                    },
+                }
+            )
+
+        asyncio.create_task(deliver_event())
+        await session.pause()
+
+        assert not session.playback_interrupted.is_set()
+
+    @pytest.mark.asyncio
+    async def test_stop_confirmed_by_ws_event_does_not_set_interrupted(self):
+        client = FakeRestClient({TRANSPORT_MODE_PROPERTY: {"mode": "InputPreview"}})
+        session = make_session(make_playback_profile(), client=client)
+        session._in_playback = True
+
+        async def deliver_event():
+            await asyncio.sleep(0.01)
+            session._router.handle_event(
+                {
+                    "type": "event",
+                    "data": {
+                        "action": "propertyValueChanged",
+                        "property": TRANSPORT_MODE_PROPERTY,
+                        "value": {"mode": "InputPreview"},
+                    },
+                }
+            )
+
+        asyncio.create_task(deliver_event())
+        await session.stop()
+
+        assert not session.playback_interrupted.is_set()
+        assert session._in_playback is False  # exit_playback() itself sets this
+
+
+class TestWaitForPlaybackInterrupt:
+    @pytest.mark.asyncio
+    async def test_returns_true_immediately_when_already_set(self):
+        session = make_session(make_profile())
+        session.playback_interrupted.set()
+
+        assert await session.wait_for_playback_interrupt(timeout=0.05) is True
+
+    @pytest.mark.asyncio
+    async def test_returns_false_on_timeout(self):
+        session = make_session(make_profile())
+
+        assert await session.wait_for_playback_interrupt(timeout=0.05) is False
+
+    @pytest.mark.asyncio
+    async def test_returns_true_when_set_before_timeout(self):
+        session = make_session(make_profile())
+
+        async def interrupt_soon():
+            await asyncio.sleep(0.01)
+            session.playback_interrupted.set()
+
+        asyncio.create_task(interrupt_soon())
+
+        assert await session.wait_for_playback_interrupt(timeout=1.0) is True
 
 
 class TestTimelineClipIds:

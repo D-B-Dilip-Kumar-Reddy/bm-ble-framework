@@ -1169,6 +1169,25 @@ the target clip already appears, the format switch alone populates the timeline 
 `POST /timelines/0/add` may never have mattered in any confirmed run to date; if it
 doesn't, `POST` does real work. Not yet run.
 
+### `tools/rest/verify_playback_interrupt.py`
+
+Real-hardware verification for `RestCameraSession.playback_interrupted` /
+`wait_for_playback_interrupt()` (Phase 8 item 2, part 2, `docs/rest/session.md`'s
+`playback_interrupted` section) — built alongside `PLAY_PROPERTY`/`STOP_PROPERTY`'s Part 1
+WS-push-shape confirmation above (`watch_events.py`, `POCKET_6K_G2 v8.6`, 2026-08-05); the
+interrupt-detection logic itself had only run against the injected-fake unit test suite.
+
+Two phases: (1) a self-requested sanity check — `select_clip()` through `stop()`, asserting
+`playback_interrupted` stays clear after every step, since none of these should ever be
+misread as a camera-initiated interrupt (the real test of
+`_playback_write_in_flight`/`_transport_mode_write_in_flight`'s race-free guard, see
+`docs/rest/session.md`); (2) the actual positive case — starts `play()`, then prompts the
+operator to pull the SD card or press stop/pause directly on the camera body, then calls
+`wait_for_playback_interrupt()` and reports the result alongside `last_known_play`/
+`last_known_stop` (the corroborating signal) and a fresh `GET /transports/0` readback.
+Always attempts `exit_playback()` in a `finally` to leave the camera in preview mode.
+Follows `verify_low_storage.py`'s precedent for shape and reporting. Not yet run.
+
 ---
 
 ## Security note

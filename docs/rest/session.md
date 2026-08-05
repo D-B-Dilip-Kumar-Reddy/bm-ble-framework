@@ -1173,6 +1173,58 @@ checks the reported body contains every key/value pair the call actually changed
 full merged body, so a field this call didn't touch can't cause a false failure or a false
 "confirmed" either way.
 
+### `playback_interrupted` / `wait_for_playback_interrupt(timeout)` (Phase 8 item 2, part 2)
+
+The playback analogue of `is_recording`/`wait_while_recording`'s camera-initiated-stop
+detection — built on the same two now-subscribed properties Part 1 confirmed real
+(`PLAY_PROPERTY`/`STOP_PROPERTY`, see the `play()`/`pause()`/`stop()` section above),
+plus `PLAYBACK_PROPERTY` and `TRANSPORT_MODE_PROPERTY`, both already subscribed since
+Phase 7.
+
+**Why `PLAYBACK_PROPERTY`'s own `speed` field is the trigger, not `STOP_PROPERTY`, even
+though Part 1 confirmed `stop` tracks `speed` reaching `0` precisely.** `_put_playback()`
+arms and waits on `PLAYBACK_PROPERTY` for its own dual-check, so the exact WS delivery that
+satisfies a self-requested `pause()`/`shuttle(0.0)` is the *same* delivery `_on_event`
+receives — and `RestEventRouter.handle_event()` always calls the `on_event` hook before it
+wakes any `wait_for()` waiter (`events.py`), so `_playback_write_in_flight` is guaranteed
+still `True` at the exact moment `_on_event` sees that event. `STOP_PROPERTY` is a second,
+independently-pushed property with no such ordering guarantee relative to `_put_playback()`'s
+own completion — using it as the trigger would leave a real race window between
+`_playback_write_in_flight` being cleared (in a `finally`, right after the write's own
+dual-check finishes) and `stop`'s own push arriving. `STOP_PROPERTY`/`PLAY_PROPERTY` are
+still subscribed and tracked (`last_known_play`/`last_known_stop`), just as a corroborating
+signal rather than the authoritative trigger. `TRANSPORT_MODE_PROPERTY` reporting a mode
+other than `"Output"` gets the same "arrived while nothing of mine was in flight" test,
+guarded by `_transport_mode_write_in_flight` — the analogous guard for
+`enter_playback()`/`exit_playback()`'s own write path.
+
+`_in_playback` (whether `enter_playback()` has confirmed and `exit_playback()`/`stop()`
+hasn't yet) and `playback_interrupted` are both set explicitly by `enter_playback()`/
+`exit_playback()` themselves, not left entirely to `_on_event` — a write confirmed only via
+its secondary `GET` readback (no WS event arrives at all) would otherwise leave
+`_in_playback` never set. `enter_playback()` also clears `playback_interrupted` on success,
+mirroring `wait_while_recording`'s "clear the flag before waiting" discipline, so a stale
+interrupt left `.set()` by an *earlier* playback cycle can never be mistaken for a fresh one.
+
+`wait_for_playback_interrupt(timeout)` mirrors `wait_for_low_storage`'s shape and polarity
+exactly: `True` if an interrupt was observed (already set when called, or a qualifying event
+arrived before `timeout`), `False` if `timeout` elapses with nothing observed. Only
+meaningful while `_in_playback` is `True` — calling it outside that window just times out.
+
+**Honest ceiling, same as every other camera-initiated-stop detection in this codebase**:
+this reports that playback stopped unexpectedly, never why — there is no error/fault event
+channel on this camera's REST API at all (see item 3's write-up above). A caller wanting the
+reason still has to look at the camera itself.
+
+**Status: built and unit-tested (`TestPlaybackInterrupted`, `TestWaitForPlaybackInterrupt`)
+only — not yet run against real hardware.** `tools/rest/verify_playback_interrupt.py` is the
+verification script, following item 1's `verify_low_storage.py` precedent: a self-requested
+sanity phase (`select_clip` -> `enter_playback` -> `play` -> `pause` -> `play` -> `stop`,
+asserting `playback_interrupted` stays clear throughout — the in-flight guards' own real-
+hardware test) followed by the real positive case (`play()`, then pull the card or press
+stop/pause on the camera body, then `wait_for_playback_interrupt()`). Neither phase has run
+against real hardware yet.
+
 ---
 
 ## Codec name mapping (`rest/mapping.py`)
