@@ -565,19 +565,38 @@ event) — not intended for concurrent calls from multiple tasks on the same ses
 armed threshold is always cleared in a `finally` block so a later unrelated push can never
 be mistaken for a stale earlier call's crossing.
 
-**Partially confirmed against real hardware, `POCKET_6K_G2 v8.6`, 2026-08-05** (128GB card,
-`tools/rest/verify_low_storage.py`, `--min-space-bytes 10000000000 --timeout 1800`): a real
-concurrent recording consumed the card from `117.57 GB` remaining down to `55.02 GB` over
-the full 1800s (~34.75 MB/s, a plausible real bitrate — `last_known_storage` tracked this
-continuously and correctly via the WS push throughout), but never crossed the 10GB
-threshold, so `wait_for_low_storage()` correctly returned `False` after the full timeout.
-This confirms the "storage stays healthy" branch — the method waited out its full budget
-without a false-positive threshold trip. **The threshold-*crossing* branch is still
-unconfirmed**: neither the immediate-return shortcut (already low when called) nor a live
-crossing arriving mid-wait has been exercised on real hardware yet, since this run's
-threshold was never actually reached. A follow-up run with a threshold close to (or above)
-current remaining space is the fast way to close that gap — no need to wait out another
-long timeout.
+**Confirmed against real hardware, `POCKET_6K_G2 v8.6`, 2026-08-05** (128GB card,
+`tools/rest/verify_low_storage.py`), two runs:
+
+1. `--min-space-bytes 10000000000 --timeout 1800`: a real concurrent recording consumed
+   the card from `117.57 GB` remaining down to `55.02 GB` over the full 1800s
+   (~34.75 MB/s, a plausible real bitrate — `last_known_storage` tracked this continuously
+   and correctly via the WS push throughout), but never crossed the 10GB threshold, so
+   `wait_for_low_storage()` correctly returned `False` after the full timeout — the
+   "storage stays healthy" branch, no false-positive trip.
+2. `--min-space-bytes 50000000000 --timeout 300`, run immediately after (card had
+   continued filling in between, now `33.96 GB` remaining, already below 50GB):
+   `wait_for_low_storage()` returned `True` after **3.1s**, not instantly. `last_known_storage`
+   was still `None` at the moment this call started — it was made right after connect, and
+   `storage_state()`'s own `GET` immediately before never touches `last_known_storage` — so
+   the immediate-return shortcut was skipped, and this genuinely waited on
+   `_low_storage_event`, which the *first* real `/media/workingset` push (arriving ~3.1s
+   after subscribe, consistent with this property's observed push cadence elsewhere in
+   this doc) set on arrival, already below the threshold. This confirms the harder branch:
+   a live crossing arriving mid-wait, driving `_check_low_storage` -> `_on_event` ->
+   `_low_storage_event.set()` -> `wait_for_low_storage`'s `asyncio.wait_for` end to end on
+   real hardware, not just the fake test suite.
+
+The one sub-case still without its own dedicated real-hardware run is the immediate-return
+shortcut specifically (`last_known_storage` already populated *and* already low at the
+moment `wait_for_low_storage()` is called, e.g. a second call later in the same connected
+session) — every run so far has called it right after connect, before `last_known_storage`
+had a chance to be non-`None`. Low residual risk: the shortcut reuses the exact same
+`_is_storage_low` helper run 2 crossed cleanly, and the fake test suite already exercises
+the shortcut's control flow directly (`TestWaitForLowStorage`). A caller wanting to close
+this specific gap would call `wait_for_low_storage()` twice in one connected session with
+the second call's threshold already satisfied by the first call's own observed value, and
+confirm the second call returns `True` in well under a second.
 
 ---
 

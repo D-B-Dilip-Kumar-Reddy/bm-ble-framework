@@ -180,13 +180,16 @@ src/bmd_camera/
                               # see docs/rest/session.md's last_known_storage/
                               # wait_for_low_storage() section; not yet run against real
                               # hardware itself — tools/rest/verify_low_storage.py is the
-                              # real-hardware verification script for this gap specifically;
-                              # first run, POCKET_6K_G2 v8.6, 2026-08-05, 128GB card:
-                              # correctly returned False after the full 1800s timeout while
-                              # a concurrent recording took the card from 117.57GB to
-                              # 55.02GB remaining without crossing the 10GB threshold —
-                              # confirms the "stays healthy" branch only; the
-                              # threshold-crossing branch itself is still unconfirmed),
+                              # real-hardware verification script for this gap specifically —
+                              # two runs, POCKET_6K_G2 v8.6, 2026-08-05: the "stays healthy"
+                              # branch (False after a full 1800s timeout, card at 117.57GB ->
+                              # 55.02GB without crossing 10GB) and the harder "live crossing
+                              # mid-wait" branch (True after 3.1s waiting on the first real
+                              # /media/workingset push, card already below a 50GB threshold —
+                              # last_known_storage was still None at call time so this wasn't
+                              # the immediate-return shortcut) both confirmed; only the
+                              # shortcut itself (already-populated, already-low
+                              # last_known_storage at call time) has no dedicated run yet),
                               # timeline_clip_ids — a plain GET /timelines/0, added to let
                               # a caller inspect the timeline independently of
                               # select_clip()'s own membership poll — closed select_clip()'s
@@ -310,12 +313,13 @@ tools/
                             # run against the fake-client unit suite; recommends a smaller card
                             # than every other real-hardware run in this repo used, since a
                             # meaningful threshold is otherwise impractical to reach in one
-                            # session. First run, POCKET_6K_G2 v8.6, 2026-08-05: correctly
-                            # returned False after the full timeout while a concurrent
-                            # recording consumed 117.57GB -> 55.02GB without crossing the
-                            # 10GB threshold — confirms the "stays healthy" branch only; the
-                            # threshold-crossing branch is still unconfirmed). See
-                            # docs/rest/transport.md
+                            # session. Two runs, POCKET_6K_G2 v8.6, 2026-08-05: the "stays
+                            # healthy" branch (False after a full 1800s timeout, card
+                            # 117.57GB -> 55.02GB without crossing 10GB) and the harder "live
+                            # crossing mid-wait" branch (True after 3.1s waiting on the first
+                            # real /media/workingset push, not the immediate-return shortcut)
+                            # both confirmed; only the shortcut itself has no dedicated run
+                            # yet). See docs/rest/transport.md
   captures/                 # Runtime output of sniffers/, control/, and rest/ scripts (gitignored)
 
 Tools are grouped by folder according to what kind of thing they do — read-only

@@ -1101,13 +1101,22 @@ body), which is why this tool's own docstring recommends a smaller card (128GB) 
 1TB card every other real-hardware run in this doc used — a meaningful threshold is
 otherwise impractical to reach in one session.
 
-**First real run, `POCKET_6K_G2 v8.6`, 2026-08-05** (128GB card, `--min-space-bytes
-10000000000 --timeout 1800`): a real concurrent recording took the card from `117.57 GB`
-down to `55.02 GB` remaining, tracked correctly and continuously throughout, but never
-reached the 10GB threshold — `False` after the full 1800s, correctly. Confirms the
-"storage stays healthy" branch only; the threshold-*crossing* branch (immediate-return
-shortcut, a live crossing mid-wait) is still unconfirmed — see docs/rest/session.md's
-`last_known_storage`/`wait_for_low_storage()` section.
+**Two real runs, `POCKET_6K_G2 v8.6`, 2026-08-05** (128GB card):
+
+1. `--min-space-bytes 10000000000 --timeout 1800`: a real concurrent recording took the
+   card from `117.57 GB` down to `55.02 GB` remaining, tracked correctly and continuously
+   throughout, but never reached the 10GB threshold — `False` after the full 1800s,
+   correctly. The "storage stays healthy" branch.
+2. `--min-space-bytes 50000000000 --timeout 300`, run immediately after (card now at
+   `33.96 GB`, already below 50GB): returned `True` after 3.1s — not instant, since
+   `last_known_storage` was still `None` at call time (called right after connect), so this
+   genuinely waited on the first real `/media/workingset` push to arrive and cross. The
+   harder "live crossing mid-wait" branch, now confirmed end to end.
+
+Only the immediate-return shortcut specifically (already-populated, already-low
+`last_known_storage` at call time) has no dedicated real-hardware run of its own yet — see
+docs/rest/session.md's `last_known_storage`/`wait_for_low_storage()` section for the full
+write-up and how low-risk that residual gap is.
 
 ---
 
