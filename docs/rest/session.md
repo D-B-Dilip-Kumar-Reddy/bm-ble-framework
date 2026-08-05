@@ -463,18 +463,33 @@ offers) reproduced the policy directly:
   `clips()` before/after can silently conclude "nothing happened" on a drop-triggered stop
   this fast, even though the camera genuinely attempted and then aborted a recording.
 
+**Third run, policy switched to `Alert`, same day**: identical combination (`BRAW 3:1` /
+`6K` / `50fps`, the exact one that triggered `Stop Recording` above) recorded for the full
+300s. `/transports/0/record` went `True` at `11:10:59.468` and `False` at `11:16:02.240`
+(~302.8s, matching the requested duration plus the explicit stop call's own overhead) —
+no early return from `wait_while_recording(300)`, `record_stop()` confirmed cleanly via
+the primary WS event (not a no-op this time), and `clips()` reported one real new clip:
+`00:05:01:05`, 7.66GB. Across the full 302-second run, the entire subscribed 46-property
+feed (dense `/transports/0/timecode` pushes roughly every 100ms, `/media/workingset` every
+~21s) shows **nothing outside the routine set** — no property fired that hadn't already
+fired identically at connect-time lens/aperture stabilization in every other run.
+
 **What this means for anomaly detection**: there is no direct "a frame was dropped"
 signal, and there never will be one within the swept surface — confirmed absent, not
-merely undiscovered. But when the camera's own policy is `Stop Recording` (this session's
-setting), the *consequence* of a drop is already fully observable with existing code and
-no new library surface: `is_recording`'s WS-driven tracking and
-`wait_while_recording()`'s early-return contract caught both runs above correctly, with
-zero changes. If the policy is `Alert` instead, recording continues and nothing in the
-swept surface reports it — consistent with (though not proof of) the original
-`record_stop` finding above, where the operator saw a warning and timecode flicker but the
-recording ran the full requested duration with no early WS stop event. Which policy was
-active during that original run is unknown; the two are not confirmed to be the same
-mechanism, only consistent with being so.
+merely undiscovered. When the camera's own policy is `Stop Recording`, the *consequence*
+of a drop is already fully observable with existing code and no new library surface:
+`is_recording`'s WS-driven tracking and `wait_while_recording()`'s early-return contract
+caught both `Stop Recording` runs above correctly, with zero changes. When the policy is
+`Alert` instead, this third run demonstrates the recording completes cleanly with
+**zero** REST-observable trace across the entire event feed — consistent with (and now
+much better evidenced than) the original `record_stop` finding above, where the operator
+saw a warning and timecode flicker but the recording ran the full requested duration with
+no early WS stop event. **The operator confirmed watching the `Alert` icon appear on the camera's own screen
+during this run** — a real drop genuinely occurred, at the same combination that had just
+triggered `Stop Recording` moments earlier, and it produced zero trace anywhere across the
+full 46-property feed. This is no longer an inference: `Alert` mode is a confirmed,
+permanent blind spot for this codebase, not an absence of a property-list entry that
+happens not to have fired yet.
 
 ---
 

@@ -674,8 +674,11 @@ No tool bugs found in this run. No camera setting changed.
   `Stop Recording` policy twice, ~2.5-2.8s in each time. No signal reports the drop
   itself, but when the policy is `Stop Recording`, its *consequence* is already fully
   observable — `RestCameraSession.is_recording`/`wait_while_recording()` caught both
-  auto-stops correctly with no code changes. If the policy is `Alert`, recording
-  continues and nothing in the swept surface reports it at all. See
+  auto-stops correctly with no code changes. A third run with the policy switched to
+  `Alert`, same demanding combination, recorded the full 300s clean — `record_stop`
+  confirmed normally (not a no-op), and the entire 302-second, 46-property event feed
+  shows nothing outside the routine periodic set. `Alert` mode gives this codebase
+  nothing to detect a drop with, confirmed by direct observation of the full feed. See
   docs/rest/session.md's `is_recording`/`wait_while_recording()` section for the full
   write-up, including a real edge case (the faster of the two auto-stops left no listed
   clip in `clips()` at all).
