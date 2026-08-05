@@ -83,6 +83,7 @@ RECORD_PROPERTY = "/transports/0/record"
 FORMAT_PROPERTY = "/system/format"
 TRANSPORT_MODE_PROPERTY = "/transports/0"
 PLAYBACK_PROPERTY = "/transports/0/playback"
+WORKINGSET_PROPERTY = "/media/workingset"
 TIMELINE_PATH = "/timelines/0"
 TIMELINE_ADD_PATH = "/timelines/0/add"
 
@@ -433,6 +434,16 @@ class RestCameraSession:
         self.is_recording: bool | None = None
         self._recording_stopped = asyncio.Event()
 
+        # Notification-derived storage snapshot (design principle 4) — None
+        # until the first /media/workingset event arrives, never polled.
+        # wait_for_low_storage() arms _low_storage_min_* and waits on
+        # _low_storage_event, which _on_event() sets when a pushed value
+        # crosses the currently armed threshold.
+        self.last_known_storage: StorageState | None = None
+        self._low_storage_min_record_time_s: float | None = None
+        self._low_storage_min_space_bytes: int | None = None
+        self._low_storage_event = asyncio.Event()
+
     @property
     def base_url(self) -> str:
         netloc = f"{self.host}:{self.port}" if self.port else self.host
@@ -464,6 +475,12 @@ class RestCameraSession:
         for the session's lifetime, gives `set_camera_format` the same
         standing subscription `record_start`/`record_stop` already had for
         `/transports/0/record`.
+
+        Also subscribes to `/media/workingset`, confirmed real and pushing
+        live values (`POCKET_6K_G2 v8.6`, 2026-08-05, `tools/rest/watch_events.py`)
+        — the primary channel `wait_for_low_storage()` depends on. Without
+        this the property would never push to this connection at all, the
+        same gap `/system/format` had before this fix.
         """
         if self._session is None:
             self._session = aiohttp.ClientSession()
@@ -483,6 +500,7 @@ class RestCameraSession:
             await self._router.subscribe(FORMAT_PROPERTY)
             await self._router.subscribe(TRANSPORT_MODE_PROPERTY)
             await self._router.subscribe(PLAYBACK_PROPERTY)
+            await self._router.subscribe(WORKINGSET_PROPERTY)
             connected = True
         finally:
             if not connected:
@@ -503,19 +521,48 @@ class RestCameraSession:
         self._log.info("[%s] Disconnected", self.host)
 
     def _on_event(self, prop: str, value: Any) -> None:
-        """Updates `is_recording` only — never inferred from a request this
-        session itself made, only from what the camera reports back
-        (design principle 4)."""
-        if prop != "/transports/0/record" or not isinstance(value, dict):
+        """Updates `is_recording` and `last_known_storage` only — never
+        inferred from a request this session itself made, only from what
+        the camera reports back (design principle 4)."""
+        if prop == RECORD_PROPERTY and isinstance(value, dict):
+            recording = value.get("recording")
+            if isinstance(recording, bool):
+                self.is_recording = recording
+                if recording:
+                    self._recording_stopped.clear()
+                else:
+                    self._recording_stopped.set()
+        elif prop == WORKINGSET_PROPERTY and isinstance(value, dict):
+            # active_body=None: this is a pushed event, not a fresh
+            # GET /media/active, so active_device resolution falls back to
+            # each device's own activeDisk flag — real event data
+            # (POCKET_6K_G2 v8.6, 2026-08-05) always carries it correctly.
+            storage = _parse_storage_state(value, None)
+            self.last_known_storage = storage
+            self._check_low_storage(storage)
+
+    def _check_low_storage(self, storage: StorageState) -> None:
+        if (
+            self._low_storage_min_record_time_s is None
+            and self._low_storage_min_space_bytes is None
+        ):
             return
-        recording = value.get("recording")
-        if not isinstance(recording, bool):
-            return
-        self.is_recording = recording
-        if recording:
-            self._recording_stopped.clear()
-        else:
-            self._recording_stopped.set()
+        if self._is_storage_low(storage):
+            self._low_storage_event.set()
+
+    def _is_storage_low(self, storage: StorageState) -> bool:
+        device = storage.active_device
+        if device is None:
+            return True
+        if (
+            self._low_storage_min_record_time_s is not None
+            and device.remaining_record_time <= self._low_storage_min_record_time_s
+        ):
+            return True
+        return (
+            self._low_storage_min_space_bytes is not None
+            and device.remaining_space <= self._low_storage_min_space_bytes
+        )
 
     async def wait_while_recording(self, timeout: float) -> bool:
         """Wait up to `timeout` seconds, returning early if a stop is
@@ -555,6 +602,70 @@ class RestCameraSession:
         except TimeoutError:
             return True
         return False
+
+    async def wait_for_low_storage(
+        self,
+        *,
+        min_record_time_s: float | None = None,
+        min_space_bytes: int | None = None,
+        timeout: float,
+    ) -> bool:
+        """Wait up to `timeout` seconds for the active storage device to
+        drop at or below `min_record_time_s` seconds of remaining record
+        time and/or `min_space_bytes` of remaining space (pass either or
+        both; raises `ValueError` if neither is given). Driven entirely by
+        `/media/workingset` `propertyValueChanged` events — never polled
+        (`CLAUDE.md`: "never poll storage state in a loop") — so it only
+        ever reacts to a value the camera actually pushed.
+
+        **Contract, stated explicitly given this codebase's own history
+        with an inverted-contract bug in `wait_while_recording` (see that
+        method's docstring)**: returns `True` if low storage was observed
+        — either already true when called, or a pushed update crossed the
+        threshold before `timeout` elapsed. Returns `False` if `timeout`
+        elapses with storage still healthy. This is the *opposite* polarity
+        from `wait_while_recording`'s `True` (there, `True` means "nothing
+        happened, still recording as expected") — deliberately, since
+        `wait_for_low_storage`'s name reads naturally as "did low storage
+        happen", not "did normal operation persist". Read the name, not the
+        sibling method, when using this.
+
+        If `last_known_storage` is `None` (no `/media/workingset` event has
+        arrived yet, e.g. called immediately after connect), the already-low
+        shortcut is skipped and this waits for the first qualifying push
+        like any other case — there is nothing to evaluate yet.
+
+        No active storage device at all (`active_device is None`, e.g. no
+        card) counts as low — a caller reacting to low storage should also
+        react to no storage, the same severity ordering
+        `_require_storage_ready()` already uses for `record_start()`.
+
+        Only one threshold can be armed at a time per session, mirroring
+        `wait_while_recording`'s single `_recording_stopped` event — a
+        second concurrent call would silently share (and clobber) the first
+        call's threshold. Not intended for concurrent use from multiple
+        tasks on the same session.
+        """
+        if min_record_time_s is None and min_space_bytes is None:
+            raise ValueError(
+                "wait_for_low_storage requires min_record_time_s and/or min_space_bytes"
+            )
+        self._low_storage_min_record_time_s = min_record_time_s
+        self._low_storage_min_space_bytes = min_space_bytes
+        try:
+            if self.last_known_storage is not None and self._is_storage_low(
+                self.last_known_storage
+            ):
+                return True
+            self._low_storage_event.clear()
+            try:
+                await asyncio.wait_for(self._low_storage_event.wait(), timeout=timeout)
+            except TimeoutError:
+                return False
+            return True
+        finally:
+            self._low_storage_min_record_time_s = None
+            self._low_storage_min_space_bytes = None
 
     @property
     def _rest_client(self) -> RestClient:

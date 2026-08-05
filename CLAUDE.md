@@ -99,6 +99,8 @@ Before recording or photo capture, verify the storage media is ready (card inser
 
 If storage state is unknown or unhealthy at operation time, raise `BMDStorageError` before attempting the command. Do not let the camera silently fail to save media.
 
+*Current implementation status:* `RestCameraSession`'s `_require_storage_ready()` implements the pre-flight half of this (a one-time `storage_state()` check before `record_start()`, see design principle 3's REST paragraph). Continuous, notification-driven storage tracking — the "never polled in a loop" half — has its first real implementation as `last_known_storage`/`wait_for_low_storage()` (Phase 8 item 1, `/media/workingset` `propertyValueChanged` events, real-hardware-confirmed live and pushing, `POCKET_6K_G2 v8.6`, 2026-08-05) — see `docs/rest/session.md`.
+
 ### 11. Async-first
 All I/O is async. No blocking calls anywhere. Use `asyncio.wait_for()` for all timeouts.
 
@@ -166,7 +168,18 @@ src/bmd_camera/
     exceptions.py            # BMDRestError + re-exports of the shared exception types
     session.py                # RestCameraSession — user-facing API. Read verbs
                               # (get_format, supported_formats, storage_state, clips,
-                              # timecode, clip_timecode, notification-driven is_recording,
+                              # timecode, clip_timecode, notification-driven is_recording
+                              # and last_known_storage (Phase 8 item 1 — /media/workingset
+                              # subscribed alongside the other four properties, confirmed
+                              # live and pushing real values on real hardware first
+                              # (POCKET_6K_G2 v8.6, 2026-08-05, tools/rest/watch_events.py)
+                              # before building on it; wait_for_low_storage() mirrors
+                              # wait_while_recording()'s shape but explicitly documents the
+                              # opposite return-value polarity, given this codebase's own
+                              # history with wait_while_recording's inverted-contract bug —
+                              # see docs/rest/session.md's last_known_storage/
+                              # wait_for_low_storage() section; not yet run against real
+                              # hardware itself),
                               # timeline_clip_ids — a plain GET /timelines/0, added to let
                               # a caller inspect the timeline independently of
                               # select_clip()'s own membership poll — closed select_clip()'s

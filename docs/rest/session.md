@@ -197,10 +197,11 @@ against a camera; BRAW 5:1 / 4K DCI / 23.98, 60s, 1TB card with 996GB free):
 Every read verb (`get_format`, `supported_formats`, `storage_state`, `clips`, `timecode`,
 `clip_timecode`)
 is a plain `GET`, fetched fresh on every call — there is no background cache to go stale.
-`is_recording` is the one exception: it is tracked continuously from
-`/transports/0/record` `propertyValueChanged` events, mirroring the BLE `CameraSession`'s
-`is_recording` attribute (notification-derived only, never inferred from a request this
-session itself made — design principle 4).
+`is_recording` and `last_known_storage` are the two exceptions: both are tracked
+continuously from WS `propertyValueChanged` events (`/transports/0/record` and
+`/media/workingset` respectively), mirroring the BLE `CameraSession`'s `is_recording`
+attribute (notification-derived only, never inferred from a request this session itself
+made — design principle 4).
 
 ---
 
@@ -524,6 +525,50 @@ triggered `Stop Recording` moments earlier, and it produced zero trace anywhere 
 full 46-property feed. This is no longer an inference: `Alert` mode is a confirmed,
 permanent blind spot for this codebase, not an absence of a property-list entry that
 happens not to have fired yet.
+
+### `last_known_storage` / `wait_for_low_storage(...)` (Phase 8 item 1)
+
+The one item from the Phase 8 anomaly-capture investigation that turned out to be
+buildable without qualification: `/media/workingset` is a confirmed-subscribable WS
+property (`docs/rest/transport.md`'s `/event/list` sweep) that was never actually
+subscribed by `__aenter__` — the push channel existed on the wire and simply wasn't
+consumed, the identical shape of gap `/system/format` had before the fix described above.
+Confirmed live before building on it: `tools/rest/watch_events.py --host <ip> --properties
+/media/workingset` (`POCKET_6K_G2 v8.6`, 2026-08-05) captured real pushes roughly once a
+second during recording, body shape identical to `GET /media/workingset`'s own —
+`{"size": 3, "workingset": [...]}`, same per-device fields (`activeDisk`, `clipCount`,
+`deviceName`, `remainingRecordTime`, `remainingSpace`, `totalSpace`, `volume`).
+
+`__aenter__` now subscribes `WORKINGSET_PROPERTY` alongside the other four. `_on_event`
+parses every pushed body via the same `_parse_storage_state` function `storage_state()`
+uses, with `active_body=None` — a pushed event carries no separate `/media/active` read,
+so `active_device` resolution falls back to each device's own `activeDisk` flag rather
+than `workingsetIndex`. Real event data always carried `activeDisk` correctly in every
+capture so far; the fallback isn't a new code path, it's the same one `_parse_storage_state`
+already uses when `/media/active` is unavailable. Result stored as
+`last_known_storage: StorageState | None` — `None` until the first event arrives, never
+polled, never inferred from a request the session made (design principle 4, the same
+discipline `is_recording` already holds).
+
+`wait_for_low_storage(*, min_record_time_s=None, min_space_bytes=None, timeout)` mirrors
+`wait_while_recording`'s shape (an `asyncio.Event` set from `_on_event`, awaited with a
+timeout) but **not its return-value polarity, deliberately** — given this codebase's own
+history with `wait_while_recording`'s inverted-contract bug (above), the docstring states
+the contract explicitly rather than leaving a reader to infer it by analogy: `True` means
+low storage was observed (already true when called, or a threshold crossing arrived before
+`timeout`); `False` means `timeout` elapsed with storage still healthy. Requires at least
+one of `min_record_time_s`/`min_space_bytes` (raises `ValueError` otherwise — no silent
+no-op call). No active storage device counts as low, matching the severity ordering
+`_require_storage_ready()` already uses for `record_start()`. Only one threshold can be
+armed per session at a time (mirrors `wait_while_recording`'s single `_recording_stopped`
+event) — not intended for concurrent calls from multiple tasks on the same session, and the
+armed threshold is always cleared in a `finally` block so a later unrelated push can never
+be mistaken for a stale earlier call's crossing.
+
+Not yet run against real hardware — the WS push shape is confirmed live, but
+`wait_for_low_storage()` itself (the threshold-crossing logic, the immediate-return
+shortcut, the multi-run threshold-clearing discipline) has only been exercised against the
+injected-fake test suite so far.
 
 ---
 

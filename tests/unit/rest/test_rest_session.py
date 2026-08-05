@@ -32,6 +32,7 @@ from bmd_camera.rest.session import (
     TIMELINE_ADD_PATH,
     TIMELINE_PATH,
     TRANSPORT_MODE_PROPERTY,
+    WORKINGSET_PROPERTY,
     Clip,
     Format,
     RestCameraSession,
@@ -327,6 +328,10 @@ def make_session(
     session._router = RestEventRouter(on_event=session._on_event)
     session.is_recording = None
     session._recording_stopped = asyncio.Event()
+    session.last_known_storage = None
+    session._low_storage_min_record_time_s = None
+    session._low_storage_min_space_bytes = None
+    session._low_storage_event = asyncio.Event()
     return session
 
 
@@ -745,6 +750,75 @@ class TestIsRecordingTracking:
         session._on_event("/transports/0/record", None)
 
         assert session.is_recording is None
+
+
+# Real /media/workingset propertyValueChanged body, POCKET_6K_G2 v8.6,
+# 2026-08-05 (tools/rest/watch_events.py, mid-recording) — see
+# docs/rest/session.md's is_recording/wait_while_recording() section.
+REAL_WORKINGSET_EVENT = {
+    "size": 3,
+    "workingset": [
+        {
+            "activeDisk": False,
+            "clipCount": 0,
+            "deviceName": "",
+            "index": 0,
+            "remainingRecordTime": 0,
+            "remainingSpace": 0,
+            "totalSpace": 0,
+        },
+        {
+            "activeDisk": True,
+            "clipCount": 9,
+            "deviceName": "sd0",
+            "index": 1,
+            "remainingRecordTime": 13107,
+            "remainingSpace": 943720932608,
+            "totalSpace": 1024060293120,
+            "volume": "A002",
+        },
+        {
+            "activeDisk": False,
+            "clipCount": 0,
+            "deviceName": "",
+            "index": 2,
+            "remainingRecordTime": 0,
+            "remainingSpace": 0,
+            "totalSpace": 0,
+        },
+    ],
+}
+
+
+class TestLastKnownStorageTracking:
+    def test_updates_from_workingset_event(self):
+        session = make_session(make_profile())
+
+        session._on_event(WORKINGSET_PROPERTY, REAL_WORKINGSET_EVENT)
+
+        assert session.last_known_storage is not None
+        device = session.last_known_storage.active_device
+        assert device is not None
+        assert (device.device_name, device.remaining_record_time, device.remaining_space) == (
+            "sd0",
+            13107,
+            943720932608,
+        )
+
+    def test_ignores_unrelated_property(self):
+        session = make_session(make_profile())
+
+        session._on_event("/transports/0/record", {"recording": True})
+
+        assert session.last_known_storage is None
+
+    def test_ignores_malformed_value(self):
+        session = make_session(make_profile())
+
+        session._on_event(WORKINGSET_PROPERTY, "not a dict")
+        session._on_event(WORKINGSET_PROPERTY, None)
+
+        assert session.last_known_storage is None
 
 
 def _storage_client(
@@ -1357,6 +1431,103 @@ class TestWaitWhileRecording:
         assert await session.wait_while_recording(timeout=0.05) is True
 
 
+class TestWaitForLowStorage:
+    """Contract, stated explicitly given wait_while_recording's own history
+    with an inverted-contract bug (see that class's docstring): True = low
+    storage was observed (already true, or a pushed update crossed the
+    threshold before timeout); False = timeout elapsed with storage still
+    healthy. Opposite polarity from wait_while_recording's True on purpose
+    — see wait_for_low_storage's own docstring."""
+
+    @pytest.mark.asyncio
+    async def test_raises_value_error_when_no_threshold_given(self):
+        session = make_session(make_profile())
+
+        with pytest.raises(ValueError, match="min_record_time_s"):
+            await session.wait_for_low_storage(timeout=0.05)
+
+    @pytest.mark.asyncio
+    async def test_returns_true_immediately_when_already_low_on_record_time(self):
+        session = make_session(make_profile())
+        session._on_event(WORKINGSET_PROPERTY, REAL_WORKINGSET_EVENT)  # remaining=13107s
+
+        assert await session.wait_for_low_storage(min_record_time_s=20000, timeout=0.05) is True
+
+    @pytest.mark.asyncio
+    async def test_returns_true_immediately_when_already_low_on_space(self):
+        session = make_session(make_profile())
+        session._on_event(WORKINGSET_PROPERTY, REAL_WORKINGSET_EVENT)  # remaining=943720932608
+
+        assert await session.wait_for_low_storage(min_space_bytes=10**12, timeout=0.05) is True
+
+    @pytest.mark.asyncio
+    async def test_returns_true_immediately_when_no_active_device(self):
+        session = make_session(make_profile())
+        no_device_event = {"size": 1, "workingset": [{"activeDisk": False, "index": 0}]}
+        session._on_event(WORKINGSET_PROPERTY, no_device_event)
+
+        assert await session.wait_for_low_storage(min_space_bytes=1, timeout=0.05) is True
+
+    @pytest.mark.asyncio
+    async def test_returns_false_after_timeout_when_storage_stays_healthy(self):
+        session = make_session(make_profile())
+        session._on_event(WORKINGSET_PROPERTY, REAL_WORKINGSET_EVENT)
+
+        assert await session.wait_for_low_storage(min_space_bytes=1, timeout=0.05) is False
+
+    @pytest.mark.asyncio
+    async def test_returns_false_before_any_event_and_storage_stays_healthy(self):
+        session = make_session(make_profile())
+        assert session.last_known_storage is None
+
+        assert await session.wait_for_low_storage(min_space_bytes=1, timeout=0.05) is False
+
+    @pytest.mark.asyncio
+    async def test_returns_true_when_pushed_event_crosses_threshold_before_timeout(self):
+        session = make_session(make_profile())
+        session._on_event(WORKINGSET_PROPERTY, REAL_WORKINGSET_EVENT)  # healthy
+
+        async def push_low_later():
+            await asyncio.sleep(0.01)
+            low_event = {
+                "size": 3,
+                "workingset": [
+                    REAL_WORKINGSET_EVENT["workingset"][0],
+                    {**REAL_WORKINGSET_EVENT["workingset"][1], "remainingSpace": 1},
+                    REAL_WORKINGSET_EVENT["workingset"][2],
+                ],
+            }
+            session._on_event(WORKINGSET_PROPERTY, low_event)
+
+        asyncio.create_task(push_low_later())
+
+        assert await session.wait_for_low_storage(min_space_bytes=1000, timeout=1.0) is True
+
+    @pytest.mark.asyncio
+    async def test_threshold_cleared_after_call_does_not_leak_into_next_push(self):
+        """A threshold armed by one call must not still be armed for an
+        unrelated push after that call returns — mirrors
+        wait_while_recording's own stale-flag discipline."""
+        session = make_session(make_profile())
+        session._on_event(WORKINGSET_PROPERTY, REAL_WORKINGSET_EVENT)
+
+        await session.wait_for_low_storage(min_space_bytes=1, timeout=0.05)
+        assert session._low_storage_min_space_bytes is None
+
+        # A later push that would have crossed the old threshold must not
+        # spuriously set an event nobody is waiting on.
+        low_event = {
+            "size": 3,
+            "workingset": [
+                REAL_WORKINGSET_EVENT["workingset"][0],
+                {**REAL_WORKINGSET_EVENT["workingset"][1], "remainingSpace": 0},
+                REAL_WORKINGSET_EVENT["workingset"][2],
+            ],
+        }
+        session._on_event(WORKINGSET_PROPERTY, low_event)
+        assert not session._low_storage_event.is_set()
+
+
 # ── Connection lifecycle (real constructor, fake aiohttp session) ──────────
 
 
@@ -1452,7 +1623,12 @@ class TestConnectionLifecycle:
         readback. __aenter__ must subscribe to every property a write
         method later arms, not just RECORD_PROPERTY — extended for
         TRANSPORT_MODE_PROPERTY/PLAYBACK_PROPERTY (Phase 7) on the same
-        principle, ahead of that phase's own first real-hardware run."""
+        principle, ahead of that phase's own first real-hardware run.
+        WORKINGSET_PROPERTY (Phase 8 item 1) subscribed on the same
+        principle, ahead of wait_for_low_storage()'s own first real-hardware
+        run — confirmed live and pushing on real hardware first
+        (POCKET_6K_G2 v8.6, 2026-08-05, tools/rest/watch_events.py) before
+        this subscription was added, unlike the others above."""
         fake_session = FakeAiohttpSession()
         session = RestCameraSession("cam.local", MODEL_KEY, FIRMWARE, session=fake_session)
 
@@ -1479,6 +1655,11 @@ class TestConnectionLifecycle:
                 "type": "request",
                 "id": 0,
                 "data": {"action": "subscribe", "properties": [PLAYBACK_PROPERTY]},
+            },
+            {
+                "type": "request",
+                "id": 0,
+                "data": {"action": "subscribe", "properties": [WORKINGSET_PROPERTY]},
             },
         ]
 
