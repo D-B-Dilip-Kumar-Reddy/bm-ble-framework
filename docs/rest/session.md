@@ -941,6 +941,9 @@ directions (A -> B, then B -> A). Both runs: the readback after the second switc
 contained *only* the newly-selected clip's own format group, nothing from the one before
 it. **Skipping the `DELETE` clear does not leave stale cross-format entries** — `POST
 /timelines/0/add` fully replaces the timeline's contents on this firmware regardless.
+*(Caveat added 2026-08-05 — finding #7 below: both runs here switched format before
+`POST`ing, so this can't distinguish the `POST` doing the replacing from the format switch
+alone already having done it. The "no stale entries" result stands regardless.)*
 
 No WS event shape is known for `/timelines/0`, so verification there isn't the usual
 primary/secondary dual-check — it's a poll: `GET /timelines/0` repeatedly (default every
