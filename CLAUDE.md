@@ -267,14 +267,19 @@ src/bmd_camera/
                               # this migration's own plan-derived hypotheses;
                               # playback_interrupted / wait_for_playback_interrupt(timeout)
                               # (Phase 8 item 2, part 2) — the playback analogue of
-                              # is_recording/wait_while_recording, set only from a
-                              # /transports/0/playback speed-drop or /transports/0
-                              # mode-left-"Output" event that arrived with none of this
-                              # session's own writes in flight — both _playback_write_in_flight
-                              # and _transport_mode_write_in_flight guard *both* branches, not
-                              # just the one matching their own property, after a real-hardware
-                              # find (POCKET_6K_G2 v8.6, 2026-08-05, this tool's own sanity
-                              # phase): leaving "Output" mode also pushes a side-effect
+                              # is_recording/wait_while_recording, set from a
+                              # /transports/0/playback speed deviating from _expected_speed
+                              # (the speed this session's own last confirmed write actually
+                              # set — broadened from a fixed speed==0 check so a
+                              # camera-initiated change to any other speed is caught too, not
+                              # only a full stop; this broadening itself is not yet
+                              # real-hardware-run) or /transports/0 mode-left-"Output", that
+                              # arrived with none of this session's own writes in flight —
+                              # both _playback_write_in_flight and
+                              # _transport_mode_write_in_flight guard *both* branches, not just
+                              # the one matching their own property, after a real-hardware find
+                              # (POCKET_6K_G2 v8.6, 2026-08-05, this tool's own sanity phase):
+                              # leaving "Output" mode also pushes a side-effect
                               # PLAYBACK_PROPERTY speed=0 event, which the original per-property
                               # guard didn't cover — fixed same day; see session.py's _on_event
                               # docstring. PLAY_PROPERTY/STOP_PROPERTY (Phase 8 item 2 part 1's
@@ -283,12 +288,13 @@ src/bmd_camera/
                               # signal only — not the trigger, since neither has an ordering
                               # guarantee relative to _put_playback()'s own dual-check the way
                               # PLAYBACK_PROPERTY does. tools/rest/verify_playback_interrupt.py
-                              # is the real-hardware verification script; its sanity phase
-                              # (phase 1) found and confirmed the fix for the defect above —
-                              # phase 2 (the real camera-initiated interrupt) not yet reached,
-                              # since phase 1 also hit the already-documented select_clip()
-                              # sensor-resolution ambiguity on its default clip pick, unrelated
-                              # to this feature
+                              # is the real-hardware verification script; a first run's sanity
+                              # phase found and fixed the defect above (fixed the same day),
+                              # then a second run (--clip-id 2, sidestepping the first run's
+                              # unrelated select_clip() sensor-resolution ambiguity) confirmed
+                              # both phases end to end against the (at-the-time) fixed speed==0
+                              # trigger: phase 1 clean, and phase 2's real camera-initiated
+                              # interrupt detected in 13.5s
     mapping.py                 # Codec name derivation between the BLE profile's vocabulary
                               # and REST's own spelling — confirmed strings always win
                               # (design principle 1); this is a fallback seed only.
@@ -370,17 +376,19 @@ tools/
                             # ever sent, not yet run), and verify_playback_interrupt.py
                             # (Phase 8 item 2, part 2 — real-hardware verification for
                             # RestCameraSession.playback_interrupted /
-                            # wait_for_playback_interrupt(), whose in-flight-guard race-free
-                            # logic had only run against the fake-client unit suite
-                            # (TestPlaybackInterrupted, TestWaitForPlaybackInterrupt). Two
-                            # phases: a self-requested sanity check (select_clip through
-                            # stop(), asserting playback_interrupted stays clear throughout —
-                            # the in-flight guards' own real-hardware test) followed by the
+                            # wait_for_playback_interrupt(). Two phases: a self-requested
+                            # sanity check (select_clip through stop(), asserting
+                            # playback_interrupted stays clear throughout) followed by the
                             # real positive case (play(), then pull the card or press
                             # stop/pause on the camera body, then
                             # wait_for_playback_interrupt()). Follows verify_low_storage.py's
-                            # precedent for shape and reporting; not yet run against real
-                            # hardware). See docs/rest/transport.md
+                            # precedent for shape and reporting. First run's sanity phase found
+                            # and fixed a real in-flight-guard defect (see session.py's
+                            # playback_interrupted entry above); a second run (--clip-id 2)
+                            # confirmed both phases clean end to end — phase 1 no
+                            # false-positives, phase 2's real interrupt detected in 13.5s,
+                            # against the (at-the-time) fixed speed==0 trigger). See
+                            # docs/rest/transport.md
   captures/                 # Runtime output of sniffers/, control/, and rest/ scripts (gitignored)
 
 Tools are grouped by folder according to what kind of thing they do — read-only

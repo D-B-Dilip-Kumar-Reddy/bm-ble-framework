@@ -1184,7 +1184,7 @@ Phase 7.
 **Why `PLAYBACK_PROPERTY`'s own `speed` field is the trigger, not `STOP_PROPERTY`, even
 though Part 1 confirmed `stop` tracks `speed` reaching `0` precisely.** `_put_playback()`
 arms and waits on `PLAYBACK_PROPERTY` for its own dual-check, so the exact WS delivery that
-satisfies a self-requested `pause()`/`shuttle(0.0)` is the *same* delivery `_on_event`
+satisfies a self-requested `pause()`/`shuttle()` is the *same* delivery `_on_event`
 receives — and `RestEventRouter.handle_event()` always calls the `on_event` hook before it
 wakes any `wait_for()` waiter (`events.py`), so `_playback_write_in_flight` is guaranteed
 still `True` at the exact moment `_on_event` sees that event. `STOP_PROPERTY` is a second,
@@ -1197,6 +1197,21 @@ signal rather than the authoritative trigger. `TRANSPORT_MODE_PROPERTY` reportin
 other than `"Output"` gets the same "arrived while nothing of mine was in flight" test,
 guarded by `_transport_mode_write_in_flight` — the analogous guard for
 `enter_playback()`/`exit_playback()`'s own write path.
+
+**Trigger condition: deviation from `_expected_speed`, not a fixed `speed == 0` check.**
+The first two real-hardware runs (below) both exercised a fixed `speed == 0` trigger and
+confirmed it worked, but that check has a real ceiling: it can only ever catch a full stop,
+not a camera-initiated speed change that lands anywhere else (e.g. `2.0` dropping to `1.0`
+on its own) — which is exactly as much "not what this session asked for." Changed on
+request to compare the pushed `speed` against `_expected_speed` instead — the speed value
+this session's own last confirmed `enter_playback()`/`shuttle()`/`play()`/`pause()` call
+actually set. `enter_playback()` resets it to `0.0` (the camera opens playback paused —
+see `_put_playback`'s real-body finding above), and `_put_playback()` updates it after
+every write it confirms carries a `speed` change. If `_expected_speed` is still `None` (no
+baseline yet), nothing can be judged an interrupt — the same "not enough information to
+say" posture `wait_for_low_storage()` takes on an unset `last_known_storage`. **This
+broadening has not itself been exercised on real hardware** — only the two runs below,
+both against the superseded fixed-`0` check.
 
 `_in_playback` (whether `enter_playback()` has confirmed and `exit_playback()`/`stop()`
 hasn't yet) and `playback_interrupted` are both set explicitly by `enter_playback()`/
@@ -1216,15 +1231,16 @@ this reports that playback stopped unexpectedly, never why — there is no error
 channel on this camera's REST API at all (see item 3's write-up above). A caller wanting the
 reason still has to look at the camera itself.
 
-**Status: built and unit-tested (`TestPlaybackInterrupted`, `TestWaitForPlaybackInterrupt`);
-first real-hardware run found and fixed a defect, phase 2 (the real positive case) not yet
-reached.** `tools/rest/verify_playback_interrupt.py` is the verification script, following
-item 1's `verify_low_storage.py` precedent: a self-requested sanity phase (`select_clip` ->
-`enter_playback` -> `play` -> `pause` -> `play` -> `stop`, asserting `playback_interrupted`
-stays clear throughout) followed by the real positive case (`play()`, then pull the card or
-press stop/pause on the camera body, then `wait_for_playback_interrupt()`).
+**Status: built, unit-tested (`TestPlaybackInterrupted`, `TestWaitForPlaybackInterrupt`), and
+real-hardware-confirmed end to end** (against the fixed-`speed == 0` trigger — see the
+broadening note above for what's changed since). `tools/rest/verify_playback_interrupt.py`
+is the verification script, following item 1's `verify_low_storage.py` precedent: a
+self-requested sanity phase (`select_clip` -> `enter_playback` -> `play` -> `pause` ->
+`play` -> `stop`, asserting `playback_interrupted` stays clear throughout) followed by the
+real positive case (`play()`, then pull the card or press stop/pause on the camera body,
+then `wait_for_playback_interrupt()`).
 
-**Real-hardware-confirmed defect, found and fixed same day, `POCKET_6K_G2 v8.6`,
+**Run 1 — real-hardware-confirmed defect, found and fixed same day, `POCKET_6K_G2 v8.6`,
 2026-08-05, this tool's own sanity phase.** `stop()` reported `OK` (its own dual-check
 passed), but `playback_interrupted` was set anyway — exactly the failure mode the sanity
 phase exists to catch. Root cause: `stop()` -> `exit_playback()` ->
@@ -1238,24 +1254,31 @@ per-property guard — each branch checking only its own write path's flag — i
 `playback_interrupted` on a purely self-requested `stop()`. **Fixed**: both `_on_event`
 branches now check *both* in-flight flags, not just the one matching their own property —
 the two write paths turned out not to be as independent as the original design assumed.
-Regression-tested (`test_speed_drop_ignored_while_transport_mode_write_in_flight`,
+Regression-tested (`test_speed_deviation_ignored_while_transport_mode_write_in_flight`,
 `test_stop_with_side_effect_playback_event_does_not_set_interrupted` — the latter reproduces
 the exact real-hardware sequence, delivering both the confirming `TRANSPORT_MODE_PROPERTY`
 event and the side-effect `PLAYBACK_PROPERTY` event together). The symmetric direction (a
 `_put_playback()` write causing a side-effect `TRANSPORT_MODE_PROPERTY` push) has no
 real-hardware evidence either way yet, but both branches now guard against it defensively —
-see `_on_event`'s own docstring for the full finding. `__init__`'s comment block and
-`wait_for_playback_interrupt()`'s two docstrings (module-level and the method's own) are
-kept in sync with this finding too — they no longer describe the original single-flag-per-
-property design or claim the sanity-phase half of verification "hasn't run yet."
+see `_on_event`'s own docstring for the full finding.
 
 This same run's `select_clip()` step failed on the already-documented sensor-resolution
 ambiguity (the default clip this tool picked, `clip_unique_id=1`, was the exact
 `ProRes:HQ @ 1920x1080p25` three-way-ambiguous case from `select_clip()`'s own docstring) —
 expected behavior, not a defect in this feature; the tool doesn't yet compose the
-sensor-resolution retry `examples/rest_playback.py` uses, so re-running against an
-unambiguous clip (or a future `--clip-id` pointing to one) is needed before phase 1 passes
-clean end to end and phase 2 can run.
+sensor-resolution retry `examples/rest_playback.py` uses.
+
+**Run 2 — full end-to-end confirmation, same day, `--clip-id 2`** (a `.braw` clip,
+sidestepping run 1's unrelated `select_clip()` ambiguity). **Phase 1 (sanity) passed
+clean**: `select_clip` -> `enter_playback` -> `play` -> `pause` -> `play` -> `stop`, with
+`playback_interrupted` staying clear after every step — confirming the run 1 fix.
+**Phase 2 (the real positive case) also confirmed**: after `play()`, an out-of-band
+interrupt (card pulled or stop/pause pressed on the camera body) was detected by
+`wait_for_playback_interrupt()` in `13.5s`, returning `True`. `last_known_stop` corroborated
+(`True`), and `GET /transports/0` still reported `mode: "Output"` — i.e. this was a
+speed-only transition, caught by the (at-the-time) fixed `speed == 0` check, not a mode
+exit. This is the first real-hardware evidence that the whole feature — subscription,
+in-flight guards, and the actual camera-initiated interrupt — works end to end.
 
 ---
 

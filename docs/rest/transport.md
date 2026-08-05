@@ -1174,8 +1174,8 @@ doesn't, `POST` does real work. Not yet run.
 Real-hardware verification for `RestCameraSession.playback_interrupted` /
 `wait_for_playback_interrupt()` (Phase 8 item 2, part 2, `docs/rest/session.md`'s
 `playback_interrupted` section) — built alongside `PLAY_PROPERTY`/`STOP_PROPERTY`'s Part 1
-WS-push-shape confirmation above (`watch_events.py`, `POCKET_6K_G2 v8.6`, 2026-08-05); the
-interrupt-detection logic itself had only run against the injected-fake unit test suite.
+WS-push-shape confirmation above (`watch_events.py`, `POCKET_6K_G2 v8.6`, 2026-08-05), when
+the interrupt-detection logic itself had only run against the injected-fake unit test suite.
 
 Two phases: (1) a self-requested sanity check — `select_clip()` through `stop()`, asserting
 `playback_interrupted` stays clear after every step, since none of these should ever be
@@ -1188,7 +1188,7 @@ operator to pull the SD card or press stop/pause directly on the camera body, th
 Always attempts `exit_playback()` in a `finally` to leave the camera in preview mode.
 Follows `verify_low_storage.py`'s precedent for shape and reporting.
 
-**First run, `POCKET_6K_G2 v8.6`, 2026-08-05: found and fixed a real defect in phase 1.**
+**Run 1, `POCKET_6K_G2 v8.6`, 2026-08-05: found and fixed a real defect in phase 1.**
 `stop()` reported `OK` but `playback_interrupted` was set anyway — the guard's own
 in-flight check only covered a write's *own* property, not a side-effect push on the
 *other* one, and leaving `"Output"` mode real-hardware-confirmed also pushes a
@@ -1197,8 +1197,18 @@ in-flight check only covered a write's *own* property, not a side-effect push on
 `select_clip()` step separately hit the already-documented sensor-resolution ambiguity on
 its default clip pick (`clip_unique_id=1`, the known `ProRes:HQ @ 1920x1080p25` three-way
 case) — expected, unrelated to this feature, and not yet worked around in this tool (it
-doesn't compose the retry `examples/rest_playback.py` uses). Phase 2 (the real
-camera-initiated interrupt) not yet reached.
+doesn't compose the retry `examples/rest_playback.py` uses).
+
+**Run 2, same day, `--clip-id 2`** (a `.braw` clip, sidestepping run 1's ambiguity):
+**both phases confirmed clean end to end.** Phase 1's sanity check passed with
+`playback_interrupted` staying clear after every step, confirming run 1's fix. Phase 2 —
+the actual camera-initiated interrupt — also confirmed: after `play()`, an out-of-band
+interrupt (card pulled or stop/pause pressed on the camera body) was detected in `13.5s`,
+`last_known_stop` corroborating (`True`), `GET /transports/0` still reporting
+`mode: "Output"` (a speed-only transition). This was caught by the fixed `speed == 0`
+trigger in place at the time; the trigger has since been broadened to compare against
+`_expected_speed` instead (see `docs/rest/session.md`), which this tool has not yet
+re-verified.
 
 ---
 

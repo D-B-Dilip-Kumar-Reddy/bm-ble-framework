@@ -50,13 +50,16 @@ every call — there is no background cache to go stale.
 
 `playback_interrupted`/`wait_for_playback_interrupt()` (Phase 8 item 2, part
 2) hold the same discipline for playback that `is_recording` holds for
-recording — set only from a `/transports/0/playback` speed-drop or
-`/transports/0` mode-left-`"Output"` event that arrived with none of this
-session's own writes in flight, never inferred from a `pause()`/`stop()`
-call this session itself made. First real-hardware run (`POCKET_6K_G2
-v8.6`, 2026-08-05) found and fixed a false-positive in this guard — see
-`_on_event`'s docstring; the real camera-initiated-interrupt case (Phase 2
-of `tools/rest/verify_playback_interrupt.py`) has not run yet.
+recording — set only from a `/transports/0/playback` speed deviating from
+`_expected_speed` (the speed this session itself last set, not a fixed `0`
+check) or a `/transports/0` mode-left-`"Output"` event that arrived with
+none of this session's own writes in flight, never inferred from a
+`pause()`/`stop()` call this session itself made. Real-hardware-confirmed
+end to end, `POCKET_6K_G2 v8.6`, 2026-08-05 (`tools/rest/
+verify_playback_interrupt.py`): the sanity phase found and fixed a
+false-positive in the in-flight guard (see `_on_event`'s docstring), and a
+following run confirmed the actual camera-initiated case — a real
+interrupt mid-`play()`, detected in 13.5s.
 """
 
 from __future__ import annotations
@@ -472,6 +475,13 @@ class RestCameraSession:
         # property, since leaving "Output" mode was found to also push a
         # side-effect PLAYBACK_PROPERTY speed=0 event a single-flag guard
         # missed. See _on_event's own docstring for the full finding.
+        # `_expected_speed` is the speed value this session's own last
+        # confirmed enter_playback()/shuttle()/play()/pause() call actually
+        # set — _on_event flags any pushed speed that differs from it
+        # (not only a drop to 0), so a camera-initiated speed change that
+        # lands somewhere other than 0 is caught too. Set to 0.0 by
+        # enter_playback() (the camera opens paused) and updated by
+        # _put_playback() after each confirmed speed-changing write.
         # `last_known_play`/`last_known_stop` are purely observational
         # (Phase 8 item 2 part 1 confirmed both track
         # /transports/0/playback's speed field precisely) and never drive
@@ -480,6 +490,7 @@ class RestCameraSession:
         self._in_playback = False
         self._playback_write_in_flight = False
         self._transport_mode_write_in_flight = False
+        self._expected_speed: float | None = None
         self.last_known_play: bool | None = None
         self.last_known_stop: bool | None = None
 
@@ -586,10 +597,9 @@ class RestCameraSession:
 
         **Why `/transports/0/playback`'s own `speed` field is
         `playback_interrupted`'s trigger, not `/transports/0/stop`** (Phase
-        8 item 2, part 2), even though Part 1 confirmed `stop` tracks
-        `speed` reaching `0` precisely: `_put_playback()` arms and waits on
+        8 item 2, part 2): `_put_playback()` arms and waits on
         `PLAYBACK_PROPERTY` for its own dual-check, so the exact WS delivery
-        that satisfies a self-requested `pause()`/`shuttle(0.0)` is the same
+        that satisfies a self-requested `pause()`/`shuttle()` is the same
         delivery this method receives — and `RestEventRouter.handle_event()`
         always calls `on_event()` *before* it wakes any `wait_for()` waiter
         (`events.py`), so `_playback_write_in_flight` is still `True` at the
@@ -601,6 +611,24 @@ class RestCameraSession:
         arriving. `/transports/0/stop` is still subscribed and tracked
         (`last_known_stop`) as a corroborating signal, just not the
         authoritative one.
+
+        **Trigger condition, broadened after the first two real-hardware
+        runs** (`POCKET_6K_G2 v8.6`, 2026-08-05, both against a fixed
+        `speed == 0` check — see `wait_for_playback_interrupt`'s docstring
+        for what those two runs actually confirmed): compares the pushed
+        `speed` against `_expected_speed` — the speed value this session's
+        own last confirmed `enter_playback()`/`shuttle()`/`play()`/
+        `pause()` call actually set — rather than checking `speed == 0`.
+        Any deviation from what this session itself last requested counts
+        as an interrupt, not only a full stop: a camera-initiated speed
+        change that lands somewhere other than `0` (e.g. the camera
+        dropping from `2.0` to `1.0` on its own) is exactly as much "not
+        what I asked for" as landing on `0`, and the old fixed-`0` check
+        had no way to catch it. This broadening is not itself
+        real-hardware-confirmed yet. `_expected_speed` is set to `0.0` by
+        `enter_playback()` (the camera opens paused — see `_put_playback`'s
+        docstring) and updated by `_put_playback()` itself after each write
+        it confirms carries a `speed` change.
 
         Symmetrically, `TRANSPORT_MODE_PROPERTY` reporting a mode other than
         `"Output"` while `_in_playback` is `True` and no
@@ -652,8 +680,9 @@ class RestCameraSession:
             speed = value.get("speed")
             if (
                 isinstance(speed, (int, float))
-                and speed == 0
                 and self._in_playback
+                and self._expected_speed is not None
+                and speed != self._expected_speed
                 and not self._playback_write_in_flight
                 and not self._transport_mode_write_in_flight
             ):
@@ -802,7 +831,9 @@ class RestCameraSession:
 
     async def wait_for_playback_interrupt(self, timeout: float) -> bool:
         """Wait up to `timeout` seconds for a camera-initiated playback
-        interrupt — a `/transports/0/playback` speed drop to `0`, or
+        interrupt — a `/transports/0/playback` speed deviating from
+        `_expected_speed` (the speed this session itself last set, so any
+        camera-initiated change counts, not only a drop to `0`), or
         `/transports/0` reporting a mode other than `"Output"`, that
         arrived while this session had no matching write of its own in
         flight (see `_on_event`'s docstring). This is Phase 8 item 2's
@@ -831,13 +862,23 @@ class RestCameraSession:
         item 3 write-up) — a caller wanting the reason still has to look at
         the camera itself.
 
-        The self-requested half of the verification plan — confirming a
-        normal `pause()`/`stop()` never sets `playback_interrupted` — has
-        run (`POCKET_6K_G2 v8.6`, 2026-08-05) and found a real false-positive
-        this method's own trigger had, since fixed (see `_on_event`'s
-        docstring). The positive half — pull the card, or stop/pause on the
-        camera body, mid-`play()`, and confirm this returns `True` — has not
-        run yet. See `docs/rest/session.md`'s Phase 8 item 2 section.
+        **Real-hardware-confirmed end to end, `POCKET_6K_G2 v8.6`,
+        2026-08-05.** The self-requested sanity half found and fixed a real
+        false-positive this method's own trigger had (see `_on_event`'s
+        docstring) — once fixed, a clean re-run confirmed a normal
+        `pause()`/`play()`/`stop()` sequence never sets
+        `playback_interrupted`. A following run confirmed the positive
+        case too: `play()`, then an out-of-band interrupt (card pulled or
+        stop/pause pressed on the camera body), returned `True` after
+        13.5s, with `last_known_stop` corroborating (`True`) and the camera
+        still reporting `mode: "Output"` — a speed-only transition, caught
+        by the (at-the-time) fixed `speed == 0` check. The trigger was
+        widened to `speed != _expected_speed` afterward on request, so a
+        camera-initiated speed change landing anywhere other than `0` is
+        also caught, not only a full stop — this broadening has not itself
+        been exercised on real hardware yet, only the `speed == 0` case it
+        generalizes. See `docs/rest/session.md`'s Phase 8 item 2 section
+        for the full write-up.
         """
         if self.playback_interrupted.is_set():
             return True
@@ -1581,11 +1622,15 @@ class RestCameraSession:
         readback never generates a WS event for `_on_event` to react to.
         Clearing here means a stale `playback_interrupted` left `.set()` by
         an *earlier* playback cycle's interrupt can never be mistaken for a
-        fresh one in this cycle.
+        fresh one in this cycle. Also resets `_expected_speed` to `0.0` —
+        the camera opens playback paused (`_put_playback`'s docstring), so
+        that's the correct baseline `_on_event`'s speed-deviation check
+        compares against until a `play()`/`shuttle()` call updates it.
         """
         await self._set_transport_mode("Output")
         self._in_playback = True
         self.playback_interrupted.clear()
+        self._expected_speed = 0.0
 
     async def exit_playback(self) -> None:
         """Leave playback mode, back to live view — `PUT /transports/0
@@ -1803,6 +1848,13 @@ class RestCameraSession:
         these two write paths are more independent than the one
         real-hardware run actually showed. See `_on_event`'s docstring for
         the full finding.
+
+        On success, if `changes` includes `"speed"`, updates
+        `_expected_speed` to that value — the baseline `_on_event`'s
+        speed-deviation interrupt check compares future pushes against, so
+        the *next* self-requested `shuttle()`/`play()`/`pause()` call is
+        judged against what this call actually set, not a stale value from
+        before it.
         """
         endpoint = self.profile.rest_endpoint(PLAYBACK_PROPERTY)
         if endpoint is None or not endpoint.put_supported:
@@ -1831,3 +1883,5 @@ class RestCameraSession:
                 f"{action}: neither a WS '{PLAYBACK_PROPERTY}' propertyValueChanged event "
                 f"nor a GET readback confirmed {changes} within {self.verify_timeout_s}s"
             )
+        if "speed" in changes:
+            self._expected_speed = changes["speed"]

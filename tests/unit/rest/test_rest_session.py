@@ -338,6 +338,7 @@ def make_session(
     session._in_playback = False
     session._playback_write_in_flight = False
     session._transport_mode_write_in_flight = False
+    session._expected_speed = None
     session.last_known_play = None
     session.last_known_stop = None
     return session
@@ -1822,16 +1823,20 @@ class TestEnterExitPlayback:
         """Phase 8 item 2, part 2: _in_playback and playback_interrupted are
         set explicitly by enter_playback() itself, not left to _on_event —
         this run confirms via the secondary GET readback, which generates
-        no WS event at all."""
+        no WS event at all. Also resets _expected_speed to 0.0 (the camera
+        opens playback paused), the baseline the speed-deviation interrupt
+        check compares against."""
         client = FakeRestClient({TRANSPORT_MODE_PROPERTY: {"mode": "Output"}})
         session = make_session(make_playback_profile(), client=client)
         session.verify_timeout_s = 0.05
         session.playback_interrupted.set()  # stale flag from an earlier cycle
+        session._expected_speed = 2.0  # stale value from an earlier cycle
 
         await session.enter_playback()
 
         assert session._in_playback is True
         assert not session.playback_interrupted.is_set()
+        assert session._expected_speed == 0.0
 
     @pytest.mark.asyncio
     async def test_exit_playback_clears_in_playback(self):
@@ -2047,29 +2052,70 @@ class TestPlaybackInterrupted:
     part 2's camera-initiated playback interrupt detection. Notification-
     driven only (design principle 4): never set from a write this session
     itself made. See _on_event's docstring for the race-free argument the
-    in-flight-guard tests below exercise directly."""
+    in-flight-guard tests below exercise directly.
 
-    def test_speed_drop_sets_interrupted_when_in_playback_and_not_in_flight(self):
+    The speed trigger compares against _expected_speed — the speed value
+    this session's own last confirmed write actually set — rather than a
+    fixed speed == 0 check, so a camera-initiated deviation to *any* other
+    speed counts as an interrupt, not only a full stop."""
+
+    def test_speed_deviating_from_expected_sets_interrupted(self):
         session = make_session(make_profile())
         session._in_playback = True
+        session._expected_speed = 1.0
 
         session._on_event(PLAYBACK_PROPERTY, {"speed": 0.0})
 
         assert session.playback_interrupted.is_set()
 
-    def test_speed_drop_ignored_while_write_in_flight(self):
+    def test_speed_deviating_to_nonzero_value_sets_interrupted(self):
+        """The whole point of comparing against _expected_speed instead of
+        a fixed 0: a camera-initiated speed change that lands somewhere
+        other than 0 (e.g. 2.0 -> 1.0 on its own) is just as much
+        "not what I asked for" as landing on 0."""
+        session = make_session(make_profile())
+        session._in_playback = True
+        session._expected_speed = 2.0
+
+        session._on_event(PLAYBACK_PROPERTY, {"speed": 1.0})
+
+        assert session.playback_interrupted.is_set()
+
+    def test_speed_matching_expected_does_not_set_interrupted(self):
+        session = make_session(make_profile())
+        session._in_playback = True
+        session._expected_speed = 1.0
+
+        session._on_event(PLAYBACK_PROPERTY, {"speed": 1.0})
+
+        assert not session.playback_interrupted.is_set()
+
+    def test_speed_event_ignored_when_expected_speed_unknown(self):
+        """_expected_speed is None until enter_playback() sets it — with
+        no baseline to compare against, no speed value can be judged an
+        interrupt."""
+        session = make_session(make_profile())
+        session._in_playback = True
+        session._expected_speed = None
+
+        session._on_event(PLAYBACK_PROPERTY, {"speed": 0.0})
+
+        assert not session.playback_interrupted.is_set()
+
+    def test_speed_deviation_ignored_while_write_in_flight(self):
         """The in-flight guard _put_playback() holds for its own dual-check
         — a self-requested pause()/shuttle(0.0) must never be misread as a
         camera-initiated interrupt."""
         session = make_session(make_profile())
         session._in_playback = True
+        session._expected_speed = 1.0
         session._playback_write_in_flight = True
 
         session._on_event(PLAYBACK_PROPERTY, {"speed": 0.0})
 
         assert not session.playback_interrupted.is_set()
 
-    def test_speed_drop_ignored_while_transport_mode_write_in_flight(self):
+    def test_speed_deviation_ignored_while_transport_mode_write_in_flight(self):
         """Regression test for a real-hardware-confirmed defect
         (POCKET_6K_G2 v8.6, 2026-08-05, tools/rest/verify_playback_interrupt.py's
         own sanity phase): leaving "Output" mode (_set_transport_mode, e.g.
@@ -2080,25 +2126,19 @@ class TestPlaybackInterrupted:
         set playback_interrupted on a purely self-requested stop()."""
         session = make_session(make_profile())
         session._in_playback = True
+        session._expected_speed = 1.0
         session._transport_mode_write_in_flight = True
 
         session._on_event(PLAYBACK_PROPERTY, {"speed": 0.0})
 
         assert not session.playback_interrupted.is_set()
 
-    def test_speed_drop_ignored_when_not_in_playback(self):
+    def test_speed_deviation_ignored_when_not_in_playback(self):
         session = make_session(make_profile())
         session._in_playback = False
+        session._expected_speed = 1.0
 
         session._on_event(PLAYBACK_PROPERTY, {"speed": 0.0})
-
-        assert not session.playback_interrupted.is_set()
-
-    def test_nonzero_speed_does_not_set_interrupted(self):
-        session = make_session(make_profile())
-        session._in_playback = True
-
-        session._on_event(PLAYBACK_PROPERTY, {"speed": 1.0})
 
         assert not session.playback_interrupted.is_set()
 
@@ -2175,10 +2215,13 @@ class TestPlaybackInterrupted:
     async def test_pause_confirmed_by_ws_event_does_not_set_interrupted(self):
         """Integration-level race check: the exact WS delivery that
         confirms a self-requested pause() must not also flip
-        playback_interrupted, even though it carries speed=0.0."""
+        playback_interrupted, even though the new speed (0.0) differs from
+        the pre-pause _expected_speed (1.0) — the in-flight guard, not the
+        "no baseline yet" case, has to be what prevents this."""
         client = FakeRestClient({PLAYBACK_PROPERTY: {"speed": 0.0}})
         session = make_session(make_playback_profile(), client=client)
         session._in_playback = True
+        session._expected_speed = 1.0
 
         async def deliver_event():
             await asyncio.sleep(0.01)
@@ -2197,6 +2240,7 @@ class TestPlaybackInterrupted:
         await session.pause()
 
         assert not session.playback_interrupted.is_set()
+        assert session._expected_speed == 0.0  # _put_playback() updates it on success
 
     @pytest.mark.asyncio
     async def test_stop_confirmed_by_ws_event_does_not_set_interrupted(self):
@@ -2230,10 +2274,13 @@ class TestPlaybackInterrupted:
         stop()'s own TRANSPORT_MODE_PROPERTY confirmation arrives alongside
         a side-effect PLAYBACK_PROPERTY speed=0 push the camera sends when
         leaving "Output" mode. Both must be absorbed without setting
-        playback_interrupted."""
+        playback_interrupted. _expected_speed is set to 1.0 (not 0.0) so
+        the in-flight guard, not the "no baseline yet" case, is what's
+        actually being exercised."""
         client = FakeRestClient({TRANSPORT_MODE_PROPERTY: {"mode": "InputPreview"}})
         session = make_session(make_playback_profile(), client=client)
         session._in_playback = True
+        session._expected_speed = 1.0
 
         async def deliver_events():
             await asyncio.sleep(0.01)
