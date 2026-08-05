@@ -624,8 +624,13 @@ class RestCameraSession:
         change that lands somewhere other than `0` (e.g. the camera
         dropping from `2.0` to `1.0` on its own) is exactly as much "not
         what I asked for" as landing on `0`, and the old fixed-`0` check
-        had no way to catch it. This broadening is not itself
-        real-hardware-confirmed yet. `_expected_speed` is set to `0.0` by
+        had no way to catch it. Real-hardware-confirmed as a working
+        trigger (`POCKET_6K_G2 v8.6`, 2026-08-05, two more runs after the
+        two below) — but both those runs' interrupts also landed on `0`,
+        so the "deviates to nonzero" branch specifically this broadening
+        exists for is still unexercised on real hardware; see
+        `wait_for_playback_interrupt`'s docstring for the full run trail.
+        `_expected_speed` is set to `0.0` by
         `enter_playback()` (the camera opens paused — see `_put_playback`'s
         docstring) and updated by `_put_playback()` itself after each write
         it confirms carries a `speed` change.
@@ -863,22 +868,26 @@ class RestCameraSession:
         the camera itself.
 
         **Real-hardware-confirmed end to end, `POCKET_6K_G2 v8.6`,
-        2026-08-05.** The self-requested sanity half found and fixed a real
-        false-positive this method's own trigger had (see `_on_event`'s
-        docstring) — once fixed, a clean re-run confirmed a normal
-        `pause()`/`play()`/`stop()` sequence never sets
-        `playback_interrupted`. A following run confirmed the positive
-        case too: `play()`, then an out-of-band interrupt (card pulled or
-        stop/pause pressed on the camera body), returned `True` after
-        13.5s, with `last_known_stop` corroborating (`True`) and the camera
-        still reporting `mode: "Output"` — a speed-only transition, caught
-        by the (at-the-time) fixed `speed == 0` check. The trigger was
-        widened to `speed != _expected_speed` afterward on request, so a
-        camera-initiated speed change landing anywhere other than `0` is
-        also caught, not only a full stop — this broadening has not itself
-        been exercised on real hardware yet, only the `speed == 0` case it
-        generalizes. See `docs/rest/session.md`'s Phase 8 item 2 section
-        for the full write-up.
+        2026-08-05, five runs total.** The self-requested sanity half found
+        and fixed a real false-positive this method's own trigger had (see
+        `_on_event`'s docstring) — once fixed, every subsequent run
+        confirmed a normal `pause()`/`play()`/`stop()` sequence never sets
+        `playback_interrupted`. The positive case is confirmed too, three
+        separate times: `play()`, then an out-of-band interrupt (card
+        pulled or stop/pause pressed on the camera body), returned `True`
+        after 13.5s, 19.1s, 6.2s, and 3.2s across four runs (the 13.5s and
+        19.1s runs against the original fixed `speed == 0` check, the
+        6.2s and 3.2s runs against the broadened `speed != _expected_speed`
+        trigger that replaced it — both versions confirmed working).
+        **Every one of these interrupts landed on a full stop** (`GET
+        /transports/0` still reporting `mode: "Output"`, `last_known_stop`
+        corroborating `True` where read) — the broadening's actual reason
+        for existing, a camera-initiated speed change landing on some value
+        other than `0`, has not itself been exercised on real hardware yet;
+        pulling a card or pressing stop/pause on the camera body apparently
+        always halts transport motion outright rather than leaving it at an
+        intermediate speed. See `docs/rest/session.md`'s Phase 8 item 2
+        section for the full five-run write-up.
         """
         if self.playback_interrupted.is_set():
             return True

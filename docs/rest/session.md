@@ -1199,19 +1199,22 @@ guarded by `_transport_mode_write_in_flight` — the analogous guard for
 `enter_playback()`/`exit_playback()`'s own write path.
 
 **Trigger condition: deviation from `_expected_speed`, not a fixed `speed == 0` check.**
-The first two real-hardware runs (below) both exercised a fixed `speed == 0` trigger and
-confirmed it worked, but that check has a real ceiling: it can only ever catch a full stop,
-not a camera-initiated speed change that lands anywhere else (e.g. `2.0` dropping to `1.0`
-on its own) — which is exactly as much "not what this session asked for." Changed on
-request to compare the pushed `speed` against `_expected_speed` instead — the speed value
-this session's own last confirmed `enter_playback()`/`shuttle()`/`play()`/`pause()` call
-actually set. `enter_playback()` resets it to `0.0` (the camera opens playback paused —
-see `_put_playback`'s real-body finding above), and `_put_playback()` updates it after
-every write it confirms carries a `speed` change. If `_expected_speed` is still `None` (no
-baseline yet), nothing can be judged an interrupt — the same "not enough information to
-say" posture `wait_for_low_storage()` takes on an unset `last_known_storage`. **This
-broadening has not itself been exercised on real hardware** — only the two runs below,
-both against the superseded fixed-`0` check.
+Changed on request after the first two real-hardware runs (below) confirmed a fixed
+`speed == 0` trigger worked — that check has a real ceiling: it can only ever catch a full
+stop, not a camera-initiated speed change that lands anywhere else (e.g. `2.0` dropping to
+`1.0` on its own) — which is exactly as much "not what this session asked for." Now compares
+the pushed `speed` against `_expected_speed` instead — the speed value this session's own
+last confirmed `enter_playback()`/`shuttle()`/`play()`/`pause()` call actually set.
+`enter_playback()` resets it to `0.0` (the camera opens playback paused — see
+`_put_playback`'s real-body finding above), and `_put_playback()` updates it after every
+write it confirms carries a `speed` change. If `_expected_speed` is still `None` (no
+baseline yet), nothing can be judged an interrupt — the same "not enough information to say"
+posture `wait_for_low_storage()` takes on an unset `last_known_storage`. **Real-hardware-
+confirmed as a working trigger, runs 4-5 below** — but both those runs' interrupts still
+happened to land on `0` (`last_known_stop` corroborating `True` in both), so the specific
+"deviates to a nonzero value" branch this broadening exists for remains real-hardware-
+unconfirmed; a full stop is the only camera-initiated transition observed so far, on any
+run against either version of the check.
 
 `_in_playback` (whether `enter_playback()` has confirmed and `exit_playback()`/`stop()`
 hasn't yet) and `playback_interrupted` are both set explicitly by `enter_playback()`/
@@ -1232,13 +1235,13 @@ channel on this camera's REST API at all (see item 3's write-up above). A caller
 reason still has to look at the camera itself.
 
 **Status: built, unit-tested (`TestPlaybackInterrupted`, `TestWaitForPlaybackInterrupt`), and
-real-hardware-confirmed end to end** (against the fixed-`speed == 0` trigger — see the
-broadening note above for what's changed since). `tools/rest/verify_playback_interrupt.py`
-is the verification script, following item 1's `verify_low_storage.py` precedent: a
-self-requested sanity phase (`select_clip` -> `enter_playback` -> `play` -> `pause` ->
-`play` -> `stop`, asserting `playback_interrupted` stays clear throughout) followed by the
-real positive case (`play()`, then pull the card or press stop/pause on the camera body,
-then `wait_for_playback_interrupt()`).
+real-hardware-confirmed end to end on both the original fixed-`speed == 0` trigger and the
+current `speed != _expected_speed` broadening** — five runs total, `POCKET_6K_G2 v8.6`,
+2026-08-05. `tools/rest/verify_playback_interrupt.py` is the verification script, following
+item 1's `verify_low_storage.py` precedent: a self-requested sanity phase (`select_clip` ->
+`enter_playback` -> `play` -> `pause` -> `play` -> `stop`, asserting `playback_interrupted`
+stays clear throughout) followed by the real positive case (`play()`, then pull the card or
+press stop/pause on the camera body, then `wait_for_playback_interrupt()`).
 
 **Run 1 — real-hardware-confirmed defect, found and fixed same day, `POCKET_6K_G2 v8.6`,
 2026-08-05, this tool's own sanity phase.** `stop()` reported `OK` (its own dual-check
@@ -1279,6 +1282,36 @@ interrupt (card pulled or stop/pause pressed on the camera body) was detected by
 speed-only transition, caught by the (at-the-time) fixed `speed == 0` check, not a mode
 exit. This is the first real-hardware evidence that the whole feature — subscription,
 in-flight guards, and the actual camera-initiated interrupt — works end to end.
+
+**Run 3 — third confirmation of the same fixed-`speed == 0` check, `--clip-id 2`, still
+same day, run *before* pulling the commit that broadened the trigger.** Both phases clean;
+`wait_for_playback_interrupt()` returned `True` after `19.1s`. The printed
+`last_known_play`/`last_known_stop` snapshot at read time was `True`/`False` — at first
+glance the *opposite* of run 2's stopped-looking signature — but this is a timing artifact,
+not a different interrupt shape: `last_known_play`/`last_known_stop` are live, continuously-
+updating fields (`_on_event`), and the fixed-`0` check that actually fired requires `speed`
+to have hit `0` at some point regardless of what these two booleans show *afterward*. The
+most likely read: the operator resumed playback (or the camera did) between the interrupt
+firing and this print statement executing, moving `speed` back off `0` again before the
+values were captured. Not itself concerning — `playback_interrupted`'s own `set()` already
+happened and is what `wait_for_playback_interrupt()` reports; nothing about this run
+suggests the trigger fired on a false signal.
+
+**Runs 4 and 5 — first real-hardware runs of the broadened `speed != _expected_speed`
+trigger**, both `--clip-id 2`, same day, after pulling the broadening commit. Run 4: both
+phases clean, interrupt detected in `6.2s`, `last_known_play=False`/`last_known_stop=True`
+at read time — a clean stopped signature. Run 5 (same, with `DEBUG` logging enabled,
+showing every `GET`/`PUT`/`POST` call and its status code): both phases clean, interrupt
+detected in `3.2s`, same `last_known_play=False`/`last_known_stop=True` signature. **Both
+confirm the broadened trigger works as a drop-in replacement for the fixed-`0` check** —
+but neither run's interrupt happened to land anywhere other than `0`, so the specific
+"deviates to a nonzero value" branch the broadening was written for (see the trigger-
+condition paragraph above) still has no real-hardware run of its own. Every camera-
+initiated interrupt observed across all five runs so far, on either version of the check,
+has been a full stop — consistent with pulling a card or pressing stop/pause on the camera
+body always halting transport motion outright, never leaving it at some other nonzero
+speed. Exercising the nonzero-deviation branch for real would need a different kind of
+interrupt than "the operator stops the camera" — not yet identified.
 
 ---
 

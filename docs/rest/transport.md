@@ -1206,9 +1206,18 @@ the actual camera-initiated interrupt — also confirmed: after `play()`, an out
 interrupt (card pulled or stop/pause pressed on the camera body) was detected in `13.5s`,
 `last_known_stop` corroborating (`True`), `GET /transports/0` still reporting
 `mode: "Output"` (a speed-only transition). This was caught by the fixed `speed == 0`
-trigger in place at the time; the trigger has since been broadened to compare against
-`_expected_speed` instead (see `docs/rest/session.md`), which this tool has not yet
-re-verified.
+trigger in place at the time; the trigger was then broadened to compare against
+`_expected_speed` instead (see `docs/rest/session.md`).
+
+**Runs 3-5, same day, `--clip-id 2`.** Run 3 (before pulling the broadening commit, still
+the fixed `speed == 0` trigger): both phases clean, interrupt detected in `19.1s` —
+third confirmation of the original trigger. Runs 4 and 5 (after pulling, the broadened
+`speed != _expected_speed` trigger): both phases clean, interrupts detected in `6.2s` and
+`3.2s` — the trigger's first two real-hardware confirmations. All three interrupts across
+runs 3-5 read as a plain stop (`last_known_stop=True` at readback in runs 4-5) — the
+"deviates to a nonzero value, not just 0" case the broadening specifically exists for still
+has no real-hardware run of its own; see `docs/rest/session.md`'s `playback_interrupted`
+section for the full five-run trail.
 
 ---
 

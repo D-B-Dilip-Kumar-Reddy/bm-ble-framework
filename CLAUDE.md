@@ -272,10 +272,12 @@ src/bmd_camera/
                               # (the speed this session's own last confirmed write actually
                               # set — broadened from a fixed speed==0 check so a
                               # camera-initiated change to any other speed is caught too, not
-                              # only a full stop; this broadening itself is not yet
-                              # real-hardware-run) or /transports/0 mode-left-"Output", that
-                              # arrived with none of this session's own writes in flight —
-                              # both _playback_write_in_flight and
+                              # only a full stop; real-hardware-confirmed as a working trigger,
+                              # but every observed interrupt across all 5 real-hardware runs so
+                              # far has landed on 0, so the "deviates to nonzero" branch
+                              # specifically remains unexercised) or /transports/0
+                              # mode-left-"Output", that arrived with none of this session's own
+                              # writes in flight — both _playback_write_in_flight and
                               # _transport_mode_write_in_flight guard *both* branches, not just
                               # the one matching their own property, after a real-hardware find
                               # (POCKET_6K_G2 v8.6, 2026-08-05, this tool's own sanity phase):
@@ -294,7 +296,11 @@ src/bmd_camera/
                               # unrelated select_clip() sensor-resolution ambiguity) confirmed
                               # both phases end to end against the (at-the-time) fixed speed==0
                               # trigger: phase 1 clean, and phase 2's real camera-initiated
-                              # interrupt detected in 13.5s
+                              # interrupt detected in 13.5s. Two more runs the same day
+                              # (against the fixed==0 check once more, then twice against the
+                              # broadened trigger after pulling it) reconfirmed both versions
+                              # clean at 19.1s/6.2s/3.2s — see docs/rest/session.md's
+                              # playback_interrupted section for the full five-run trail
     mapping.py                 # Codec name derivation between the BLE profile's vocabulary
                               # and REST's own spelling — confirmed strings always win
                               # (design principle 1); this is a fallback seed only.
