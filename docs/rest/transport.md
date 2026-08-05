@@ -465,7 +465,12 @@ confirmation design cannot lean on `/clips/list`; it still needs the mounts rout
 
 The sweep ran at 10:57:46 local, so this is time-of-day timecode as **BCD HH:MM:SS:FF,
 big-endian**. The BLE `TIMECODE` characteristic decodes as `[frames, seconds, minutes,
-hours]` — **the opposite order** (`docs/ble/timecode.md`). The `Timecode` dataclass and
+hours]` — **the opposite order** (`docs/ble/timecode.md`). This sweep's `clip` value was
+just `0` and wasn't investigated further at the time; the official `Notification.yaml`
+spec later confirmed it's BCD-encoded in this exact same format (position within the
+current clip, not time-of-day) — see `RestCameraSession.clip_timecode()` and
+`docs/rest/session.md` for the decode confirmation against real recorded data. The
+`Timecode` dataclass and
 `duration_seconds()` are reusable; `decode_timecode()` is not.
 
 #### Undocumented properties `/event/list` revealed
