@@ -568,7 +568,11 @@ be mistaken for a stale earlier call's crossing.
 Not yet run against real hardware — the WS push shape is confirmed live, but
 `wait_for_low_storage()` itself (the threshold-crossing logic, the immediate-return
 shortcut, the multi-run threshold-clearing discipline) has only been exercised against the
-injected-fake test suite so far.
+injected-fake test suite so far. `tools/rest/verify_low_storage.py` is the real-hardware
+verification script for exactly this gap (`docs/rest/transport.md`'s own tool section has
+the full write-up) — recommends a smaller card (128GB) than the 1TB card every other
+real-hardware run in this doc used, since a meaningful threshold is otherwise impractical
+to reach in one session.
 
 ---
 
