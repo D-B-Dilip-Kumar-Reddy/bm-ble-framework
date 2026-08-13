@@ -318,12 +318,15 @@ evidence. A `delete_still()`/`delete_clip()` method gets designed and built only
 real `--delete-real-file` run against real hardware answers the question, matching the
 same sniffer-first discipline that governs every other capability in this codebase.
 
-**Status: `--probe-mounts-delete` run once, real hardware, `POCKET_6K_G2 v8.6`,
-2026-08-13 — inconclusive.** See "Mounts DELETE investigation results" under Sweep
-results below for the full write-up: one `404` (generic, not `DELETE`-specific) and one
-`500` (a new defect, likely related to the known Stills `500` but not proven to be about
-`DELETE` specifically, since the probed target was synthetic). `--delete-real-file` has
-not been run yet — that is the next step, and the only one that can give a real answer.
+**Status: CONFIRMED — `DELETE` on `/mounts/...` really deletes a real clip.**
+`--probe-mounts-delete` ran first (`POCKET_6K_G2 v8.6`, 2026-08-13) and was inconclusive —
+one generic `404`, one `500` against a synthetic target that couldn't distinguish a real
+defect from a routing question. `--delete-real-file` against a real clip crashed on a tool
+bug (`response.text()` on a binary `.braw` body — fixed, see `decode_body()`), so the
+actual confirmation came from the operator repeating the same GET/DELETE/GET sequence by
+hand in Postman: `200` (before) → `200 OK` (delete) → `404` (after). See "Mounts DELETE
+investigation — CONFIRMED" under Sweep results below for the full write-up, including what
+this does and does not confirm about stills specifically.
 
 ### Preflight
 
@@ -721,6 +724,52 @@ target actually resolves (the crash above was specifically about the missing-tar
 Either answer is useful evidence — a `500` here would mean this camera's `/mounts/...`
 surface cannot support deletion at all regardless of intent, which is itself a real,
 useful (if disappointing) conclusion to this investigation.
+
+### Mounts DELETE investigation — CONFIRMED, `POCKET_6K_G2 v8.6`, over USB, plaintext HTTP — 2026-08-13
+
+**`DELETE` on `/mounts/...` really does delete a real clip.** The `--delete-real-file` run
+against `/mounts/A002-sd1/A002_08120218_C001.braw` (one of the two ready-made targets
+above) got through the typed-filename confirmation and its own opening `GET`, then
+crashed — a real bug in the tool, not in the investigation's methodology: `request()`
+called `response.text()` on a `.braw` file's body, and `.braw` is
+`application/octet-stream` binary, which isn't valid UTF-8. `UnicodeDecodeError` before
+the tool's own `DELETE` was ever sent. **Fixed** (`decode_body()` now decodes JSON, falls
+back to plain text, and falls back again to a `<binary body, N bytes>` placeholder rather
+than raising — the same defensive shape `RestClient.exists()` already uses on the library
+side for exactly this class of file, see its docstring). Unit-tested directly, including
+every single byte value alone as a fuzz check, since a decoder that must never raise is
+exactly the kind of function worth testing exhaustively rather than by example.
+
+Since the tool crashed before sending its own `DELETE`, the actual confirmation came from
+the operator repeating the same three-step sequence by hand in Postman — arguably *better*
+evidence than the tool would have produced, since it rules out any interpretation bug in
+the tool's own status-code handling:
+
+1. `GET http://pocket-cinema-camera-6k-g2.local/mounts/A002-sd1/A002_08120218_C001.braw`
+   → **`200`**, `Content-Type: application/octet-stream` (confirming it's the real binary
+   clip, not a metadata endpoint).
+2. `DELETE` the same URL → **`200 OK`** (an HTML `<title>200 OK</title>` page — the same
+   generic framework-default shape the `404`/`500` pages elsewhere in this investigation
+   have, not a BMD-authored response).
+3. `GET` the same URL again → **`404 Not Found`** — the file is genuinely gone.
+
+**This settles the question this whole investigation existed to answer: `DELETE` on
+`/mounts/...` is a real, working deletion capability on this camera and firmware, at least
+for clip files.** It does *not* by itself confirm still deletion specifically — the Stills
+directory's own `500` listing defect means no still's exact `/mounts/...` path has been
+independently confirmed yet the way this clip's path was (read off the `A002-sd1/` listing
+directly). The mechanism is very likely identical (same filesystem surface, same server),
+but design principle 6 says confirm before trusting, not extrapolate — a still-specific
+confirmation is the one remaining gap, and the next real step if it's wanted is finding a
+real still path (e.g. via `rest/media.py`'s existing mtime-based discovery, which never
+needed the broken listing to begin with) and running `--delete-real-file` against it
+directly.
+
+No `delete_still()`/`delete_clip()` method has been added to `RestCameraSession` yet — this
+result is what the investigation's own exit condition (design principle 6, "a real
+`--delete-real-file` run answers the question") was waiting for, but building the actual
+library capability is a separate, deliberate next step, not an automatic consequence of
+this confirmation landing.
 
 ### `POCKET_6K_PRO v8.6`, over USB, plaintext HTTP — 2026-08-03
 

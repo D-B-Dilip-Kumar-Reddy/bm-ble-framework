@@ -541,6 +541,37 @@ SPEC_PROPERTIES: tuple[str, ...] = (
 # ── HTTP sweep ──────────────────────────────────────────────────────────────
 
 
+def decode_body(raw: bytes) -> Any:
+    """Pure: turn a response's raw bytes into JSON, text, or a binary
+    placeholder — never raising.
+
+    Real-hardware-confirmed necessary, `POCKET_6K_G2 v8.6`, 2026-08-13:
+    `request()` used to call `response.text()` directly, which decodes as
+    UTF-8 and raises `UnicodeDecodeError` outright on binary content. A
+    real `.braw` clip's `GET` body is `application/octet-stream` binary —
+    `probe_mounts_delete_real_file()`'s first real-hardware run crashed
+    here, on its own opening `GET`, before ever reaching the `DELETE` it
+    exists to test. This is the same trap `RestClient.exists()` (the
+    library's own client) was built to avoid for exactly this reason —
+    see its docstring. `request()` needs the body for the summary/report
+    (`exists()`'s "never touch the body" escape hatch doesn't fit here),
+    so this decodes defensively instead: JSON if it parses, plain text if
+    it doesn't, or a `<binary body, N bytes>` placeholder if it isn't
+    valid UTF-8 at all — never a crash, and never silently dropping the
+    fact that a body existed.
+    """
+    if not raw:
+        return None
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return f"<binary body, {len(raw)} bytes>"
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return text[:500]
+
+
 async def request(
     session: aiohttp.ClientSession,
     method: str,
@@ -554,12 +585,8 @@ async def request(
         async with session.request(method, url, json=json_body) as response:
             body: Any = None
             if response.status != 204:
-                text = await response.text()
-                if text:
-                    try:
-                        body = json.loads(text)
-                    except json.JSONDecodeError:
-                        body = text[:500]
+                raw = await response.read()
+                body = decode_body(raw)
             latency_ms = (time.monotonic() - started) * 1000
             return ProbeResult(method, url, response.status, latency_ms, body)
     except (aiohttp.ClientError, TimeoutError, OSError) as exc:

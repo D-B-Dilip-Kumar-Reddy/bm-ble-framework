@@ -1802,10 +1802,17 @@ rather than accepting the very first terminal-looking read.
   `set_timeline(clip_unique_ids)` because there's nothing on this camera for it to mean;
   the playable set is always every clip sharing the current format, one format group at a
   time.
-- **No per-clip or per-still deletion.** `format_device()` (Phase 10, above) is the only
-  media-erasure capability the official REST spec exposes — confirmed by reading all 11
-  spec files given for this phase, none of which documents a delete-clip or delete-still
-  endpoint. Whether the separate `/mounts/...` filesystem surface (outside the 11 control-API
-  spec files entirely) supports `DELETE` for individual files is a real open question,
-  deliberately deferred at the user's own request rather than investigated as part of this
-  phase.
+- **No `RestCameraSession` method for per-clip or per-still deletion, even though the
+  capability is now confirmed to exist.** `format_device()` (Phase 10, above) is the only
+  media-erasure capability the official REST spec itself exposes — confirmed by reading all
+  11 spec files given for that phase, none of which documents a delete-clip or delete-still
+  endpoint. The separate `/mounts/...` filesystem surface (outside the 11 control-API spec
+  files entirely) was investigated afterward (`tools/rest/probe_endpoints.py`'s
+  `--probe-mounts-delete`/`--delete-real-file`, `docs/rest/transport.md`'s Mode 3 section) and
+  **is now real-hardware-confirmed to support `DELETE` on at least one real clip file**
+  (`POCKET_6K_G2 v8.6`, 2026-08-13: `GET` `200` → `DELETE` `200 OK` → `GET` `404`). Still
+  deletion specifically has not had its own independent confirmation (the Stills directory's
+  known `500` listing defect means no still's exact path has been read off a listing the way
+  the confirmed clip's was) — plausibly the same mechanism, not yet proven. A
+  `delete_clip()`/`delete_still()` method on `RestCameraSession` is a deliberate next step
+  from here, not a consequence of this confirmation landing on its own.

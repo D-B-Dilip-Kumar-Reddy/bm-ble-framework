@@ -23,6 +23,7 @@ from probe_endpoints import (  # noqa: E402
     build_catalog,
     build_rest_profile_block,
     classify,
+    decode_body,
     delete_real_file_conclusion,
     device_names_from_workingset,
     diagnose,
@@ -101,6 +102,43 @@ class TestClassify:
 
     def test_probe_result_exposes_classification(self):
         assert ProbeResult("GET", "/system", 501).classification == "not_implemented"
+
+
+class TestDecodeBody:
+    """`decode_body()` — real-hardware-confirmed necessary, `POCKET_6K_G2 v8.6`,
+    2026-08-13: `request()`'s previous `response.text()` call crashed
+    outright with `UnicodeDecodeError` on a real `.braw` clip's
+    `application/octet-stream` GET body, before `probe_mounts_delete_real_file()`
+    ever reached its own DELETE. Never raises, on any input."""
+
+    def test_empty_bytes_is_none(self):
+        assert decode_body(b"") is None
+
+    def test_valid_json_is_parsed(self):
+        assert decode_body(b'{"iso": 400}') == {"iso": 400}
+
+    def test_plain_text_is_returned_as_is(self):
+        assert decode_body(b"hello") == "hello"
+
+    def test_long_text_is_truncated_to_500_chars(self):
+        raw = ("x" * 600).encode()
+        assert len(decode_body(raw)) == 500
+
+    def test_non_utf8_binary_becomes_a_placeholder(self):
+        """The real defect: a .braw file's raw bytes are not valid UTF-8 at
+        all (0xD9 is not a valid continuation byte on its own)."""
+        raw = b"\xd9\x00\x01\x02"
+        result = decode_body(raw)
+        assert isinstance(result, str)
+        assert "binary body" in result
+        assert str(len(raw)) in result
+
+    def test_never_raises_on_arbitrary_bytes(self):
+        """Fuzz-ish: every single byte value, alone, must decode to
+        *something* rather than raising — this is the whole point of the
+        fix."""
+        for value in range(256):
+            decode_body(bytes([value]))  # must not raise
 
 
 class TestCatalog:

@@ -531,22 +531,35 @@ tools/
                             # filename gated — GET before/DELETE/GET after on one operator-
                             # chosen real file, verdict keyed on the after-GET's status, not
                             # the DELETE response's own). Neither flag adds a capability to
-                            # RestCameraSession — a delete_still()/delete_clip() method gets
-                            # built only once a real --delete-real-file run answers the
-                            # question (design principle 6). --probe-mounts-delete run once
-                            # for real, POCKET_6K_G2 v8.6, 2026-08-13: INCONCLUSIVE. The root
-                            # /mounts/ DELETE got a generic 404 (stock Werkzeug/Flask
-                            # NotFound page — evidence of no matching route at all, not
-                            # DELETE-specific); the real device directory's DELETE got a 500,
-                            # the same boilerplate page the known Stills-listing GET 500
-                            # defect returns — plausibly the same broken code path, plausibly
-                            # unrelated to DELETE specifically, since the probed target was
-                            # synthetic and never real. --delete-real-file (against a real
-                            # file, e.g. one of the two short test clips this same run found
-                            # at /mounts/A002-sd1/*.braw) is the next step and the only one
-                            # that can give a real answer — see docs/rest/transport.md's
-                            # "Mounts DELETE investigation results" section for the full
-                            # write-up
+                            # RestCameraSession on its own — a delete_still()/delete_clip()
+                            # method is a deliberate next step, not an automatic consequence
+                            # of confirmation landing (design principle 6). --probe-mounts-delete
+                            # run once for real, POCKET_6K_G2 v8.6, 2026-08-13: inconclusive
+                            # (root /mounts/ DELETE got a generic 404 — stock Werkzeug/Flask
+                            # NotFound page, not DELETE-specific; the real device directory's
+                            # DELETE got a 500, the same boilerplate the known Stills-listing
+                            # GET 500 defect returns, but the probed target was synthetic so
+                            # this couldn't distinguish a real defect from a routing
+                            # question). --delete-real-file's first attempt (against a real
+                            # clip, /mounts/A002-sd1/A002_08120218_C001.braw) crashed on a
+                            # real tool bug instead of reaching its own DELETE: request()
+                            # called response.text() on a .braw file's application/octet-stream
+                            # body, which isn't valid UTF-8 — UnicodeDecodeError. Fixed:
+                            # decode_body() now falls back to a "<binary body, N bytes>"
+                            # placeholder rather than raising (unit-tested against every
+                            # single byte value alone, matching RestClient.exists()'s own
+                            # binary-safety discipline on the library side). Since the tool
+                            # crashed, the operator repeated the same GET/DELETE/GET sequence
+                            # by hand in Postman instead — arguably stronger evidence, since
+                            # it rules out any bug in the tool's own status interpretation:
+                            # 200 (before) -> 200 OK (delete) -> 404 (after). CONFIRMED:
+                            # DELETE on /mounts/... really deletes a real clip file on this
+                            # camera and firmware. Still deletion specifically remains
+                            # independently unconfirmed (the Stills 500 defect means no
+                            # still's exact path has been read off a listing the way this
+                            # clip's was) — plausibly the same mechanism, not yet proven. See
+                            # docs/rest/transport.md's "Mounts DELETE investigation —
+                            # CONFIRMED" section for the full write-up
   captures/                 # Runtime output of sniffers/, control/, and rest/ scripts (gitignored)
 
 Tools are grouped by folder according to what kind of thing they do — read-only
