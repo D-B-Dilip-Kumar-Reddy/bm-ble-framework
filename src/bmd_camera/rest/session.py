@@ -69,6 +69,7 @@ import logging
 import re
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 try:
@@ -2573,5 +2574,114 @@ class RestCameraSession:
                 f"[{self.host}] delete_still({path!r}): still exists after DELETE — "
                 f"not confirmed deleted within {self.verify_timeout_s}s"
             )
+
+    async def download_clip(
+        self, clip_unique_id: int, dest_dir: str | Path, *, overwrite: bool = False
+    ) -> Path:
+        """Download one clip's real `/mounts/...` file straight to a local
+        directory (Phase 12) — the mirror-image operation of `delete_clip()`,
+        reusing the same clip-resolution and mount-path-construction logic
+        (`clips()`, `resolve_active_mount()`, the single-confirmed-sample
+        "basename directly under the mount root, reel subdirectory dropped"
+        rule — see `delete_clip()`'s docstring for the full caveat, which
+        applies unchanged here).
+
+        `clip_unique_id` is resolved against a fresh `clips()` call, raising
+        `ValueError` if it isn't found — remember it is **not stable across
+        reconnects** (`docs/rest/session.md`'s `clips()` section).
+
+        The file is saved as `dest_dir/<remote filename>` — `dest_dir` must
+        already exist (`ValueError` if not) and be a directory; this method
+        never creates directories. If a file of that name already exists at
+        the destination, raises `FileExistsError` unless `overwrite=True` —
+        checked before any network request, so a naming collision never
+        costs a wasted multi-GB transfer.
+
+        The actual streaming and its integrity check (the downloaded byte
+        count must match the server's own `Content-Length`) are
+        `RestClient.download()`'s job — see that method's docstring. This
+        is a read from the camera plus a local write, not a camera-state
+        write, so design principle 3's dual-check discipline doesn't apply
+        the same way it does to `record_start`/`set_camera_format`/etc.;
+        the `Content-Length` check is this operation's equivalent
+        verification.
+
+        **Not yet real-hardware-run.** Unit-tested against a fake client
+        only — the first real run against an actual clip is what confirms
+        this, the same status every write capability in this codebase
+        carries before its first real-hardware pass.
+        """
+        matches = [clip for clip in await self.clips() if clip.clip_unique_id == clip_unique_id]
+        if not matches:
+            raise ValueError(
+                f"[{self.host}] No clip with clip_unique_id={clip_unique_id} in "
+                f"GET /clips/list on {self.profile.model_key} {self.profile.firmware}"
+            )
+        clip = matches[0]
+
+        mount_path = await resolve_active_mount(self)
+        filename = clip.file_path.rsplit("/", 1)[-1]
+        source = f"{mount_path}{filename}"
+
+        dest_dir = Path(dest_dir)
+        if not dest_dir.is_dir():
+            raise ValueError(f"dest_dir {dest_dir} does not exist or is not a directory")
+        dest = dest_dir / filename
+        if dest.exists() and not overwrite:
+            raise FileExistsError(f"{dest} already exists — pass overwrite=True to replace it")
+
+        self._log.info(
+            "[%s] Downloading clip %s (clip_unique_id=%s) -> %s",
+            self.host,
+            source,
+            clip_unique_id,
+            dest,
+        )
+        written = await self._rest_client.download(source, dest, api_prefixed=False)
+        self._log.info(
+            "[%s] Clip %s (clip_unique_id=%s) downloaded: %d bytes -> %s",
+            self.host,
+            source,
+            clip_unique_id,
+            written,
+            dest,
+        )
+        return dest
+
+    async def download_still(
+        self, path: str, dest_dir: str | Path, *, overwrite: bool = False
+    ) -> Path:
+        """Download one still's real `/mounts/.../Stills/...` file straight
+        to a local directory (Phase 12) — the mirror-image operation of
+        `delete_still()`.
+
+        **Unlike `download_clip()`, this method takes the full `/mounts/...`
+        path directly and never tries to resolve or guess one itself** — the
+        same reasoning `delete_still()`'s docstring gives in full: the
+        Stills directory `500`s unconditionally on listing, so there is no
+        `clips()`-equivalent to resolve a still against. Obtain `path` the
+        same way `delete_still()`'s callers do — `rest/media.py`'s
+        `guess_new_still_path()` or manual investigation.
+
+        The file is saved as `dest_dir/<basename of path>` — `dest_dir`
+        must already exist (`ValueError` if not); `FileExistsError` if the
+        destination filename is already taken, unless `overwrite=True`,
+        checked before any network request.
+
+        **Not yet real-hardware-run.** Unit-tested against a fake client
+        only.
+        """
+        dest_dir = Path(dest_dir)
+        if not dest_dir.is_dir():
+            raise ValueError(f"dest_dir {dest_dir} does not exist or is not a directory")
+        filename = path.rsplit("/", 1)[-1]
+        dest = dest_dir / filename
+        if dest.exists() and not overwrite:
+            raise FileExistsError(f"{dest} already exists — pass overwrite=True to replace it")
+
+        self._log.info("[%s] Downloading still %s -> %s", self.host, path, dest)
+        written = await self._rest_client.download(path, dest, api_prefixed=False)
+        self._log.info("[%s] Still %s downloaded: %d bytes -> %s", self.host, path, written, dest)
+        return dest
 
         self._log.info("[%s] Still %s deleted and confirmed gone", self.host, path)

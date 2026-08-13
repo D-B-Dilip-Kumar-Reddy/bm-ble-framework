@@ -161,7 +161,13 @@ src/bmd_camera/
   rest/
     constants.py             # API base path, WS path, default timeouts (fixed by spec)
     client.py                # RestClient — REST transport only, raw status-code handling
-                              # (204/501/2xx/other), no camera semantics — see docs/rest/transport.md
+                              # (204/501/2xx/other), no camera semantics — see docs/rest/transport.md.
+                              # download() (Phase 12) streams a GET body straight to disk via
+                              # aiohttp's iter_chunked() + asyncio.to_thread() writes, never
+                              # buffering a whole multi-GB clip in memory; stall-based timeout
+                              # (sock_read, not total) and a Content-Length integrity check are
+                              # its own transport-level verification. Not yet real-hardware-run —
+                              # see docs/rest/session.md's Phase 12 section
     events.py                # RestEventRouter — buffers propertyValueChanged WS events,
                               # mirrors ble/notification_router.py's arm()/wait_for() contract
                               # exactly, keyed by property path instead of (category, parameter)
@@ -483,6 +489,19 @@ src/bmd_camera/
                               # the still half of the same investigation delete_clip()'s
                               # confirmation closed for clips. See docs/rest/session.md's
                               # Phase 11 section.
+                              # download_clip(clip_unique_id, dest_dir, *, overwrite=False) and
+                              # download_still(path, dest_dir, *, overwrite=False) (Phase 12) —
+                              # the mirror-image capability of Phase 11: copy a clip/still to
+                              # local disk instead of erasing it, reusing delete_clip()'s exact
+                              # clip-resolution/mount-path logic and delete_still()'s exact
+                              # "caller supplies the full path" shape. Verification is
+                              # RestClient.download()'s own Content-Length integrity check, not
+                              # a camera-state dual-check (this is a read + local write, not a
+                              # camera write). dest_dir must already exist; FileExistsError
+                              # without overwrite=True, checked before any network request. Not
+                              # yet real-hardware-run — examples/rest_download_clip.py and
+                              # rest_download_still.py are the verification scripts. See
+                              # docs/rest/session.md's Phase 12 section.
     mapping.py                 # Codec name derivation between the BLE profile's vocabulary
                               # and REST's own spelling — confirmed strings always win
                               # (design principle 1); this is a fallback seed only.
@@ -865,6 +884,28 @@ examples/
                             # real-hardware-confirmed end to end, the same status
                             # delete_clip() already carried. See docs/rest/session.md's
                             # delete_still() section.
+  rest_download_clip.py     # Phase 12 — RestCameraSession.download_clip(). Non-destructive
+                            # mirror-image of rest_delete_clip.py: downloads whatever clip
+                            # already happens to be on the card (the first clips() entry by
+                            # default, or an explicit CLIP_UNIQUE_ID) to a local downloads/
+                            # directory rather than recording and deleting a disposable one —
+                            # there is nothing to protect against here the way
+                            # rest_delete_clip.py's self-recorded-clip design protects against
+                            # deleting real footage. Not yet real-hardware-run — this script's
+                            # first successful run is that confirmation, the same status every
+                            # capability in this codebase carries before its first real-hardware
+                            # pass. See docs/rest/session.md's Phase 12 section.
+  rest_download_still.py    # Phase 12 — RestCameraSession.download_still(). Mirrors
+                            # rest_delete_still.py's BLE-trigger + REST-confirm + guess
+                            # composition exactly, swapping the final destructive
+                            # delete_still(confirm=True) for a non-destructive
+                            # download_still() — the photo stays on the card. Inherits
+                            # rest_delete_still.py's own real-hardware-confirmed camera-clock-
+                            # skew failure mode for guess_new_still_path() (rest/media.py's
+                            # module docstring); if the guess returns None, the fix is the same
+                            # — obtain the real filename by another means and call
+                            # download_still() directly. Not yet real-hardware-run. See
+                            # docs/rest/session.md's Phase 12 section.
   playback.py               # (planned)
 
 tests/

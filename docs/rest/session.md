@@ -1767,6 +1767,75 @@ no analogous best-effort check is possible here.
 
 ---
 
+## Downloading clips/stills to the PC (Phase 12)
+
+The mirror-image capability of Phase 11's deletion: copy a real clip or still off the camera's
+`/mounts/...` filesystem to local disk, instead of erasing it. Built on the same
+`resolve_active_mount()`/mount-path-construction machinery `delete_clip()`/`delete_still()`
+already use, so it inherits their single-confirmed-sample caveat about the real path shape
+unchanged (see `delete_clip()`'s docstring).
+
+**Status: brand new this session, unit-tested against a fake client only — not yet run against
+real hardware.** `examples/rest_download_clip.py` and `examples/rest_download_still.py` are the
+real-hardware verification scripts; their first successful runs are what closes this gap, the
+same status every capability in this codebase carries before its first real-hardware pass.
+
+### `RestClient.download(path, dest, *, api_prefixed=False, chunk_size=1MiB, stall_timeout_s=30.0)` → `int`
+
+The new transport primitive underneath both methods below (`rest/client.py`). A real clip runs
+tens of GB (`rest_record_test_clip.py`'s real-hardware runs recorded a 600s clip whose
+`bytes_written` alone was ~35GB) — `get()`'s `.json()`/`.text()` body handling would either raise
+decoding binary content (the exact crash class `exists()` was built to avoid) or hold the whole
+file in memory trying not to. `download()` instead streams via `aiohttp`'s
+`resp.content.iter_chunked()`, writing each chunk with `asyncio.to_thread()` so a disk write
+never blocks the event loop (design principle 11).
+
+**Timeout is stall-based, not total-based** — the one place in this client that departs from
+`DEFAULT_TIMEOUT_S`'s flat 5s budget, because a 5s *total* cap is nonsensical for a multi-GB
+transfer whose total time is expected to be long. `stall_timeout_s` (default 30s) instead bounds
+*inactivity*: no data received for that long means genuinely stalled, implemented via
+`aiohttp.ClientTimeout(sock_connect=self.timeout_s, sock_read=stall_timeout_s)` with no `total`
+cap at all.
+
+Defaults to `api_prefixed=False` — the opposite of `get()`/`exists()`/`delete()` — since every
+real caller downloads a media file from the `/mounts/...` namespace, never a control-API JSON
+response.
+
+Returns the number of bytes written. Raises `BMDRestError` if the server's own `Content-Length`
+doesn't match what was actually received — a transport-level integrity check (design principle
+5's boundary: this is raw HTTP correctness, not camera semantics, so it lives in `client.py`
+rather than being layered on in `session.py` the way `delete_clip()`/`delete_still()`'s
+camera-semantic `exists()`-before/after checks are). `501`/non-2xx/connection-failure handling
+otherwise matches every other method's status contract.
+
+### `download_clip(clip_unique_id, dest_dir, *, overwrite=False)` → `Path`
+
+The mirror-image operation of `delete_clip()`, reusing its exact clip-resolution
+(`clips()`) and mount-path-construction logic — the same single-confirmed-sample "basename
+directly under the mount root, reel subdirectory dropped" rule applies unchanged here. Saves the
+file as `dest_dir/<remote filename>`.
+
+`dest_dir` must already exist (`ValueError` if not — this method never creates directories,
+matching `format_device()`/`delete_clip()`'s "do exactly what was asked, nothing implicit"
+discipline). If a file of that name already exists at the destination, raises `FileExistsError`
+unless `overwrite=True` — checked before any network request, so a naming collision never costs
+a wasted multi-GB transfer.
+
+This is a read from the camera plus a local write, not a camera-state write, so design principle
+3's dual-check discipline (echo/event primary, readback secondary) doesn't apply the same way it
+does to `record_start`/`set_camera_format`. `RestClient.download()`'s own `Content-Length`
+integrity check is this operation's verification.
+
+### `download_still(path, dest_dir, *, overwrite=False)` → `Path`
+
+The mirror-image operation of `delete_still()`: takes the full `/mounts/.../Stills/...` path
+directly rather than resolving one, for the identical reason `delete_still()` does — the Stills
+directory `500`s unconditionally on listing, so there is no `clips()`-equivalent to resolve
+against. Obtain `path` the same way `delete_still()`'s callers do — `guess_new_still_path()` or
+manual investigation. Same `dest_dir`/`overwrite` contract as `download_clip()`.
+
+---
+
 ## Codec name mapping (`rest/mapping.py`)
 
 `RestCameraSession`'s write path (`set_camera_format`) takes profile *names* — the

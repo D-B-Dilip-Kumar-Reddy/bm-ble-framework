@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from pathlib import Path
 
 import aiohttp
 import pytest
@@ -264,16 +265,19 @@ class FakeRestClient:
         errors: dict[str, Exception] | None = None,
         put_responses: dict[str, object] | None = None,
         exists_responses: dict[str, bool] | None = None,
+        download_responses: dict[str, bytes] | None = None,
     ):
         self.responses = responses
         self.errors = errors or {}
         self.put_responses = put_responses or {}
         self.exists_responses = exists_responses or {}
+        self.download_responses = download_responses or {}
         self.calls: list[str] = []
         self.put_calls: list[tuple[str, object]] = []
         self.exists_calls: list[str] = []
         self.delete_calls: list[str] = []
         self.post_calls: list[tuple[str, object]] = []
+        self.download_calls: list[tuple[str, str]] = []
         self.api_prefixed_calls: dict[str, bool] = {}
 
     async def get(self, path: str, *, api_prefixed: bool = True):
@@ -308,6 +312,15 @@ class FakeRestClient:
         if path in self.errors:
             raise self.errors[path]
         return self.exists_responses.get(path, False)
+
+    async def download(self, path: str, dest, *, api_prefixed: bool = False) -> int:
+        self.download_calls.append((path, str(dest)))
+        self.api_prefixed_calls[path] = api_prefixed
+        if path in self.errors:
+            raise self.errors[path]
+        content = self.download_responses.get(path, b"")
+        Path(dest).write_bytes(content)
+        return len(content)
 
 
 def make_session(
@@ -3456,3 +3469,160 @@ class TestDeleteStill:
 
         assert call_count["n"] == 3
         assert client.delete_calls == [DELETE_STILL_PATH]
+
+
+DOWNLOAD_CLIP_MOUNT_NAME = "A001-sd1"
+DOWNLOAD_CLIP_TARGET = f"/mounts/{DOWNLOAD_CLIP_MOUNT_NAME}/clip_1.braw"
+DOWNLOAD_CLIP_CONTENT = b"fake clip bytes"
+
+
+def _download_clip_client(*, content: bytes = DOWNLOAD_CLIP_CONTENT) -> FakeRestClient:
+    """Everything download_clip() needs: clips() (one clip,
+    clip_unique_id=1, file_path basename clip_1.braw), storage_state() +
+    mount_names() (so resolve_active_mount() resolves unambiguously to the
+    single mount A001-sd1), and a download_responses entry for the real
+    target path that composition resolves to — mirrors
+    _delete_clip_client() exactly, swapping exists_responses for
+    download_responses."""
+    return FakeRestClient(
+        {
+            "/clips/list": _clip_list_body(1),
+            "/media/workingset": {
+                "size": 1,
+                "workingset": [
+                    {
+                        "activeDisk": True,
+                        "clipCount": 1,
+                        "deviceName": "sd0",
+                        "index": 0,
+                        "remainingRecordTime": 100,
+                        "remainingSpace": 123,
+                        "totalSpace": 456,
+                        "volume": "A001",
+                    }
+                ],
+            },
+            "/media/active": {"deviceName": "sd0", "workingsetIndex": 0},
+            "/mounts/": [{"name": DOWNLOAD_CLIP_MOUNT_NAME, "type": "directory"}],
+        },
+        download_responses={DOWNLOAD_CLIP_TARGET: content},
+    )
+
+
+class TestDownloadClip:
+    """download_clip() — the mirror-image operation of delete_clip(),
+    reusing the same clip-resolution and mount-path-construction logic.
+    Not yet real-hardware-run; unit-tested against a fake client only."""
+
+    @pytest.mark.asyncio
+    async def test_raises_value_error_when_clip_not_found(self, tmp_path):
+        client = FakeRestClient({"/clips/list": _clip_list_body(2)})
+        session = make_session(make_profile(), client=client)
+
+        with pytest.raises(ValueError, match="No clip with clip_unique_id=1"):
+            await session.download_clip(1, tmp_path)
+
+        assert client.download_calls == []
+
+    @pytest.mark.asyncio
+    async def test_raises_value_error_when_dest_dir_missing(self, tmp_path):
+        client = _download_clip_client()
+        session = make_session(make_profile(), client=client)
+
+        with pytest.raises(ValueError, match="does not exist"):
+            await session.download_clip(1, tmp_path / "nonexistent")
+
+        assert client.download_calls == []
+
+    @pytest.mark.asyncio
+    async def test_raises_file_exists_error_without_overwrite(self, tmp_path):
+        client = _download_clip_client()
+        session = make_session(make_profile(), client=client)
+        (tmp_path / "clip_1.braw").write_bytes(b"already here")
+
+        with pytest.raises(FileExistsError, match="overwrite=True"):
+            await session.download_clip(1, tmp_path)
+
+        assert client.download_calls == []
+
+    @pytest.mark.asyncio
+    async def test_overwrite_true_replaces_existing_file(self, tmp_path):
+        client = _download_clip_client()
+        session = make_session(make_profile(), client=client)
+        (tmp_path / "clip_1.braw").write_bytes(b"stale")
+
+        dest = await session.download_clip(1, tmp_path, overwrite=True)
+
+        assert dest == tmp_path / "clip_1.braw"
+        assert dest.read_bytes() == DOWNLOAD_CLIP_CONTENT
+
+    @pytest.mark.asyncio
+    async def test_full_flow_success(self, tmp_path):
+        client = _download_clip_client()
+        session = make_session(make_profile(), client=client)
+
+        dest = await session.download_clip(1, tmp_path)
+
+        assert dest == tmp_path / "clip_1.braw"
+        assert dest.read_bytes() == DOWNLOAD_CLIP_CONTENT
+        assert client.download_calls == [(DOWNLOAD_CLIP_TARGET, str(dest))]
+        assert client.api_prefixed_calls[DOWNLOAD_CLIP_TARGET] is False
+
+
+DOWNLOAD_STILL_PATH = "/mounts/A002-sd1/Stills/A002_08120219_S001.braw"
+DOWNLOAD_STILL_CONTENT = b"fake still bytes"
+
+
+class TestDownloadStill:
+    """download_still() — the mirror-image operation of delete_still():
+    takes the full /mounts/... path directly, no listing to resolve
+    against. Not yet real-hardware-run; unit-tested against a fake client
+    only."""
+
+    @pytest.mark.asyncio
+    async def test_raises_value_error_when_dest_dir_missing(self, tmp_path):
+        client = FakeRestClient({})
+        session = make_session(make_profile(), client=client)
+
+        with pytest.raises(ValueError, match="does not exist"):
+            await session.download_still(DOWNLOAD_STILL_PATH, tmp_path / "nonexistent")
+
+        assert client.download_calls == []
+
+    @pytest.mark.asyncio
+    async def test_raises_file_exists_error_without_overwrite(self, tmp_path):
+        client = FakeRestClient({})
+        session = make_session(make_profile(), client=client)
+        (tmp_path / "A002_08120219_S001.braw").write_bytes(b"already here")
+
+        with pytest.raises(FileExistsError, match="overwrite=True"):
+            await session.download_still(DOWNLOAD_STILL_PATH, tmp_path)
+
+        assert client.download_calls == []
+
+    @pytest.mark.asyncio
+    async def test_overwrite_true_replaces_existing_file(self, tmp_path):
+        client = FakeRestClient(
+            {}, download_responses={DOWNLOAD_STILL_PATH: DOWNLOAD_STILL_CONTENT}
+        )
+        session = make_session(make_profile(), client=client)
+        (tmp_path / "A002_08120219_S001.braw").write_bytes(b"stale")
+
+        dest = await session.download_still(DOWNLOAD_STILL_PATH, tmp_path, overwrite=True)
+
+        assert dest == tmp_path / "A002_08120219_S001.braw"
+        assert dest.read_bytes() == DOWNLOAD_STILL_CONTENT
+
+    @pytest.mark.asyncio
+    async def test_full_flow_success(self, tmp_path):
+        client = FakeRestClient(
+            {}, download_responses={DOWNLOAD_STILL_PATH: DOWNLOAD_STILL_CONTENT}
+        )
+        session = make_session(make_profile(), client=client)
+
+        dest = await session.download_still(DOWNLOAD_STILL_PATH, tmp_path)
+
+        assert dest == tmp_path / "A002_08120219_S001.braw"
+        assert dest.read_bytes() == DOWNLOAD_STILL_CONTENT
+        assert client.download_calls == [(DOWNLOAD_STILL_PATH, str(dest))]
+        assert client.api_prefixed_calls[DOWNLOAD_STILL_PATH] is False

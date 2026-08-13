@@ -39,7 +39,9 @@ Every log line is prefixed `[<host>]`, mirroring CLAUDE.md's
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from pathlib import Path
 from typing import Any
 
 try:
@@ -51,7 +53,7 @@ except ImportError:  # pragma: no cover - exercised only without the dependency
     # pure/offline parts of bmd_camera.
     aiohttp = None  # type: ignore[assignment]
 
-from .constants import API_BASE, DEFAULT_TIMEOUT_S
+from .constants import API_BASE, DEFAULT_DOWNLOAD_STALL_TIMEOUT_S, DEFAULT_TIMEOUT_S
 from .exceptions import BMDConnectionError, BMDRestError, BMDUnsupportedError
 
 logger = logging.getLogger(__name__)
@@ -172,6 +174,100 @@ class RestClient:
         if 200 <= status < 300:
             return True
         raise BMDRestError(f"[{self.host}] GET {path} -> {status}", status=status, body=None)
+
+    async def download(
+        self,
+        path: str,
+        dest: str | Path,
+        *,
+        api_prefixed: bool = False,
+        chunk_size: int = 1024 * 1024,
+        stall_timeout_s: float = DEFAULT_DOWNLOAD_STALL_TIMEOUT_S,
+    ) -> int:
+        """Stream `GET path`'s response body straight to `dest` on local
+        disk, never holding the whole file in memory — a real clip runs
+        tens of GB (`docs/rest/session.md`'s `rest_record_test_clip.py`
+        real-hardware runs), and `get()`'s `.json()`/`.text()` body
+        handling would either raise decoding binary content (the exact
+        crash class `exists()` was built to avoid — see its docstring) or
+        hold the entire file in memory trying not to.
+
+        Reads via `aiohttp`'s streaming `resp.content.iter_chunked()`;
+        each chunk is written with `asyncio.to_thread()` so a disk write
+        never blocks the event loop (design principle 11). `dest`'s
+        parent directory must already exist — this method does not create
+        directories, matching `format_device()`/`delete_clip()`'s "do
+        exactly what was asked, nothing implicit" discipline.
+
+        **Timeout is stall-based, not total-based, unlike every other
+        method here.** `DEFAULT_TIMEOUT_S` (5s) is a sane budget for a
+        JSON control-API round trip; it is nonsensical for a multi-GB
+        transfer, where the *total* time is expected to be long but any
+        single gap in received data past `stall_timeout_s` (default 30s)
+        means the transfer has genuinely stalled. Implemented via
+        `aiohttp.ClientTimeout(sock_connect=self.timeout_s,
+        sock_read=stall_timeout_s)` — no `total` cap at all.
+
+        `/mounts/...` paths live outside `API_BASE` — unlike `get()`/
+        `exists()`/`delete()`, `api_prefixed` defaults to `False` here,
+        since every real caller downloads a real media file from the Web
+        Media Manager namespace, never a control-API JSON response.
+
+        Returns the number of bytes written. Raises `BMDRestError` if the
+        server's own `Content-Length` header doesn't match what was
+        actually received — a transport-level integrity check (design
+        principle 5's boundary: this is raw HTTP correctness, not camera
+        semantics). `RestCameraSession`'s own `download_clip()`/
+        `download_still()` layer an `exists()`-before check on top of
+        this, the same verification shape `delete_clip()`/`delete_still()`
+        use for the mirror-image operation.
+        """
+        if self._session is None:
+            raise BMDConnectionError(
+                "RestClient has no open session — use 'async with RestClient(...)' "
+                "or pass an existing session to the constructor"
+            )
+        url = self._url(path, api_prefixed=api_prefixed)
+        dest = Path(dest)
+        self._log.debug("[%s] GET %s -> %s (streaming)", self.host, path, dest)
+        timeout = aiohttp.ClientTimeout(sock_connect=self.timeout_s, sock_read=stall_timeout_s)
+        try:
+            async with self._session.request("GET", url, timeout=timeout) as resp:
+                status = resp.status
+                if status == 501:
+                    raise BMDUnsupportedError(f"[{self.host}] GET {path} — not implemented (501)")
+                if not (200 <= status < 300):
+                    body = await self._read_body(resp)
+                    raise BMDRestError(
+                        f"[{self.host}] GET {path} -> {status}: {body!r}",
+                        status=status,
+                        body=body,
+                    )
+                expected = resp.content_length
+                written = 0
+                with dest.open("wb") as f:
+                    async for chunk in resp.content.iter_chunked(chunk_size):
+                        await asyncio.to_thread(f.write, chunk)
+                        written += len(chunk)
+        except aiohttp.ClientError as exc:
+            raise BMDConnectionError(f"[{self.host}] GET {path} failed: {exc}") from exc
+        except TimeoutError as exc:
+            raise BMDConnectionError(
+                f"[{self.host}] GET {path} stalled (no data for {stall_timeout_s}s)"
+            ) from exc
+
+        self._log.debug(
+            "[%s] GET %s -> %s, %d bytes written to %s", self.host, path, status, written, dest
+        )
+
+        if expected is not None and written != expected:
+            raise BMDRestError(
+                f"[{self.host}] GET {path}: server reported Content-Length={expected} but "
+                f"{written} bytes were actually received and written to {dest}",
+                status=status,
+                body=None,
+            )
+        return written
 
     def _url(self, path: str, *, api_prefixed: bool) -> str:
         prefix = API_BASE if api_prefixed else ""
