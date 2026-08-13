@@ -774,6 +774,16 @@ taken: `RestCameraSession.delete_clip()` (Phase 11, `docs/rest/session.md`) comp
 exact confirmed sequence. `delete_still()` remains unbuilt — still deletion has no
 independent confirmation of its own yet, for the reason above.
 
+**`delete_clip()`'s own first real-hardware run, `POCKET_6K_G2 v8.6`, 2026-08-13**
+(`examples/rest_delete_clip.py`, `clip_unique_id=23`): the file-level deletion confirmed
+exactly as designed — but `GET /clips/list` still listed the clip immediately afterward, in
+the same session, even though the underlying file was genuinely gone (independently confirmed
+by the same `exists()` mechanism this whole investigation is built on). A real, observed
+divergence between "the file is gone" and "the camera's clip index says so" — not a defect in
+`delete_clip()`'s own verification, which never claimed anything about `/clips/list` in the
+first place. See `docs/rest/session.md`'s Phase 11 section for the full write-up and the
+best-effort `WARNING` this finding added.
+
 ### `POCKET_6K_PRO v8.6`, over USB, plaintext HTTP — 2026-08-03
 
 Swept with the same tool, same transport, same `--scheme http` default — deliberately not

@@ -3282,3 +3282,89 @@ class TestDeleteClip:
         assert deleted.clip_unique_id == 1
         assert client.delete_calls == [DELETE_CLIP_TARGET]
         assert client.api_prefixed_calls[DELETE_CLIP_TARGET] is False
+
+    @pytest.mark.asyncio
+    async def test_logs_warning_when_clip_still_listed_after_deletion(self, caplog):
+        """Real-hardware finding, POCKET_6K_G2 v8.6, 2026-08-13
+        (examples/rest_delete_clip.py): the file-level deletion was
+        confirmed exactly as designed, but GET /clips/list still reported
+        the clip immediately afterward in the same session. Informational
+        only — must never raise, must never change the return value."""
+        client = _delete_clip_client(exists_before=True)
+        call_count = {"n": 0}
+
+        async def exists(path: str, *, api_prefixed: bool = True) -> bool:
+            call_count["n"] += 1
+            return call_count["n"] == 1  # True before DELETE, False after
+
+        client.exists = exists
+        session = make_session(make_profile(), client=client)
+
+        with caplog.at_level(logging.WARNING):
+            deleted = await session.delete_clip(1, confirm=True)
+
+        assert deleted.clip_unique_id == 1  # success is unaffected
+        messages = [record.message for record in caplog.records]
+        assert any("still appears in GET /clips/list" in m for m in messages)
+
+    @pytest.mark.asyncio
+    async def test_no_warning_when_clip_no_longer_listed_after_deletion(self, caplog):
+        client = _delete_clip_client(exists_before=True)
+        exists_call_count = {"n": 0}
+
+        async def exists(path: str, *, api_prefixed: bool = True) -> bool:
+            exists_call_count["n"] += 1
+            return exists_call_count["n"] == 1
+
+        client.exists = exists
+
+        clips_call_count = {"n": 0}
+        original_get = client.get
+
+        async def get(path: str, *, api_prefixed: bool = True):
+            if path == "/clips/list":
+                clips_call_count["n"] += 1
+                if clips_call_count["n"] >= 2:
+                    return {"clipList": []}
+            return await original_get(path, api_prefixed=api_prefixed)
+
+        client.get = get
+        session = make_session(make_profile(), client=client)
+
+        with caplog.at_level(logging.WARNING):
+            await session.delete_clip(1, confirm=True)
+
+        messages = [record.message for record in caplog.records]
+        assert not any("still appears in GET /clips/list" in m for m in messages)
+
+    @pytest.mark.asyncio
+    async def test_staleness_check_swallows_bmd_storage_error(self):
+        """The post-deletion clips() check is best-effort (design principle
+        9) — a BMDStorageError from it (e.g. the card reporting no media
+        the instant after its only clip was removed) must not surface as
+        a failure of an otherwise-confirmed deletion."""
+        client = _delete_clip_client(exists_before=True)
+        exists_call_count = {"n": 0}
+
+        async def exists(path: str, *, api_prefixed: bool = True) -> bool:
+            exists_call_count["n"] += 1
+            return exists_call_count["n"] == 1
+
+        client.exists = exists
+
+        clips_call_count = {"n": 0}
+        original_get = client.get
+
+        async def get(path: str, *, api_prefixed: bool = True):
+            if path == "/clips/list":
+                clips_call_count["n"] += 1
+                if clips_call_count["n"] >= 2:
+                    raise BMDRestError("[cam.local] GET /clips/list -> 404", status=404, body=None)
+            return await original_get(path, api_prefixed=api_prefixed)
+
+        client.get = get
+        session = make_session(make_profile(), client=client)
+
+        deleted = await session.delete_clip(1, confirm=True)  # must not raise
+
+        assert deleted.clip_unique_id == 1

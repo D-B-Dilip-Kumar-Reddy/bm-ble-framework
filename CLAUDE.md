@@ -440,14 +440,26 @@ src/bmd_camera/
                               # synchronously. Only clip deletion is confirmed; no
                               # delete_still() exists (Stills' own 500 listing defect
                               # means no still path has been independently confirmed
-                              # the way this clip's was). This method itself is not
-                              # yet real-hardware-run — examples/rest_delete_clip.py's
-                              # first successful run is that confirmation. See
-                              # docs/rest/session.md's Phase 11 section.
-                              # RestClient.delete() (client.py) gained
-                              # api_prefixed: bool = True for this, mirroring
+                              # the way this clip's was). RestClient.delete() (client.py)
+                              # gained api_prefixed: bool = True for this, mirroring
                               # get()/exists() — it previously had no way to reach
-                              # /mounts/... at all.
+                              # /mounts/... at all. First real-hardware run,
+                              # POCKET_6K_G2 v8.6, 2026-08-13 (examples/rest_delete_clip.py,
+                              # clip_unique_id=23): the file-level deletion confirmed
+                              # exactly as designed (~1.2s, DELETE to confirmed-gone), but
+                              # GET /clips/list still listed the clip immediately
+                              # afterward in the same session — the file was genuinely
+                              # gone (confirmed by the same exists() mechanism Postman
+                              # verified), the camera's clip index just didn't reflect it
+                              # in the same breath. Not a defect in delete_clip()'s own
+                              # verification, which never claimed anything about
+                              # /clips/list. Added a best-effort, BMDStorageError-
+                              # swallowing, never-raising post-check: logs a WARNING if
+                              # clip_unique_id is still listed after confirmed deletion,
+                              # purely informational (design principle 9). Whether
+                              # /clips/list ever catches up (delay, reconnect, or some
+                              # other refresh) is unconfirmed — not investigated further
+                              # in this run. See docs/rest/session.md's Phase 11 section.
     mapping.py                 # Codec name derivation between the BLE profile's vocabulary
                               # and REST's own spelling — confirmed strings always win
                               # (design principle 1); this is a fallback seed only.
@@ -779,11 +791,13 @@ examples/
                             # delete_clip()'s underlying GET/DELETE/GET sequence is
                             # real-hardware-confirmed (POCKET_6K_G2 v8.6, 2026-08-13, via
                             # Postman after probe_endpoints.py's own attempt crashed on a
-                            # binary-body bug); this script itself, composed through
-                            # RestCameraSession's own machinery end to end (record,
-                            # confirm_new_clip, delete_clip), has not yet been run
-                            # against real hardware — its first successful run is that
-                            # confirmation. See docs/rest/session.md's Phase 11 section
+                            # binary-body bug). This script's own first real-hardware run,
+                            # same camera/firmware/day (clip_unique_id=23,
+                            # A002_08120328_C003.braw, ~9.9s recorded) SUCCEEDED end to
+                            # end: record, confirm_new_clip, delete_clip all confirmed —
+                            # and surfaced the /clips/list-staleness finding documented on
+                            # delete_clip() above. See docs/rest/session.md's Phase 11
+                            # section
   playback.py               # (planned)
 
 tests/
