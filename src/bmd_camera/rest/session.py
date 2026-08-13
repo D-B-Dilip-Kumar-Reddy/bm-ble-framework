@@ -2481,7 +2481,7 @@ class RestCameraSession:
             )
         return clip
 
-    async def delete_still(self, path: str, *, confirm: bool) -> None:
+    async def delete_still(self, path: str, *, confirm: bool, poll_interval_s: float = 0.5) -> None:
         """Permanently delete one still from the active storage device via
         `DELETE` on its real `/mounts/.../Stills/...` path.
 
@@ -2489,12 +2489,7 @@ class RestCameraSession:
         2026-08-13** — done by hand in Postman, the same investigation
         method `delete_clip()`'s own confirmation was built on: `GET`
         `200` -> `DELETE` `200 OK` -> `GET` `404 Not Found`, on a real
-        still (`/mounts/A002-sd1/Stills/A002_08120219_S001.braw`). This
-        method itself composes that confirmed sequence through
-        `RestClient.exists()`/`RestClient.delete()`, but has not itself
-        been run against real hardware yet — the next real run of this
-        method is what closes that specific gap, the same distinction
-        `delete_clip()`'s own docstring drew before its first real run.
+        still (`/mounts/A002-sd1/Stills/A002_08120219_S001.braw`).
 
         **Unlike `delete_clip()`, this method takes the full `/mounts/...`
         path directly and never tries to resolve or guess one itself.**
@@ -2520,14 +2515,32 @@ class RestCameraSession:
         gate — an omitted/`False` value raises `ValueError` before a
         single request is sent.
 
-        Verification: `RestClient.exists()` before and after the `DELETE`
-        — never a plain `get()`, since a still's body is binary (a real
-        `.dng`/`.braw` image) for the same reason `delete_clip()` avoids
-        `get()` for a clip's body. Raises `BMDVerificationError` before
-        sending `DELETE` at all if `path` doesn't exist yet, and again if
-        it still exists immediately after `DELETE`. No polling loop: the
-        confirmed real sequence completed synchronously, the same shape
-        `delete_clip()`'s own confirmation showed for a clip file.
+        Verification: `RestClient.exists()` before, and polled after, the
+        `DELETE` — never a plain `get()`, since a still's body is binary (a
+        real `.dng`/`.braw` image), for the same reason `delete_clip()`
+        avoids `get()` for a clip's body. Raises `BMDVerificationError`
+        before sending `DELETE` at all if `path` doesn't exist yet.
+
+        **The after-check polls (`poll_interval_s`, default `0.5`s, up to
+        `verify_timeout_s`) rather than checking once — a real-hardware
+        finding, `POCKET_6K_G2 v8.6`, 2026-08-13**
+        (`examples/rest_delete_still.py`'s composing script, run standalone
+        against a known real path): a single immediate `exists()`
+        right after `DELETE` reported the file still present, even though
+        the operator independently confirmed via the card's own contents
+        that the deletion had genuinely succeeded. The earlier Postman
+        trail that first confirmed this same `GET`/`DELETE`/`GET` sequence
+        never hit this, because a human clicking between requests leaves
+        a natural gap of at least a few seconds; two back-to-back
+        automated requests do not. This is the same shape of one-off
+        camera-side finalization delay `record_stop` hit and was fixed for
+        (`stop_verify_timeout_s`, see that method's docstring) — not a sign
+        the deletion itself is unreliable, only that an immediate
+        single-shot check can race it. `delete_clip()` is deliberately
+        **not** changed to match: both of its real-hardware runs
+        (`examples/rest_delete_clip.py`, twice) confirmed correctly on the
+        first immediate check, so widening it would be speculative rather
+        than evidence-driven.
 
         There is no `/clips/list`-equivalent listing for stills to check
         for the kind of same-session staleness `delete_clip()` found and
@@ -2550,11 +2563,15 @@ class RestCameraSession:
         self._log.warning("[%s] Deleting still %s — irreversible", self.host, path)
         await self._rest_client.delete(path, api_prefixed=False)
 
+        deadline = time.monotonic() + self.verify_timeout_s
         after = await self._rest_client.exists(path, api_prefixed=False)
+        while after and time.monotonic() < deadline:
+            await asyncio.sleep(poll_interval_s)
+            after = await self._rest_client.exists(path, api_prefixed=False)
         if after:
             raise BMDVerificationError(
                 f"[{self.host}] delete_still({path!r}): still exists after DELETE — "
-                "not confirmed deleted"
+                f"not confirmed deleted within {self.verify_timeout_s}s"
             )
 
         self._log.info("[%s] Still %s deleted and confirmed gone", self.host, path)

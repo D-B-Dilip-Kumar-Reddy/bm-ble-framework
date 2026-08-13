@@ -792,12 +792,26 @@ staleness is a same-session artifact that clears on reconnect, not a permanent i
 problem. See `docs/rest/session.md`'s Phase 11 section for the full write-up, the exact
 timestamps, and the best-effort `WARNING` this finding added.
 
-**`delete_still()` itself is not yet real-hardware-run** — its underlying `GET`/`DELETE`/
-`GET` sequence is confirmed (the Postman trail above), but `delete_still()` composed through
-`RestCameraSession`'s own machinery (`examples/rest_delete_still.py`, which triggers a real
-photo over BLE, confirms it over REST, guesses its path, then deletes it) has not itself been
-run against real hardware yet — that run is the next real-hardware step for stills, the same
-distinction `delete_clip()` carried before its own first run.
+**`delete_still()` composed through `RestCameraSession`'s own machinery, `POCKET_6K_G2 v8.6`,
+2026-08-13** — two runs. The first, `examples/rest_delete_still.py` (trigger a real photo over
+BLE, confirm it over REST, guess its path, then delete it), confirmed the capture but
+`guess_new_still_path()` returned `None` — the camera's own clock was running ~37h21m behind the
+operator's PC clock, confirmed directly via the camera's SETUP screen, well outside the guess
+function's default search window; `delete_still()` itself was never reached, and nothing was
+deleted (design principle 7). See `docs/rest/session.md`'s `delete_still()` section and
+`rest/media.py`'s module docstring for the full write-up.
+
+The second run used a small standalone script that skipped the guess and called `delete_still()`
+directly against the real path the operator had obtained by other means. It reported
+`BMDVerificationError: still exists after DELETE`, but the operator independently confirmed via
+the SD card's own contents that the still really was gone — **a false negative in the
+verification's timing, not a failed deletion.** The single immediate `exists()` check right
+after `DELETE` raced a brief camera-side propagation delay, the same shape `record_stop` hit and
+was fixed for. Fixed the same way: the after-`DELETE` check now polls
+(`poll_interval_s`/`verify_timeout_s`) instead of checking once — see `docs/rest/session.md`'s
+`delete_still()` section for the full write-up. `delete_clip()` was deliberately left unchanged,
+since both its real-hardware runs confirmed correctly on the first immediate check. A third run
+directly exercising the polling fix on real hardware remains outstanding.
 
 ### `POCKET_6K_PRO v8.6`, over USB, plaintext HTTP — 2026-08-03
 

@@ -845,11 +845,22 @@ examples/
                             # path (design principle 7). Documented as a permanent
                             # limitation of the "same minute" guessing assumption, not a
                             # bug — see rest/media.py's module docstring ("CAMERA CLOCK
-                            # SKEW") and docs/rest/session.md's delete_still() section.
-                            # delete_still() composed through RestCameraSession's own
-                            # machinery end to end has not yet been run against real
-                            # hardware — that confirmation is still pending, using the real
-                            # filename obtained by other means.
+                            # SKEW") and docs/rest/session.md's delete_still() section. A
+                            # second run, via a small standalone script that skipped the
+                            # guess and called delete_still() directly against the real
+                            # path obtained by other means, reached delete_still() itself
+                            # and found a real defect: the after-DELETE exists() check
+                            # reported the still still present even though the operator
+                            # independently confirmed via the SD card's own contents that
+                            # it was genuinely gone — a false negative in the verification's
+                            # timing (a one-off camera-side propagation delay, the same
+                            # shape record_stop hit and was fixed for), not a failed
+                            # deletion. Fixed: the after-check now polls
+                            # (poll_interval_s/verify_timeout_s) instead of checking once.
+                            # delete_clip() was deliberately left unchanged — both its real
+                            # runs confirmed correctly on the first immediate check. A third
+                            # real-hardware run directly exercising the polling fix remains
+                            # outstanding. See docs/rest/session.md's delete_still() section.
   playback.py               # (planned)
 
 tests/

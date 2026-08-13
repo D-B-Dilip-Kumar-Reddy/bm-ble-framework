@@ -3406,9 +3406,10 @@ class TestDeleteStill:
     async def test_raises_verification_error_when_still_exists_after_delete(self):
         client = FakeRestClient({}, exists_responses={DELETE_STILL_PATH: True})
         session = make_session(make_profile(), client=client)
+        session.verify_timeout_s = 0.05
 
         with pytest.raises(BMDVerificationError, match="still exists after DELETE"):
-            await session.delete_still(DELETE_STILL_PATH, confirm=True)
+            await session.delete_still(DELETE_STILL_PATH, confirm=True, poll_interval_s=0.01)
 
         assert client.delete_calls == [DELETE_STILL_PATH]
 
@@ -3430,3 +3431,28 @@ class TestDeleteStill:
 
         assert client.delete_calls == [DELETE_STILL_PATH]
         assert client.api_prefixed_calls[DELETE_STILL_PATH] is False
+
+    @pytest.mark.asyncio
+    async def test_after_check_polls_past_a_transient_stale_exists(self):
+        """Real-hardware finding, POCKET_6K_G2 v8.6, 2026-08-13: a single
+        immediate exists() right after DELETE reported the file still
+        present even though the deletion had genuinely succeeded (confirmed
+        independently via the card's own contents). The after-check must
+        retry rather than fail on the first stale read."""
+        client = FakeRestClient({})
+        call_count = {"n": 0}
+
+        async def exists(path: str, *, api_prefixed: bool = True) -> bool:
+            call_count["n"] += 1
+            # True before DELETE, then one stale True, then finally False.
+            return call_count["n"] in (1, 2)
+
+        client.exists = exists
+        session = make_session(make_profile(), client=client)
+
+        await session.delete_still(
+            DELETE_STILL_PATH, confirm=True, poll_interval_s=0.01
+        )  # must not raise
+
+        assert call_count["n"] == 3
+        assert client.delete_calls == [DELETE_STILL_PATH]

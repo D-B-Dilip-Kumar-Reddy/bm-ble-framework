@@ -1695,9 +1695,7 @@ GET    /mounts/A002-sd1/Stills/A002_08120219_S001.braw  -> 404 Not Found
 ```
 
 This method itself composes that confirmed sequence through `RestClient.exists()`/
-`RestClient.delete()`, but has not itself been run against real hardware yet —
-`examples/rest_delete_still.py`'s first successful run is what closes that gap, the same
-distinction `delete_clip()`'s docstring drew before its own first real run.
+`RestClient.delete()`.
 
 **Unlike `delete_clip()`, this method takes the full `/mounts/...` path directly and never
 tries to resolve or guess one itself.** `delete_clip()` can resolve `clip_unique_id` against
@@ -1727,6 +1725,29 @@ now-documented limitation of the guessing approach — see `rest/media.py`'s mod
 ("CAMERA CLOCK SKEW BREAKS THE 'SAME MINUTE' ASSUMPTION") for the full write-up and the guidance
 for a caller working against a camera with a known-wrong clock. `delete_still()` itself was not
 exercised by this run — the script correctly stopped one step before it, at the guess.
+
+**Second run, same camera/firmware/day, closes the gap — with a real defect found and fixed.**
+A small standalone script (bypassing `guess_new_still_path()` entirely, calling `delete_still()`
+directly against the real path the operator had obtained by other means,
+`/mounts/A002-sd1/Stills/A002_08120402_S009.braw`) reported `BMDVerificationError: still exists
+after DELETE — not confirmed deleted`. But the operator independently confirmed, by checking the
+SD card's own contents, that the still really was gone. **This was a false negative in the
+verification's timing, not a failed deletion.** The single, immediate `exists()` call right
+after `DELETE` raced a brief camera-side propagation delay — a one-off finalization window, the
+same shape `record_stop` hit and was fixed for (`stop_verify_timeout_s`, see that method's
+section above). The earlier Postman confirmation of this exact sequence never hit this, because
+a human clicking `DELETE` and then `GET` naturally leaves a several-second gap; two back-to-back
+automated requests do not.
+
+**Fixed**: the after-`DELETE` check now polls (`poll_interval_s`, default `0.5`s, bounded by
+`verify_timeout_s`, mirroring `select_clip()`'s existing poll shape) instead of checking once.
+`delete_clip()` is deliberately **not** changed to match — both of its real-hardware runs
+confirmed correctly on the first immediate check, so widening it would be speculative rather
+than evidence-driven, the same asymmetry this codebase already keeps between `record_start`
+(single-shot, unchanged) and `record_stop` (widened, evidence-driven). A third real-hardware run
+of `delete_still()` against the polling fix, to directly observe the poll recovering from a
+transient stale read, remains outstanding — this fix is unit-tested
+(`test_after_check_polls_past_a_transient_stale_exists`) but not yet itself real-hardware-run.
 
 `confirm` has no default, mirroring `delete_clip()`/`format_device()`'s exact gate.
 Verification is `RestClient.exists()` before and after `DELETE` — never a plain `get()`,
