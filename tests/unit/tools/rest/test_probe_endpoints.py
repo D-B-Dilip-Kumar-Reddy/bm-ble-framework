@@ -13,6 +13,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "tools" / "rest"))
 
 from probe_endpoints import (  # noqa: E402
+    MOUNTS_DELETE_PROBE_FILENAME,
     NEVER_WRITE,
     SPEC_PROPERTIES,
     Endpoint,
@@ -22,6 +23,7 @@ from probe_endpoints import (  # noqa: E402
     build_catalog,
     build_rest_profile_block,
     classify,
+    delete_real_file_conclusion,
     device_names_from_workingset,
     diagnose,
     echo_body,
@@ -29,6 +31,8 @@ from probe_endpoints import (  # noqa: E402
     extract_links,
     is_response_to,
     is_supported,
+    mounts_basename,
+    mounts_delete_probe_targets,
     normalise_base_url,
     pick_first,
     render_summary,
@@ -366,6 +370,83 @@ class TestExtractLinks:
         assert extract_links(body) == []
 
 
+class TestMountsDeleteProbeTargets:
+    """`mounts_delete_probe_targets()` — the pure directory-selection logic
+    behind `--probe-mounts-delete`, split out specifically so it's
+    unit-testable without aiohttp."""
+
+    def test_selects_successfully_listed_directories(self):
+        results = [
+            ProbeResult("GET", "/mounts/", 200),
+            ProbeResult("GET", "/mounts/A001-sd1/", 200),
+        ]
+        assert mounts_delete_probe_targets(results) == ["/mounts/", "/mounts/A001-sd1/"]
+
+    def test_excludes_files(self):
+        """A file entry's own path never ends in '/' — walk_mounts() never
+        recurses into one, but this guards the filter directly too."""
+        results = [ProbeResult("GET", "/mounts/A001-sd1/clip.mov", 200)]
+        assert mounts_delete_probe_targets(results) == []
+
+    def test_excludes_the_known_broken_stills_500(self):
+        results = [ProbeResult("GET", "/mounts/A001-sd1/Stills/", 500)]
+        assert mounts_delete_probe_targets(results) == []
+
+    def test_excludes_404s_and_other_non_ok_directories(self):
+        results = [
+            ProbeResult("GET", "/mounts/gone/", 404),
+            ProbeResult("GET", "/mounts/broken/", 501),
+        ]
+        assert mounts_delete_probe_targets(results) == []
+
+    def test_empty_input_yields_no_targets(self):
+        assert mounts_delete_probe_targets([]) == []
+
+
+class TestDeleteRealFileConclusion:
+    """`delete_real_file_conclusion()` — the pure before/after-status ->
+    verdict logic behind `--delete-real-file`, deliberately keyed on the
+    post-DELETE GET's status alone (the ground truth), not the DELETE
+    response's own status."""
+
+    def test_404_after_means_confirmed_deleted(self):
+        assert "CONFIRMED" in delete_real_file_conclusion(404)
+
+    def test_200_after_means_not_deleted(self):
+        conclusion = delete_real_file_conclusion(200)
+        assert "did NOT remove" in conclusion
+
+    def test_other_status_is_ambiguous(self):
+        assert "AMBIGUOUS" in delete_real_file_conclusion(500)
+
+    def test_none_status_is_ambiguous(self):
+        """A transport failure on the after-GET (no reply at all) must not
+        be misread as either a confirmed delete or a confirmed non-delete —
+        there is no ground truth in that case."""
+        assert "AMBIGUOUS" in delete_real_file_conclusion(None)
+
+
+class TestMountsBasename:
+    def test_extracts_the_filename(self):
+        assert mounts_basename("/mounts/A001-sd1/Stills/A001_0001.dng") == "A001_0001.dng"
+
+    def test_strips_a_trailing_slash_first(self):
+        assert mounts_basename("/mounts/A001-sd1/") == "A001-sd1"
+
+    def test_no_slash_at_all_returns_the_whole_string(self):
+        assert mounts_basename("clip.mov") == "clip.mov"
+
+
+class TestMountsDeleteProbeFilename:
+    def test_is_not_a_plausible_real_clip_or_still_name(self):
+        """Real BMD media names are structured reel/timestamp names
+        (A001_08130001_C001.braw style) — this synthetic name must never
+        collide with one, or a 404 in probe_mounts_delete_method() would
+        mean nothing."""
+        assert not MOUNTS_DELETE_PROBE_FILENAME[0].isdigit()
+        assert "bmd_delete_probe" in MOUNTS_DELETE_PROBE_FILENAME
+
+
 class TestDiagnose:
     """A failed preflight must explain itself. These assertions exist because
     an early version told the operator to add --insecure for a refused
@@ -578,6 +659,42 @@ class TestRenderSummary:
         report = make_report(writes=[ProbeResult("PUT", "/system/format", 204)])
         assert "PUT  /system/format" in render_summary(report)
 
+    def test_includes_mounts_delete_probe_results(self):
+        report = make_report(
+            mounts_delete_probe=[
+                ProbeResult("DELETE", f"/mounts/A001-sd1/{MOUNTS_DELETE_PROBE_FILENAME}", 404)
+            ]
+        )
+        assert f"DELETE /mounts/A001-sd1/{MOUNTS_DELETE_PROBE_FILENAME}" in render_summary(report)
+
+    def test_reports_a_successful_real_file_delete(self):
+        report = make_report(
+            mounts_delete_real_file={
+                "path": "/mounts/A001-sd1/Stills/A001_0001.dng",
+                "before_status": 200,
+                "delete_status": 204,
+                "delete_body": None,
+                "after_status": 404,
+                "conclusion": delete_real_file_conclusion(404),
+            }
+        )
+        summary = render_summary(report)
+        assert "/mounts/A001-sd1/Stills/A001_0001.dng" in summary
+        assert "CONFIRMED" in summary
+
+    def test_reports_an_aborted_real_file_delete(self):
+        report = make_report(
+            mounts_delete_real_file={
+                "path": "/mounts/A001-sd1/Stills/missing.dng",
+                "before_status": 404,
+                "aborted": "GET did not return 200 — nothing to delete",
+            }
+        )
+        assert "ABORTED" in render_summary(report)
+
+    def test_no_real_file_block_when_not_attempted(self):
+        assert "MOUNTS DELETE (real file)" not in render_summary(make_report())
+
 
 class TestBuildRestProfileBlock:
     def test_marks_working_endpoints_supported(self):
@@ -658,3 +775,28 @@ class TestReportSerialisation:
 
     def test_carries_the_same_value_put_caveat(self):
         assert "not that a changing write applies" in make_report().to_dict()["_caveat"]
+
+    def test_serializes_mounts_delete_probe_results(self):
+        report = make_report(
+            mounts_delete_probe=[
+                ProbeResult("DELETE", f"/mounts/A001-sd1/{MOUNTS_DELETE_PROBE_FILENAME}", 404)
+            ]
+        )
+        payload = report.to_dict()
+        assert payload["mounts_delete_probe"][0]["status"] == 404
+        assert payload["mounts_delete_probe"][0]["method"] == "DELETE"
+
+    def test_mounts_delete_real_file_defaults_to_none(self):
+        assert make_report().to_dict()["mounts_delete_real_file"] is None
+
+    def test_serializes_mounts_delete_real_file_verbatim(self):
+        real_file_result = {
+            "path": "/mounts/A001-sd1/Stills/A001_0001.dng",
+            "before_status": 200,
+            "delete_status": 204,
+            "delete_body": None,
+            "after_status": 404,
+            "conclusion": delete_real_file_conclusion(404),
+        }
+        report = make_report(mounts_delete_real_file=real_file_result)
+        assert report.to_dict()["mounts_delete_real_file"] == real_file_result

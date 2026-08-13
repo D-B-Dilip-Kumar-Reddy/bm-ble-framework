@@ -379,7 +379,11 @@ src/bmd_camera/
                               # filesystem surface Phase 6 already uses for photo
                               # confirmation, outside the 11 spec files entirely) supports
                               # DELETE for individual clip/still files remains an open
-                              # question, explicitly deferred at the user's own request.
+                              # question, explicitly deferred at the user's own request —
+                              # now under investigation via tools/rest/probe_endpoints.py's
+                              # --probe-mounts-delete/--delete-real-file (see that tool's
+                              # own Package Structure entry below and docs/rest/transport.md's
+                              # Mode 3 section).
                               # filesystem is a required argument, not the optional one
                               # MediaControl.yaml itself describes it as — real-hardware-
                               # confirmed, POCKET_6K_G2 v8.6, 2026-08-13: the first version
@@ -517,7 +521,20 @@ tools/
                             # speed!=_expected_speed trigger, after it replaced the fixed
                             # check) — every interrupt across all 5 runs landed on a full stop,
                             # so the broadening's own "deviates to nonzero" branch is still
-                            # real-hardware-unexercised). See docs/rest/transport.md
+                            # real-hardware-unexercised). See docs/rest/transport.md. Also
+                            # extended (clip/still deletion investigation, following on from
+                            # Phase 10's format_device()): --probe-mounts-delete (safe, opt-in
+                            # — DELETEs a synthetic never-real filename in every directory
+                            # walk_mounts() already listed, to test whether DELETE is routed
+                            # on /mounts/... at all without risking a real file) and
+                            # --delete-real-file PATH (destructive, single-target, typed-
+                            # filename gated — GET before/DELETE/GET after on one operator-
+                            # chosen real file, verdict keyed on the after-GET's status, not
+                            # the DELETE response's own). Neither flag adds a capability to
+                            # RestCameraSession — a delete_still()/delete_clip() method gets
+                            # built only once a real --delete-real-file run answers the
+                            # question (design principle 6). Not yet run against real
+                            # hardware — see docs/rest/transport.md's Mode 3 section
   captures/                 # Runtime output of sniffers/, control/, and rest/ scripts (gitignored)
 
 Tools are grouped by folder according to what kind of thing they do — read-only

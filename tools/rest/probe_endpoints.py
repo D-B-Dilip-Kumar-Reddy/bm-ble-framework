@@ -43,6 +43,46 @@ camera-side no-op, so a 200 proves the *endpoint* exists, not that a
 *changing* write applies. That second question belongs to the phase that
 actually needs it.
 
+`--probe-writes` never touches `/mounts/...` at all — it is confined to the
+11 official control-API spec files, and `/mounts/...` (the Web Media
+Manager) is a separate namespace outside them. Clip/still deletion
+investigation lives in its own two-phase pair of flags instead, below.
+
+MOUNTS DELETE INVESTIGATION (clip/still deletion)
+──────────────────────────────────────────────────
+None of the 11 official spec files documents a per-clip or per-still delete
+endpoint — `format_device()` (docs/rest/session.md's Phase 10) is the only
+media-erasure capability those files expose at all. Whether the separate
+`/mounts/...` filesystem surface supports `DELETE` for an individual file
+was left as an explicitly deferred open question. These two flags are that
+investigation, following the same idempotent-first, typed-confirmation
+discipline `--probe-writes` uses for control-API writes:
+
+`--probe-mounts-delete` is safe and read-only in effect: for every
+directory the mounts walk (`--mounts-depth`) already listed successfully,
+it sends one `DELETE` to a synthetic filename
+(`__bmd_delete_probe_missing_file__.tmp`) that is not expected to exist.
+Nothing real is ever touched — the only possible outcomes are "the route
+recognizes DELETE and reports the nonexistent target isn't there" (404),
+"the route doesn't accept DELETE at all" (405/501/other), or a transport
+error. This answers *whether DELETE is routed on this surface at all*,
+without needing a real file to risk.
+
+`--delete-real-file PATH` is the opposite: destructive, single-target, and
+never auto-selecting anything — `PATH` must be a real `/mounts/...` file
+the operator has chosen and can afford to lose (e.g. a disposable test
+still taken specifically for this). Gated behind typing the file's exact
+name back, not just "yes" (stronger than `--probe-writes`'s gate, since a
+real DELETE on a real file — unlike a same-value PUT — cannot be a no-op).
+Does `GET` before, `DELETE`, then `GET` after, so the verdict rests on
+what the camera actually reports being there afterward, not on the
+`DELETE` response status alone.
+
+Neither flag adds a capability to `RestCameraSession` — this tool only
+gathers evidence (design principle 6). A `delete_still()`/`delete_clip()`
+method gets built only after a real result confirms what `DELETE` actually
+does on this firmware, never before.
+
 Usage:
     python tools/rest/probe_endpoints.py --host pocket-cinema-camera-6k-g2.local \
         --model-key POCKET_6K_G2 --firmware v8.6
@@ -138,6 +178,13 @@ AUDIO_CHANNELS = (0, 1, 2, 3)
 # returns 500 on POCKET_6K_G2 v8.6. Probed explicitly so every run either
 # reproduces the defect or shows it fixed.
 KNOWN_BROKEN_HINT = "Stills"
+
+# Synthetic filename for --probe-mounts-delete's safe DELETE-method probe —
+# deliberately unlikely to collide with a real file (a real BMD clip/still
+# name is a structured A00X_... reel/timestamp name, never this literal
+# string) so a 404 response means "route recognizes DELETE, target absent"
+# rather than "oops, that was a real file."
+MOUNTS_DELETE_PROBE_FILENAME = "__bmd_delete_probe_missing_file__.tmp"
 
 
 # ── Result model ────────────────────────────────────────────────────────────
@@ -649,6 +696,134 @@ async def walk_mounts(
     return results
 
 
+# ── Mounts DELETE investigation (clip/still deletion) ───────────────────────
+
+
+async def probe_mounts_delete_method(
+    session: aiohttp.ClientSession, base_url: str, mounts_results: list[ProbeResult]
+) -> list[ProbeResult]:
+    """`--probe-mounts-delete`: for every directory `walk_mounts()` already
+    listed successfully, `DELETE` a synthetic filename
+    (`MOUNTS_DELETE_PROBE_FILENAME`) that should not exist in it.
+
+    Safe by construction: the target is never expected to be real, so the
+    only possible outcomes are a 404 ("route recognizes DELETE, nothing
+    there"), a 405/501/other ("DELETE isn't accepted on this route at
+    all"), or a transport error — never the loss of a real file. This
+    answers *whether DELETE is routed on the `/mounts/...` surface at
+    all*, which the official control-API spec files never document either
+    way (design principle 6 — no capability is trusted without direct
+    evidence from this exact camera/firmware).
+
+    Deliberately reuses `walk_mounts()`'s own results rather than walking
+    again — one `--mounts-depth` controls both, and a directory that 500s
+    or 404s in the walk is not probed here either (nothing to test against
+    a path that isn't actually reachable).
+    """
+    results: list[ProbeResult] = []
+    for directory in mounts_delete_probe_targets(mounts_results):
+        target = f"{directory}{MOUNTS_DELETE_PROBE_FILENAME}"
+        result = await request(session, "DELETE", f"{base_url}{target}")
+        result.path = target
+        results.append(result)
+        logger.info("DELETE %-52s -> %s", target, result.describe())
+    return results
+
+
+def mounts_delete_probe_targets(mounts_results: list[ProbeResult]) -> list[str]:
+    """Pure: the directory paths `probe_mounts_delete_method()` sends its
+    safe synthetic-filename `DELETE` against — every path `walk_mounts()`
+    reported as a successfully-listed directory. Split out from the async
+    function above so this selection logic is unit-testable without
+    aiohttp, matching this module's own "every pure function is
+    unit-tested without an HTTP dependency" convention."""
+    return [
+        result.path
+        for result in mounts_results
+        if result.path.endswith("/") and is_supported(result.classification)
+    ]
+
+
+async def probe_mounts_delete_real_file(
+    session: aiohttp.ClientSession, base_url: str, path: str
+) -> dict[str, Any]:
+    """`--delete-real-file PATH`: the destructive, single-target
+    counterpart to `probe_mounts_delete_method()`. `path` must be a real
+    `/mounts/...` file the operator has explicitly chosen — this function
+    never guesses or auto-selects one (design principle 7's "never guess"
+    discipline applies here just as much as to a capability check).
+
+    `GET`s `path` first; if it isn't there (anything but `200`), aborts
+    without sending `DELETE` at all — there is nothing to test, and
+    sending it anyway would only prove what a `DELETE` on an already-
+    absent file does, not what happens to a real one. `DELETE`s, then
+    `GET`s again — the verdict rests on what the camera reports being
+    there *afterward*, not on the `DELETE` response's status code alone
+    (mirroring `format_device()`'s "confirm via a fresh read, not the
+    write's own status" discipline, design principle 3's spirit even
+    though this surface has no equivalent of a `propertyValueChanged`
+    event to check first).
+    """
+    before = await request(session, "GET", f"{base_url}{path}")
+    if before.status != 200:
+        return {
+            "path": path,
+            "before_status": before.status,
+            "aborted": (
+                f"GET {path} did not return 200 (got {before.status!r}) — nothing to "
+                "delete, so DELETE was never sent."
+            ),
+        }
+
+    delete = await request(session, "DELETE", f"{base_url}{path}")
+    after = await request(session, "GET", f"{base_url}{path}")
+
+    return {
+        "path": path,
+        "before_status": before.status,
+        "delete_status": delete.status,
+        "delete_body": delete.body,
+        "after_status": after.status,
+        "conclusion": delete_real_file_conclusion(after.status),
+    }
+
+
+def delete_real_file_conclusion(after_status: int | None) -> str:
+    """Pure: `probe_mounts_delete_real_file()`'s verdict from the post-
+    `DELETE` `GET`'s status alone — the ground truth this investigation
+    relies on, deliberately not the `DELETE` response's own status (a
+    camera could report success on a `DELETE` that didn't actually remove
+    anything, or vice versa)."""
+    if after_status == 404:
+        return "CONFIRMED: DELETE removed the file (GET after returns 404)"
+    if after_status == 200:
+        return "DELETE did NOT remove the file (GET after still returns 200)"
+    return f"AMBIGUOUS — GET after returned {after_status!r}, inspect manually"
+
+
+def mounts_basename(path: str) -> str:
+    """Pure: the filename component of a `/mounts/...` path — e.g.
+    `/mounts/A001-sd1/Stills/A001_0001.dng` -> `A001_0001.dng`. Used by
+    `confirm_delete_real_file()`'s typed-filename gate."""
+    return path.rstrip("/").rsplit("/", 1)[-1]
+
+
+async def confirm_delete_real_file(path: str) -> bool:
+    """Typed-filename gate before `--delete-real-file`'s real `DELETE`.
+
+    Stronger than `confirm_write_probe()`'s typed-'yes' — matching
+    `examples/rest_format_device.py`'s `_confirm_by_typing_device_name()`
+    precedent, since a real `DELETE` on a real file (unlike a same-value
+    PUT) can never be a no-op."""
+    filename = mounts_basename(path)
+    print(f"\nThis will attempt to PERMANENTLY DELETE {path!r}. This cannot be undone.")
+    loop = asyncio.get_running_loop()
+    answer = await loop.run_in_executor(
+        None, input, f"Type the file name ({filename!r}) to proceed, anything else aborts: "
+    )
+    return answer == filename
+
+
 # ── WebSocket probe ─────────────────────────────────────────────────────────
 
 
@@ -848,6 +1023,8 @@ class Report:
     reads: list[ProbeResult] = field(default_factory=list)
     writes: list[ProbeResult] = field(default_factory=list)
     mounts: list[ProbeResult] = field(default_factory=list)
+    mounts_delete_probe: list[ProbeResult] = field(default_factory=list)
+    mounts_delete_real_file: dict[str, Any] | None = None
     websocket: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
@@ -866,6 +1043,8 @@ class Report:
             "reads": [_result_dict(result) for result in self.reads],
             "writes": [_result_dict(result) for result in self.writes],
             "mounts": [_result_dict(result) for result in self.mounts],
+            "mounts_delete_probe": [_result_dict(result) for result in self.mounts_delete_probe],
+            "mounts_delete_real_file": self.mounts_delete_real_file,
             "websocket": self.websocket,
         }
 
@@ -898,7 +1077,7 @@ def render_summary(report: Report) -> str:
         "",
     ]
     buckets: dict[str, list[ProbeResult]] = {}
-    for result in [*report.reads, *report.writes, *report.mounts]:
+    for result in [*report.reads, *report.writes, *report.mounts, *report.mounts_delete_probe]:
         buckets.setdefault(result.classification, []).append(result)
 
     order = ["server_error", "unreachable", "other", "not_implemented", "not_found", "ok"]
@@ -930,6 +1109,18 @@ def render_summary(report: Report) -> str:
         lines.append("")
     elif report.websocket.get("error"):
         lines.append(f"WEBSOCKET  could not connect: {report.websocket['error']}")
+        lines.append("")
+
+    if report.mounts_delete_real_file is not None:
+        result = report.mounts_delete_real_file
+        lines.append(f"MOUNTS DELETE (real file): {result['path']}")
+        if "aborted" in result:
+            lines.append(f"    ABORTED: {result['aborted']}")
+        else:
+            lines.append(f"    before: GET  -> {result['before_status']}")
+            lines.append(f"    delete: DELETE -> {result['delete_status']}")
+            lines.append(f"    after:  GET  -> {result['after_status']}")
+            lines.append(f"    {result['conclusion']}")
         lines.append("")
 
     return "\n".join(lines)
@@ -1103,6 +1294,19 @@ async def run(args: argparse.Namespace) -> int:
                 KNOWN_BROKEN_HINT,
             )
 
+        if args.probe_mounts_delete:
+            report.mounts_delete_probe = await probe_mounts_delete_method(
+                session, base_url, report.mounts
+            )
+
+        if args.delete_real_file:
+            if await confirm_delete_real_file(args.delete_real_file):
+                report.mounts_delete_real_file = await probe_mounts_delete_real_file(
+                    session, base_url, args.delete_real_file
+                )
+            else:
+                print("Real-file delete probe declined — nothing was sent to the camera.")
+
         event_list = read_by_path.get("/event/list")
         camera_properties = subscribable_properties(event_list.body) if event_list else []
         properties = list(dict.fromkeys([*camera_properties, *SPEC_PROPERTIES]))
@@ -1203,6 +1407,25 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=2,
         help="How deep to walk the /mounts/ tree. Default: 2",
+    )
+    parser.add_argument(
+        "--probe-mounts-delete",
+        action="store_true",
+        help=(
+            "Investigate whether DELETE is routed on /mounts/... at all, by sending it "
+            "to a synthetic nonexistent filename in every directory the mounts walk "
+            "listed. Safe — never touches a real file. No confirmation needed."
+        ),
+    )
+    parser.add_argument(
+        "--delete-real-file",
+        metavar="PATH",
+        help=(
+            "Destructive: attempt to DELETE this exact /mounts/... file (e.g. "
+            "/mounts/A001-sd1/Stills/A001_08130001_C001.dng) and report whether it's "
+            "actually gone afterward. Must be a real file you have chosen and can "
+            "afford to lose — never guessed or auto-selected. Typed-filename gated."
+        ),
     )
     parser.add_argument(
         "--timeout",

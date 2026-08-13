@@ -268,6 +268,62 @@ That second question belongs to the phase that needs it — and the BLE work has
 precedent for exactly this trap (`docs/ble/settings.md` §11, §14: every settings family
 goes silent on a redundant write).
 
+### Mode 3: `--probe-mounts-delete` / `--delete-real-file` (clip/still deletion investigation)
+
+None of the 11 official control-API spec files documents a per-clip or per-still delete
+endpoint — `RestCameraSession.format_device()` (docs/rest/session.md's Phase 10) is the
+only media-erasure capability those files expose at all, and it erases an entire device,
+not one file. Whether the separate `/mounts/...` filesystem surface (the Web Media
+Manager — outside the 11 spec files entirely, same namespace `walk_mounts()` already
+reads from) supports `DELETE` for an individual clip or still was left as an explicitly
+deferred open question when Phase 10 shipped (`format_device()`-only, per the user's own
+scoping answer). This mode is that investigation, following `--probe-writes`'s own
+idempotent-first, typed-confirmation discipline.
+
+**`--probe-mounts-delete` — safe, opt-in, no confirmation needed.** For every directory
+`walk_mounts()` (`--mounts-depth`) already listed successfully, sends one `DELETE` to a
+synthetic filename (`__bmd_delete_probe_missing_file__.tmp`) chosen specifically to never
+collide with a real BMD clip/still name (those are structured reel/timestamp names like
+`A001_08130001_C001.braw`). Nothing real is ever at risk — the only possible outcomes are:
+
+- `404` — the route recognizes `DELETE` and reports the (nonexistent) target absent. This
+  is evidence the method is routed at all, not proof a real file would actually be removed.
+- `405`/`501`/other — `DELETE` isn't accepted on this route. Conclusive negative, without
+  needing a real file to find out.
+- A transport error — inconclusive, same as any other unreachable-path result elsewhere
+  in this tool.
+
+This answers *whether DELETE is routed on `/mounts/...` at all* — the question that
+decides whether Phase B is even worth attempting.
+
+**`--delete-real-file PATH` — destructive, single-target, never auto-selecting anything.**
+`PATH` must be a real file the operator has chosen and can afford to lose (e.g. a
+disposable test still taken specifically for this investigation) — this tool never guesses
+or picks one on its own (design principle 7's "never guess" discipline, same as every
+capability check in this codebase). Gated behind typing the file's exact name back, not
+just `'yes'` — stronger than `--probe-writes`'s gate, since a real `DELETE` on a real file,
+unlike a same-value `PUT`, can never be a no-op. Sequence:
+
+1. `GET PATH` — if it isn't there (`200` expected), aborts with nothing else sent. There is
+   nothing to test against a file that was never present.
+2. `DELETE PATH`.
+3. `GET PATH` again — the verdict rests on **this** status, not on the `DELETE` response's
+   own status code, since a camera could report success on a `DELETE` that didn't actually
+   remove anything (or the reverse). `404` after → confirmed deleted. `200` after →
+   confirmed *not* deleted. Anything else → ambiguous, reported for manual inspection
+   rather than guessed at.
+
+Neither flag adds a capability to `RestCameraSession` on its own — this tool only gathers
+evidence. A `delete_still()`/`delete_clip()` method gets designed and built only once a
+real `--delete-real-file` run against real hardware answers the question, matching the
+same sniffer-first discipline that governs every other capability in this codebase.
+
+**Status: not yet run against real hardware.** Both flags exist as tooling only —
+`mounts_delete_probe_targets()`, `delete_real_file_conclusion()`, and `mounts_basename()`
+(the pure logic pieces) are unit-tested; the `DELETE` requests themselves have no
+real-camera evidence yet. This section will be updated with the actual result the first
+time either flag is run for real.
+
 ### Preflight
 
 Before sweeping anything, one GET to `/system/format` — the operator-confirmed working
@@ -313,6 +369,11 @@ python tools/rest/probe_endpoints.py --host pocket-cinema-camera-6k-g2.local \
     --model-key POCKET_6K_G2 --firmware v8.6 --insecure
 python tools/rest/probe_endpoints.py --host pocket-cinema-camera-6k-g2.local \
     --model-key POCKET_6K_G2 --firmware v8.6 --insecure --probe-writes
+python tools/rest/probe_endpoints.py --host pocket-cinema-camera-6k-g2.local \
+    --model-key POCKET_6K_G2 --firmware v8.6 --insecure --probe-mounts-delete
+python tools/rest/probe_endpoints.py --host pocket-cinema-camera-6k-g2.local \
+    --model-key POCKET_6K_G2 --firmware v8.6 --insecure \
+    --delete-real-file /mounts/A001-sd1/Stills/A001_0001.dng
 ```
 
 `--insecure` is required — the camera's certificate is self-signed. Run without `--host`
