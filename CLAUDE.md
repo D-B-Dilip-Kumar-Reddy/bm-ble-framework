@@ -443,23 +443,29 @@ src/bmd_camera/
                               # the way this clip's was). RestClient.delete() (client.py)
                               # gained api_prefixed: bool = True for this, mirroring
                               # get()/exists() — it previously had no way to reach
-                              # /mounts/... at all. First real-hardware run,
+                              # /mounts/... at all. Two real-hardware runs,
                               # POCKET_6K_G2 v8.6, 2026-08-13 (examples/rest_delete_clip.py,
-                              # clip_unique_id=23): the file-level deletion confirmed
-                              # exactly as designed (~1.2s, DELETE to confirmed-gone), but
-                              # GET /clips/list still listed the clip immediately
-                              # afterward in the same session — the file was genuinely
-                              # gone (confirmed by the same exists() mechanism Postman
-                              # verified), the camera's clip index just didn't reflect it
-                              # in the same breath. Not a defect in delete_clip()'s own
-                              # verification, which never claimed anything about
-                              # /clips/list. Added a best-effort, BMDStorageError-
-                              # swallowing, never-raising post-check: logs a WARNING if
-                              # clip_unique_id is still listed after confirmed deletion,
-                              # purely informational (design principle 9). Whether
-                              # /clips/list ever catches up (delay, reconnect, or some
-                              # other refresh) is unconfirmed — not investigated further
-                              # in this run. See docs/rest/session.md's Phase 11 section.
+                              # clip_unique_id=23 then 24): the file-level deletion
+                              # confirmed exactly as designed both times (~1.2s,
+                              # DELETE to confirmed-gone), but GET /clips/list still
+                              # listed the clip immediately afterward in the same
+                              # session, both times — the file was genuinely gone
+                              # (confirmed by the same exists() mechanism Postman
+                              # verified), the camera's clip index just didn't reflect
+                              # it in the same breath. Not a defect in delete_clip()'s
+                              # own verification, which never claimed anything about
+                              # /clips/list. RESOLVED, not left open: a separate script
+                              # (rest_read_state.py) reconnected fresh ~48s after run 2
+                              # and reported clips()/storage_state().clip_count both
+                              # correctly back to 1 — the staleness is a same-session
+                              # artifact that clears on reconnect, not a permanent index
+                              # problem. Whether it clears within the same session
+                              # without reconnecting remains untested. Added a
+                              # best-effort, BMDStorageError-swallowing, never-raising
+                              # post-check: logs a WARNING if clip_unique_id is still
+                              # listed after confirmed deletion, purely informational
+                              # (design principle 9). See docs/rest/session.md's
+                              # Phase 11 section.
     mapping.py                 # Codec name derivation between the BLE profile's vocabulary
                               # and REST's own spelling — confirmed strings always win
                               # (design principle 1); this is a fallback seed only.
@@ -791,13 +797,15 @@ examples/
                             # delete_clip()'s underlying GET/DELETE/GET sequence is
                             # real-hardware-confirmed (POCKET_6K_G2 v8.6, 2026-08-13, via
                             # Postman after probe_endpoints.py's own attempt crashed on a
-                            # binary-body bug). This script's own first real-hardware run,
-                            # same camera/firmware/day (clip_unique_id=23,
-                            # A002_08120328_C003.braw, ~9.9s recorded) SUCCEEDED end to
-                            # end: record, confirm_new_clip, delete_clip all confirmed —
-                            # and surfaced the /clips/list-staleness finding documented on
-                            # delete_clip() above. See docs/rest/session.md's Phase 11
-                            # section
+                            # binary-body bug). This script's own two real-hardware runs,
+                            # same camera/firmware/day (clip_unique_id=23 then 24,
+                            # ~9.9s recorded each) both SUCCEEDED end to end: record,
+                            # confirm_new_clip, delete_clip all confirmed both times —
+                            # and reconfirmed the /clips/list-staleness finding documented
+                            # on delete_clip() above, which a third script
+                            # (rest_read_state.py, run separately ~48s after run 2)
+                            # showed clears on a fresh reconnect. See
+                            # docs/rest/session.md's Phase 11 section
   playback.py               # (planned)
 
 tests/

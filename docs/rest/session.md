@@ -1649,29 +1649,38 @@ in the Postman trail suggested an intermediate "still processing" state to wait 
 (`/mounts/...` is outside `API_BASE`, the same reason `get()`/`exists()` already have it) —
 it previously had no way to reach `/mounts/...` at all.
 
-**Real-hardware-confirmed end to end, `POCKET_6K_G2 v8.6`, 2026-08-13** (`examples/rest_delete_clip.py`,
-`clip_unique_id=23`, `/mnt/sd0/A002/A002_08120328_C003.braw`): recorded a real 10s clip,
-identified it via `confirm_new_clip()`, and deleted it — the `exists()`/`DELETE`/`exists()`
-sequence confirmed exactly as designed, matching the Postman trail precisely (`DELETE` sent
-at `16:49:30.754`, confirmed gone at `16:49:31.917`, ~1.2s).
+**Real-hardware-confirmed end to end, `POCKET_6K_G2 v8.6`, 2026-08-13, twice**
+(`examples/rest_delete_clip.py`): recorded a real 10s clip, identified it via
+`confirm_new_clip()`, and deleted it — the `exists()`/`DELETE`/`exists()` sequence confirmed
+exactly as designed both times, matching the Postman trail precisely.
 
-**But `GET /clips/list` still reported the clip immediately afterward, in the same
-session** — the printed "AFTER deletion" clip inventory showed `2 clip(s) on card`, the same
-count as immediately after recording, not `1`. The file itself was genuinely gone (`delete_clip()`'s
-own `exists()` check, the same real mechanism Postman verified, confirmed this correctly) —
-`/clips/list` simply didn't reflect that change in the same breath. This does not put
-`delete_clip()`'s own verification in question: it attests to the file's real existence at
-its real path, never to `/clips/list`'s contents, and that attestation was and remains
-correct. It does mean a caller who calls `clips()` right after `delete_clip()` to double-check,
-rather than trusting `delete_clip()`'s own return value, would see something that looks like
-the deletion didn't happen. `delete_clip()` now makes one more best-effort check after its own
-confirmation — a fresh `clips()` call (`BMDStorageError`-swallowing, never raising) — and logs
-a `WARNING` if the id is still listed, purely informational, matching design principle 9.
-Whether `/clips/list` ever catches up — after a delay, a reconnect, or some other
-camera-internal refresh — is genuinely unconfirmed; this run didn't wait to find out, and nothing
-here claims an answer either way. A natural follow-up, not yet attempted: re-check `clips()` a
-few seconds later, or after a fresh reconnect, to see whether the divergence is transient or
-persistent.
+| Run | `clip_unique_id` | file | `DELETE` sent | confirmed gone | elapsed |
+|---|---|---|---|---|---|
+| 1 | `23` | `A002_08120328_C003.braw` | `16:49:30.754` | `16:49:31.917` | ~1.2s |
+| 2 | `24` | `A002_08120336_C004.braw` | `16:57:58.095` | `16:57:59.246` | ~1.15s |
+
+**But `GET /clips/list` still reported the clip immediately afterward, in the same session,
+on both runs** — the printed "AFTER deletion" clip inventory showed `2 clip(s) on card` each
+time, the same count as immediately after recording, not `1`. The file itself was genuinely
+gone (`delete_clip()`'s own `exists()` check, the same real mechanism Postman verified,
+confirmed this correctly) — `/clips/list` simply didn't reflect that change in the same
+breath. This does not put `delete_clip()`'s own verification in question: it attests to the
+file's real existence at its real path, never to `/clips/list`'s contents, and that
+attestation was and remains correct.
+
+**Resolved, not left open: a fresh reconnect clears it.** Immediately after run 2,
+`examples/rest_read_state.py` connected fresh at `16:58:47.388` — roughly 48 seconds after
+run 2's own confirmation — and reported `Active storage: sd0 (74437s remaining, 1 clips)` and
+`Clips: 1`, both correctly reflecting reality (only the original pre-existing clip remained;
+both test clips from runs 1 and 2 were genuinely gone). The staleness is a same-session
+artifact, not a permanent index corruption or a sign either deletion was somehow incomplete.
+Whether it would also clear within the *same* session without reconnecting — immediately, or
+after some shorter delay — remains untested; only "still stale immediately" and "correct
+after a reconnect ~48s later" are actually confirmed. `delete_clip()` still makes its
+best-effort `clips()` check (`BMDStorageError`-swallowing, never raising) and logs a
+`WARNING` if the id is still listed, purely informational (design principle 9) — a caller
+that needs `/clips/list` to agree immediately should reconnect rather than poll within the
+same session.
 
 ---
 

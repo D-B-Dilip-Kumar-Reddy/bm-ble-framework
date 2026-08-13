@@ -2377,29 +2377,40 @@ class RestCameraSession:
         full-card format.
 
         **Real-hardware-confirmed end to end, `POCKET_6K_G2 v8.6`,
-        2026-08-13** (`examples/rest_delete_clip.py`): recorded a real 10s
-        clip, identified it via `confirm_new_clip()`, and deleted it —
-        the file-level `exists()`/`DELETE`/`exists()` sequence confirmed
-        exactly as designed, matching the earlier Postman trail precisely.
+        2026-08-13, twice** (`examples/rest_delete_clip.py`, `clip_unique_id`
+        `23` then `24`): recorded a real 10s clip, identified it via
+        `confirm_new_clip()`, and deleted it — the file-level
+        `exists()`/`DELETE`/`exists()` sequence confirmed exactly as
+        designed both times, matching the earlier Postman trail precisely.
         **But `GET /clips/list` still reported the clip immediately
-        afterward, in the same session** — the file was genuinely gone
-        (independently confirmed by this method's own `exists()` check,
-        the same mechanism Postman verified), yet the camera's clip index
-        did not reflect that in the same breath. This method's own
-        verification is unaffected — it attests to the file's real
-        existence at its real path, not to `/clips/list`'s contents, and
-        that attestation was and remains correct. But a caller relying on
-        a subsequent `clips()` call to confirm a deletion, rather than on
-        this method's own return value, would be misled by a real,
-        observed divergence. `delete_clip()` now makes a best-effort
-        (never-raising, `BMDStorageError`-swallowing) check of `clips()`
-        after its own confirmation and logs a `WARNING` if the id is still
-        listed — informational only, matching design principle 9's "reads
-        are best-effort" discipline; it never downgrades or reverses the
-        method's own success. Whether `/clips/list` ever catches up (after
-        a delay, a reconnect, or some other camera-internal refresh) is
-        genuinely unconfirmed — this run didn't wait to find out, and
-        nothing here claims an answer either way.
+        afterward, in the same session, on both runs** — the file was
+        genuinely gone (independently confirmed by this method's own
+        `exists()` check, the same mechanism Postman verified), yet the
+        camera's clip index did not reflect that in the same breath. This
+        method's own verification is unaffected — it attests to the
+        file's real existence at its real path, not to `/clips/list`'s
+        contents, and that attestation was and remains correct.
+
+        **Resolved, not left open: a fresh reconnect clears it.**
+        Immediately after the second run, a separate script
+        (`examples/rest_read_state.py`) reconnected fresh roughly 48
+        seconds later and reported `clips()` and
+        `storage_state().active_device.clip_count` both correctly back to
+        `1` — matching reality. The staleness is a same-session artifact,
+        not a permanent index corruption or a sign the deletion is
+        somehow incomplete. Whether it would also clear within the same
+        session without reconnecting (immediately, or after some shorter
+        delay) remains untested — only "still stale immediately" and
+        "correct after a reconnect ~48s later" are actually confirmed.
+
+        `delete_clip()` still makes a best-effort (never-raising,
+        `BMDStorageError`-swallowing) check of `clips()` after its own
+        confirmation and logs a `WARNING` if the id is still listed —
+        informational only, matching design principle 9's "reads are
+        best-effort" discipline; it never downgrades or reverses the
+        method's own success. A caller that needs `/clips/list` to agree
+        immediately should reconnect rather than poll within the same
+        session.
         """
         if not confirm:
             raise ValueError(
@@ -2456,11 +2467,14 @@ class RestCameraSession:
         if still_listed:
             self._log.warning(
                 "[%s] clip_unique_id=%s still appears in GET /clips/list immediately "
-                "after its file was confirmed deleted from %s — real-hardware-confirmed, "
-                "POCKET_6K_G2 v8.6, 2026-08-13: /clips/list did not reflect a real, "
-                "file-level-confirmed deletion in the same session. This is informational "
-                "only and never raises — the file-level confirmation above is what this "
-                "method actually attests to.",
+                "after its file was confirmed deleted from %s — real-hardware-confirmed "
+                "transient, POCKET_6K_G2 v8.6, 2026-08-13 (twice): /clips/list does not "
+                "reflect a file-level-confirmed deletion within the same session, but a "
+                "fresh reconnect ~48s later showed clips()/storage_state().clip_count "
+                "both correctly updated. This is informational only and never raises — "
+                "the file-level confirmation above is what this method actually attests "
+                "to; a caller that needs /clips/list to agree immediately should "
+                "reconnect rather than poll within this session.",
                 self.host,
                 clip_unique_id,
                 target,
