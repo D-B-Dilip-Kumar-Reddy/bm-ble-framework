@@ -318,11 +318,12 @@ evidence. A `delete_still()`/`delete_clip()` method gets designed and built only
 real `--delete-real-file` run against real hardware answers the question, matching the
 same sniffer-first discipline that governs every other capability in this codebase.
 
-**Status: not yet run against real hardware.** Both flags exist as tooling only —
-`mounts_delete_probe_targets()`, `delete_real_file_conclusion()`, and `mounts_basename()`
-(the pure logic pieces) are unit-tested; the `DELETE` requests themselves have no
-real-camera evidence yet. This section will be updated with the actual result the first
-time either flag is run for real.
+**Status: `--probe-mounts-delete` run once, real hardware, `POCKET_6K_G2 v8.6`,
+2026-08-13 — inconclusive.** See "Mounts DELETE investigation results" under Sweep
+results below for the full write-up: one `404` (generic, not `DELETE`-specific) and one
+`500` (a new defect, likely related to the known Stills `500` but not proven to be about
+`DELETE` specifically, since the probed target was synthetic). `--delete-real-file` has
+not been run yet — that is the next step, and the only one that can give a real answer.
 
 ### Preflight
 
@@ -668,6 +669,58 @@ read-confirmed.
 
 No camera setting changed as a result of this run — every write sent back exactly the
 value just read.
+
+### Mounts DELETE investigation results — `POCKET_6K_G2 v8.6`, over USB, plaintext HTTP — 2026-08-13
+
+First real-hardware run of `--probe-mounts-delete` (Mode 3, above). The mounts walk found
+exactly two `ok`-classified directories to probe — `/mounts/` and `/mounts/A002-sd1/`
+(`/mounts/A002-sd1/Stills/` is the already-known `500` defect, correctly excluded by
+`mounts_delete_probe_targets()`'s `is_supported()` filter, same as it's excluded from
+`walk_mounts()`'s own recursion). Two `DELETE`s sent, two different — and both
+inconclusive — results:
+
+- **`DELETE /mounts/__bmd_delete_probe_missing_file__.tmp`** (root level) → **`404`**, body
+  `"The requested URL was not found on the server. If you entered the URL manually please
+  check your spelling and try again."` — the stock Werkzeug/Flask-style `NotFound` page,
+  not anything BMD-authored. This is the generic "no route matches this path at all" 404 a
+  Python WSGI app returns for *any* unmatched method+path combination, not a signal specific
+  to `DELETE` being recognized-but-target-absent. A `GET` to the same nonexistent path would
+  very likely 404 identically. **This result does not distinguish "DELETE is routed here" from
+  "nothing is routed here at all."**
+- **`DELETE /mounts/A002-sd1/__bmd_delete_probe_missing_file__.tmp`** (inside the real,
+  populated device directory) → **`500`**, the exact same generic
+  `"500 Internal Server Error"` boilerplate page the known Stills-listing `GET` defect
+  returns. New evidence, but of the wrong kind to answer the actual question: it shows the
+  camera's embedded web server throws an unhandled exception somewhere in its handling of
+  this directory when the request's target doesn't resolve cleanly — plausibly the *same*
+  underlying defect class as the Stills `500` (both are requests against something inside a
+  real mount directory that the server's code doesn't handle gracefully), and plausibly
+  **unrelated to the HTTP method at all**. Because the target was synthetic and never real,
+  this run cannot tell "`DELETE` crashes on any target here" apart from "`DELETE` crashes
+  only because this specific target doesn't exist."
+
+**Conclusion: inconclusive.** Phase A surfaced a real, related server defect but did not
+answer whether `DELETE` can remove a real file — that requires `--delete-real-file` against
+something that genuinely exists, which this run correctly declined to attempt on its own
+(design principle 7 — never guess, never auto-select a real target).
+
+**Ready-made real targets for the next run**, read directly from this run's own mounts
+walk (`/mounts/A002-sd1/` listing) — the two clips currently on the card, both short
+2-second test recordings from earlier format testing:
+
+```
+python tools/rest/probe_endpoints.py --host pocket-cinema-camera-6k-g2.local \
+    --model-key POCKET_6K_G2 --firmware v8.6 \
+    --delete-real-file /mounts/A002-sd1/A002_08120218_C001.braw
+```
+
+Given the `500` above, one real open question this run should resolve either way: does
+`DELETE` against a real, existing file in this same directory also `500` (the crash is
+about the directory/request shape generally), or does it behave differently now that the
+target actually resolves (the crash above was specifically about the missing-target case)?
+Either answer is useful evidence — a `500` here would mean this camera's `/mounts/...`
+surface cannot support deletion at all regardless of intent, which is itself a real,
+useful (if disappointing) conclusion to this investigation.
 
 ### `POCKET_6K_PRO v8.6`, over USB, plaintext HTTP — 2026-08-03
 

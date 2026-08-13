@@ -533,8 +533,20 @@ tools/
                             # the DELETE response's own). Neither flag adds a capability to
                             # RestCameraSession — a delete_still()/delete_clip() method gets
                             # built only once a real --delete-real-file run answers the
-                            # question (design principle 6). Not yet run against real
-                            # hardware — see docs/rest/transport.md's Mode 3 section
+                            # question (design principle 6). --probe-mounts-delete run once
+                            # for real, POCKET_6K_G2 v8.6, 2026-08-13: INCONCLUSIVE. The root
+                            # /mounts/ DELETE got a generic 404 (stock Werkzeug/Flask
+                            # NotFound page — evidence of no matching route at all, not
+                            # DELETE-specific); the real device directory's DELETE got a 500,
+                            # the same boilerplate page the known Stills-listing GET 500
+                            # defect returns — plausibly the same broken code path, plausibly
+                            # unrelated to DELETE specifically, since the probed target was
+                            # synthetic and never real. --delete-real-file (against a real
+                            # file, e.g. one of the two short test clips this same run found
+                            # at /mounts/A002-sd1/*.braw) is the next step and the only one
+                            # that can give a real answer — see docs/rest/transport.md's
+                            # "Mounts DELETE investigation results" section for the full
+                            # write-up
   captures/                 # Runtime output of sniffers/, control/, and rest/ scripts (gitignored)
 
 Tools are grouped by folder according to what kind of thing they do — read-only
