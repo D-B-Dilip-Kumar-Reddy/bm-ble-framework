@@ -33,9 +33,9 @@ rather than `put_supported` (this endpoint is in
 `tools/rest/probe_endpoints.py`'s `NEVER_WRITE` list, so `put_supported`
 can never be sweep-confirmed).
 
-STATUS: real-hardware-run once, `POCKET_6K_G2 v8.6`, 2026-08-13 — that run
-surfaced a real defect (see below) and never reached the polling/
-completion path. A rerun with the fix is the next real-hardware step.
+STATUS: real-hardware-run twice, `POCKET_6K_G2 v8.6`, 2026-08-13 — both
+runs surfaced a real defect (see below) and neither reached the polling/
+completion path. A rerun with both fixes is the next real-hardware step.
 
 **`FILESYSTEM` is required, not optional.** The first version of this
 script (and of `RestCameraSession.format_device()`) left it `None` by
@@ -46,12 +46,23 @@ overrides the spec here (design principle 6): `filesystem` is now a
 required argument on both this script and `format_device()` itself. This
 script prints the camera's live `doformat_supported_filesystems()` result
 before prompting, specifically so `FILESYSTEM` is set to a real value
-this exact camera offers rather than a guess — see
-`format_device()`'s own docstring for the full finding.
+this exact camera offers rather than a guess.
+
+**`VOLUME` turned out to be effectively required too, but for a different
+reason.** A second run, with `FILESYSTEM` now supplied, got `400
+{"error": "Field 'volume' missing from request body."}` once `filesystem`
+stopped being the blocking field — the first run's "volume wasn't
+rejected" reading was wrong; the camera had simply never gotten far
+enough to check it. Unlike `filesystem`, this codebase *can* read a
+device's current volume (`storage_state()`), so `VOLUME` stays `None`
+here on purpose — `format_device()` now resolves `None` to the device's
+own current volume name automatically, rather than omitting the field
+(known to fail) or guessing one. Set `VOLUME` explicitly only to
+*rename* the volume as part of the format. See `format_device()`'s own
+docstring for the full finding behind both fields.
 
 Edit HOST / MODEL_KEY / FIRMWARE / DEVICE_NAME / FILESYSTEM below to
-target a different camera, device, or filesystem. VOLUME is genuinely
-optional — leave it `None` to keep the device's current volume name.
+target a different camera, device, or filesystem.
 
 Usage:
     python examples/rest_format_device.py
@@ -78,7 +89,9 @@ DEVICE_NAME = "sd0"
 # so a caller who hasn't looked at that printout yet gets a clear abort
 # rather than an unverified guess sent to the camera.
 FILESYSTEM: str | None = None  # e.g. "ExFat" — see the live printout below
-VOLUME: str | None = None  # e.g. "My disk" — None keeps the current volume name
+# None resolves to the device's own current volume name (format_device()'s
+# default) — set explicitly only to rename the volume as part of the format.
+VOLUME: str | None = None  # e.g. "My disk"
 
 FORMAT_TIMEOUT_S = 120.0
 FORMAT_POLL_INTERVAL_S = 1.0
@@ -141,7 +154,7 @@ async def main() -> int:
                 timeout=FORMAT_TIMEOUT_S,
                 poll_interval_s=FORMAT_POLL_INTERVAL_S,
             )
-        except (BMDUnsupportedError, BMDVerificationError) as exc:
+        except (BMDUnsupportedError, BMDVerificationError, ValueError) as exc:
             print(f"format_device({DEVICE_NAME!r}) NOT confirmed: {exc}")
             return 1
         print(f"format_device({DEVICE_NAME!r}) confirmed ✓")

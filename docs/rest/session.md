@@ -1504,16 +1504,32 @@ describes it as.** Real-hardware-confirmed, `POCKET_6K_G2 v8.6`, 2026-08-13: the
 version of this method took the spec at its word and left `filesystem` optional, omitting it
 from the `PUT` body when not given — the camera rejected that with `400 {"error": "Field
 'filesystem' missing from request body."}`. The spec's "optional" claim is simply wrong for
-this firmware; real hardware overrides documentation here (design principle 6). `volume` was
-*not* rejected in that same request, so it remains genuinely optional — nothing contradicts
-the spec for that field. `filesystem` is validated against a live `doformat_supported_filesystems()`
-call before any write is attempted, raising `BMDUnsupportedError` if the camera doesn't
-currently offer it — the same live-capability-over-hardcoded-assumption discipline
-`set_camera_format` uses for codec/resolution/fps (design principle 7's REST sibling). There
-is no way to read a device's *current* filesystem to default to it instead — `Workingset`'s
-schema has no such field — so requiring the caller to name one explicitly is the only safe
-option; `examples/rest_format_device.py` prints `doformat_supported_filesystems()`'s live
-result before prompting for exactly this reason.
+this firmware; real hardware overrides documentation here (design principle 6). `filesystem`
+is validated against a live `doformat_supported_filesystems()` call before any write is
+attempted, raising `BMDUnsupportedError` if the camera doesn't currently offer it — the same
+live-capability-over-hardcoded-assumption discipline `set_camera_format` uses for
+codec/resolution/fps (design principle 7's REST sibling). There is no way to read a device's
+*current* filesystem to default to it instead — `Workingset`'s schema has no such field — so
+requiring the caller to name one explicitly is the only safe option; `examples/rest_format_device.py`
+prints `doformat_supported_filesystems()`'s live result before prompting for exactly this
+reason.
+
+**`volume` turned out to be effectively required too, but for a different reason, and the
+first run's reading of it was wrong.** A second real-hardware run, same camera/firmware/day,
+with `filesystem` now supplied, got `400 {"error": "Field 'volume' missing from request
+body."}` once `filesystem` stopped being the blocking field — disproving the first run's
+"`volume` was not rejected, so it remains optional" conclusion. What actually happened: the
+camera validates the body one field at a time and simply never got past `filesystem` on the
+first run to check `volume` at all; the "no error about volume" signal was silence from a
+validator that hadn't looked yet, not confirmation the field is optional. Unlike `filesystem`,
+this codebase *can* read a device's current volume — `StorageDevice.volume`, from
+`storage_state()` — so `volume: str | None = None` keeps its signature and its "omit to keep
+the current name" behavior, but that behavior is now real: when `volume` is not given, this
+method fetches `storage_state()`, finds `device_name`'s entry, and sends its current `volume`
+as the value — rather than omitting the field (now known to fail) or guessing a name. If
+`device_name` isn't present in `storage_state()`, or is present with no `volume` of its own,
+this raises `ValueError` before any request is sent — there is no safer fallback left at that
+point.
 
 **Verification is structurally weaker than every other write in this codebase, stated
 plainly rather than overstated away.** `Notification.yaml`'s `deviceProperty` enum — the
@@ -1535,15 +1551,16 @@ observing both a `"Formatting"` state and a subsequent terminal one.
 
 **This entire guard shape — the settle-before-first-poll heuristic, `timeout=120.0`,
 `poll_interval_s=1.0` — remains an unconfirmed design, not a real-hardware-tested one, even
-after the run below.** `examples/rest_format_device.py`'s first real-hardware run
-(`POCKET_6K_G2 v8.6`, 2026-08-13) confirmed the capability check, the typed-confirmation
-flow, and the `GET` key round trip all work end to end, but the run's `PUT` failed on the
-missing-`filesystem` defect above before the camera's format logic ever started — a `400`
-up front, not a failure partway through, so nothing on the card was touched. The
-polling/completion path, and `timeout`/`poll_interval_s`'s real suitability (a full-card
-format is plausibly a multi-minute operation, unlike every other write this codebase
-verifies), remain unconfirmed. A rerun with `filesystem` now required is the next
-real-hardware step.
+after the two runs below.** `examples/rest_format_device.py`'s first two real-hardware runs
+(`POCKET_6K_G2 v8.6`, 2026-08-13) both confirmed the capability check, the typed-confirmation
+flow, and the `GET` key round trip all work end to end, and both reached a real `PUT` — the
+first failing on the missing-`filesystem` defect above, the second (after that fix) failing
+on the missing-`volume` defect above. Neither request reached the camera's format logic at
+all — both were `400`s up front, not failures partway through, so nothing on the card was
+touched in either run. The polling/completion path, and `timeout`/`poll_interval_s`'s real
+suitability (a full-card format is plausibly a multi-minute operation, unlike every other
+write this codebase verifies), remain unconfirmed. A rerun with both fields now resolved is
+the next real-hardware step.
 
 ---
 
@@ -1701,10 +1718,14 @@ endpoint isn't profile-confirmed and when a requested `filesystem` isn't in the 
 at all; the full success path (`FakeRestClient.responses` mutated from a background
 `asyncio.Task`, the same "deliver later" technique `TestRecordStop`'s polling tests use, to
 simulate `state` moving `"Mounted"` -> `"Formatting"` -> a terminal state) asserting the exact
-`PUT` body sent, both with `volume` given and with it omitted (`filesystem` is always present
-now); and a timeout test where `state` never leaves `"Mounted"` at all, confirming the
-`"Formatting"`-must-be-observed-first guard actually gates completion rather than accepting
-the very first terminal-looking read.
+`PUT` body sent with `volume` given explicitly; `test_defaults_volume_from_storage_state_when_not_given`
+(the second real-hardware fix), asserting a `volume`-omitting call resolves it from a canned
+`/media/workingset`/`/media/active` response matching `device_name` rather than sending the
+field bare; `test_raises_value_error_when_device_not_in_storage_and_volume_not_given` and
+`test_raises_value_error_when_matching_device_has_no_volume` covering the two cases where that
+resolution can't happen at all; and a timeout test where `state` never leaves `"Mounted"` at
+all, confirming the `"Formatting"`-must-be-observed-first guard actually gates completion
+rather than accepting the very first terminal-looking read.
 
 ---
 

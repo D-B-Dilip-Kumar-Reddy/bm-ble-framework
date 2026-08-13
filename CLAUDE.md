@@ -385,12 +385,21 @@ src/bmd_camera/
                               # confirmed, POCKET_6K_G2 v8.6, 2026-08-13: the first version
                               # left it optional (per the spec) and the camera rejected the
                               # omitted-filesystem PUT with 400 {"error": "Field 'filesystem'
-                              # missing from request body."}. That same run confirmed the
-                              # capability check, typed-confirmation flow, and GET-key round
-                              # trip all work end to end, but never reached the polling/
-                              # completion path — a rerun with the fix is the next
-                              # real-hardware step. See docs/rest/session.md's Phase 10
-                              # section and examples/rest_format_device.py
+                              # missing from request body."}. A second run, filesystem fixed,
+                              # got 400 {"error": "Field 'volume' missing from request
+                              # body."} instead — the camera validates one field at a time,
+                              # so the first run's "volume wasn't rejected, so it's optional"
+                              # reading was wrong; it just hadn't been checked yet. volume
+                              # stays str | None = None, but is now resolved for real: when
+                              # omitted, format_device() reads the device's current volume
+                              # from storage_state() and sends that, raising ValueError
+                              # before any request if the device isn't found there or has no
+                              # volume of its own. Both runs confirmed the capability check,
+                              # typed-confirmation flow, and GET-key round trip all work end
+                              # to end, but neither reached the polling/completion path — a
+                              # rerun with both fields now resolved is the next real-hardware
+                              # step. See docs/rest/session.md's Phase 10 section and
+                              # examples/rest_format_device.py
     mapping.py                 # Codec name derivation between the BLE profile's vocabulary
                               # and REST's own spelling — confirmed strings always win
                               # (design principle 1); this is a fallback seed only.
@@ -648,15 +657,19 @@ examples/
                             # deliberately departing from every other examples/ script's
                             # plain edit-and-run convention: prints storage_state() first, then
                             # requires typing the exact device name back at a prompt before
-                            # anything is sent to the camera. First real-hardware run
+                            # anything is sent to the camera. Two real-hardware runs
                             # (POCKET_6K_G2 v8.6, 2026-08-13) confirmed the capability check,
                             # typed-confirmation flow, and GET-key round trip, then surfaced
-                            # the filesystem-required defect above via a real 400 before the
-                            # camera's format logic ever started — nothing on the card was
-                            # touched. Now prints doformat_supported_filesystems()'s live
-                            # result before prompting, and aborts with no request sent if
-                            # FILESYSTEM is still unset, so a rerun uses a real camera-offered
-                            # value rather than a guess. A successful full run (capability
+                            # the filesystem-required defect above via a real 400, then (after
+                            # that fix) the volume-required defect via a second real 400 —
+                            # neither reached the camera's format logic; nothing on the card
+                            # was touched either time. Now prints
+                            # doformat_supported_filesystems()'s live result before prompting
+                            # and aborts with no request sent if FILESYSTEM is still unset, so
+                            # a rerun uses a real camera-offered value rather than a guess;
+                            # VOLUME stays None by default and is now resolved from the
+                            # device's current name via format_device()'s own storage_state()
+                            # lookup rather than sent bare. A successful full run (capability
                             # check through the polling/completion path) is still outstanding
                             # — see docs/rest/session.md's Phase 10 section
   playback.py               # (planned)

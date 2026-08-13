@@ -2149,9 +2149,7 @@ class RestCameraSession:
         {"error": "Field 'filesystem' missing from request body."}` back
         from the camera — the spec's "optional" claim is simply wrong for
         this firmware, real hardware overrides documentation here (design
-        principle 6). `volume` was *not* rejected in that same request, so
-        it remains genuinely optional — no evidence contradicts the spec
-        for that field. `filesystem` is validated against a live call to
+        principle 6). `filesystem` is validated against a live call to
         `doformat_supported_filesystems()` before any write is attempted,
         raising `BMDUnsupportedError` if the camera doesn't currently offer
         it — the same live-capability-over-hardcoded-assumption discipline
@@ -2164,6 +2162,25 @@ class RestCameraSession:
         `doformat_supported_filesystems()`'s live result before prompting,
         specifically so the operator has real values to choose from rather
         than guessing.
+
+        **`volume` also turned out to be effectively required, not the optional
+        field the spec describes either** — a second real-hardware run, same
+        camera/firmware/day, with `filesystem` now supplied, got `400
+        {"error": "Field 'volume' missing from request body."}` once
+        `filesystem` stopped being the blocking field. The first run's
+        "`volume` was not rejected" reading was wrong: the camera evidently
+        validates fields one at a time and had simply never gotten past
+        `filesystem` to check `volume` at all. Unlike `filesystem`, this
+        codebase *can* read a device's current volume — `StorageDevice.volume`,
+        from `storage_state()` — so `volume: str | None = None` keeps its
+        signature and its "omit to keep the current name" behavior, but is
+        now resolved for real: if `volume` is not given, this method fetches
+        `storage_state()`, finds `device_name`'s entry, and uses its current
+        `volume` as the value actually sent — rather than omitting the field
+        (which is now known to fail) or guessing a name. If `device_name`
+        isn't present in `storage_state()`, or is present with no `volume` of
+        its own, this raises `ValueError` before any write — there is no safe
+        default left to fall back to at that point.
 
         **Verification is structurally weaker than every other write in
         this codebase, and this is stated here rather than overstated
@@ -2192,15 +2209,16 @@ class RestCameraSession:
         recognize a real terminal state here would be its own kind of
         wrong guess about the camera's behavior.
 
-        **Real-hardware run, `POCKET_6K_G2 v8.6`, 2026-08-13** (via
-        `examples/rest_format_device.py`): confirmed the capability check,
-        the typed-confirmation flow, and the `GET` key round trip all work
-        end to end — the run reached a real `PUT` before failing on the
-        `filesystem`-required defect above, which this codebase's own
-        request never reached the camera's format logic at all (a `400`
-        before formatting starts, not a failure partway through — nothing
-        on the card was touched). The polling/completion path beyond that
-        point remains unconfirmed; a rerun with `filesystem` now required
+        **Two real-hardware runs, `POCKET_6K_G2 v8.6`, 2026-08-13** (via
+        `examples/rest_format_device.py`): both confirmed the capability
+        check, the typed-confirmation flow, and the `GET` key round trip all
+        work end to end, and both reached a real `PUT` — the first failing
+        on the `filesystem` defect above, the second (after that fix) failing
+        on the `volume` defect above. Neither request reached the camera's
+        format logic at all (a `400` before formatting starts, not a failure
+        partway through — nothing on the card was touched in either run).
+        The polling/completion path beyond a `PUT` the camera actually
+        accepts remains unconfirmed; a rerun with both fields now resolved
         is the next real-hardware step. See CLAUDE.md's Phase 10 note.
         """
         if not confirm:
@@ -2226,6 +2244,17 @@ class RestCameraSession:
                 f"camera's live doformatSupportedFilesystems {supported_filesystems!r}"
             )
 
+        if volume is None:
+            storage = await self.storage_state()
+            matching = next((d for d in storage.devices if d.device_name == device_name), None)
+            if matching is None or matching.volume is None:
+                raise ValueError(
+                    f"format_device({device_name!r}): volume not given, and this device's "
+                    "current volume name could not be read from storage_state() to default "
+                    "to it — pass volume explicitly."
+                )
+            volume = matching.volume
+
         key_body = await self._rest_client.get(path)
         key = key_body.get("key") if isinstance(key_body, dict) else None
         if not key:
@@ -2234,9 +2263,7 @@ class RestCameraSession:
                 f"body was {key_body!r}"
             )
 
-        put_body: dict[str, Any] = {"key": key, "filesystem": filesystem}
-        if volume is not None:
-            put_body["volume"] = volume
+        put_body: dict[str, Any] = {"key": key, "filesystem": filesystem, "volume": volume}
 
         self._log.warning(
             "[%s] Formatting media device %s (filesystem=%s, volume=%s) — irreversible",

@@ -3028,7 +3028,9 @@ class TestFormatDevice:
         session = make_session(make_format_device_profile(), client=client)
 
         with pytest.raises(BMDVerificationError, match="no format key"):
-            await session.format_device(DEVICE_NAME, confirm=True, filesystem="ExFat")
+            await session.format_device(
+                DEVICE_NAME, confirm=True, filesystem="ExFat", volume="A002"
+            )
 
         assert client.put_calls == []
 
@@ -3064,12 +3066,33 @@ class TestFormatDevice:
         ]
 
     @pytest.mark.asyncio
-    async def test_omits_volume_when_not_given(self):
+    async def test_defaults_volume_from_storage_state_when_not_given(self):
+        """Second real-hardware finding, POCKET_6K_G2 v8.6, 2026-08-13: the
+        camera also rejects a PUT with no 'volume' field, once 'filesystem'
+        is no longer the blocking field. Unlike filesystem, this codebase
+        can read a device's current volume via storage_state() — used here
+        as the default rather than guessing or omitting the field."""
         client = FakeRestClient(
             {
                 DOFORMAT_PATH: {"deviceName": DEVICE_NAME, "key": "abc123"},
                 DOFORMAT_FILESYSTEMS_PATH: ["ExFat"],
                 DEVICE_INFO_PATH: {"state": "Formatting"},
+                WORKINGSET_PROPERTY: {
+                    "size": 1,
+                    "workingset": [
+                        {
+                            "index": 0,
+                            "deviceName": DEVICE_NAME,
+                            "activeDisk": True,
+                            "totalSpace": 456,
+                            "remainingSpace": 123,
+                            "remainingRecordTime": 100,
+                            "clipCount": 20,
+                            "volume": "A002",
+                        }
+                    ],
+                },
+                "/media/active": {"deviceName": DEVICE_NAME, "workingsetIndex": 0},
             }
         )
         session = make_session(make_format_device_profile(), client=client)
@@ -3083,7 +3106,53 @@ class TestFormatDevice:
             DEVICE_NAME, confirm=True, filesystem="ExFat", timeout=1.0, poll_interval_s=0.01
         )
 
-        assert client.put_calls == [(DOFORMAT_PATH, {"key": "abc123", "filesystem": "ExFat"})]
+        assert client.put_calls == [
+            (DOFORMAT_PATH, {"key": "abc123", "filesystem": "ExFat", "volume": "A002"})
+        ]
+
+    @pytest.mark.asyncio
+    async def test_raises_value_error_when_device_not_in_storage_and_volume_not_given(self):
+        client = FakeRestClient(
+            {
+                DOFORMAT_PATH: {"deviceName": DEVICE_NAME, "key": "abc123"},
+                DOFORMAT_FILESYSTEMS_PATH: ["ExFat"],
+                WORKINGSET_PROPERTY: {"size": 1, "workingset": [{"index": 0, "deviceName": ""}]},
+                "/media/active": {"deviceName": "", "workingsetIndex": -1},
+            }
+        )
+        session = make_session(make_format_device_profile(), client=client)
+
+        with pytest.raises(ValueError, match="volume"):
+            await session.format_device(DEVICE_NAME, confirm=True, filesystem="ExFat")
+
+        assert client.put_calls == []
+
+    @pytest.mark.asyncio
+    async def test_raises_value_error_when_matching_device_has_no_volume(self):
+        client = FakeRestClient(
+            {
+                DOFORMAT_PATH: {"deviceName": DEVICE_NAME, "key": "abc123"},
+                DOFORMAT_FILESYSTEMS_PATH: ["ExFat"],
+                WORKINGSET_PROPERTY: {
+                    "size": 1,
+                    "workingset": [
+                        {
+                            "index": 0,
+                            "deviceName": DEVICE_NAME,
+                            "activeDisk": True,
+                            "totalSpace": 456,
+                        }
+                    ],
+                },
+                "/media/active": {"deviceName": DEVICE_NAME, "workingsetIndex": 0},
+            }
+        )
+        session = make_session(make_format_device_profile(), client=client)
+
+        with pytest.raises(ValueError, match="volume"):
+            await session.format_device(DEVICE_NAME, confirm=True, filesystem="ExFat")
+
+        assert client.put_calls == []
 
     @pytest.mark.asyncio
     async def test_raises_verification_error_on_timeout_without_formatting_observed(self):
@@ -3101,6 +3170,7 @@ class TestFormatDevice:
                 DEVICE_NAME,
                 confirm=True,
                 filesystem="ExFat",
+                volume="A002",
                 timeout=0.05,
                 poll_interval_s=0.01,
             )
