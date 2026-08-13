@@ -99,7 +99,7 @@ Before recording or photo capture, verify the storage media is ready (card inser
 
 If storage state is unknown or unhealthy at operation time, raise `BMDStorageError` before attempting the command. Do not let the camera silently fail to save media.
 
-*Current implementation status:* `RestCameraSession`'s `_require_storage_ready()` implements the pre-flight half of this (a one-time `storage_state()` check before `record_start()`, see design principle 3's REST paragraph). Continuous, notification-driven storage tracking — the "never polled in a loop" half — has its first real implementation as `last_known_storage`/`wait_for_low_storage()` (Phase 8 item 1, `/media/workingset` `propertyValueChanged` events, real-hardware-confirmed live and pushing, `POCKET_6K_G2 v8.6`, 2026-08-05) — see `docs/rest/session.md`.
+*Current implementation status:* `RestCameraSession`'s `_require_storage_ready()` implements the pre-flight half of this (a one-time `storage_state()` check before `record_start()`, see design principle 3's REST paragraph — Phase 9 changed its gating field from `remaining_record_time` to `remaining_space`, real-hardware-confirmed not to regress, `POCKET_6K_G2 v8.6`, 2026-08-13). Continuous, notification-driven storage tracking — the "never polled in a loop" half — has its first real implementation as `last_known_storage`/`wait_for_low_storage()` (Phase 8 item 1, `/media/workingset` `propertyValueChanged` events, real-hardware-confirmed live and pushing, `POCKET_6K_G2 v8.6`, 2026-08-05) — see `docs/rest/session.md`. The explicit post-condition half ("remaining space decreased, clip count increased") is `confirm_new_clip()` (Phase 9) — real-hardware-confirmed the same day as the gate change: correctly identified the one new clip and computed its exact byte cost from a real 600s recording.
 
 ### 11. Async-first
 All I/O is async. No blocking calls anywhere. Use `asyncio.wait_for()` for all timeouts.
@@ -247,10 +247,22 @@ src/bmd_camera/
                               # BMDVerificationError on zero or on more than one new clip
                               # found (never guesses which is "the" recording), and requires
                               # clips_before to come from the same connected session
-                              # (clip_unique_id confirmed unstable across reconnects). Not yet
-                              # run against real hardware — examples/rest_record_test_clip.py
-                              # is the intended re-verification harness, ported to call it) and
-                              # set_camera_format (Phase 5, dual-check
+                              # (clip_unique_id confirmed unstable across reconnects).
+                              # Real-hardware-confirmed, POCKET_6K_G2 v8.6, 2026-08-13
+                              # (examples/rest_record_test_clip.py, ported): a fourth run
+                              # reconfirmed the remaining_record_time staleness finding in the
+                              # same shape (61245s unchanged across the format switch, only
+                              # updating to 12401s once recording started) while
+                              # record_start() succeeded cleanly under the new gate;
+                              # confirm_new_clip() correctly identified clip_unique_id=20 (the
+                              # only new id) with bytes_written=35390881792 computed exactly —
+                              # the first real-hardware confirmation of the positive path.
+                              # record_stop did not raise — the first real-hardware run since
+                              # stop_verify_timeout_s was added. The zero/multi-new-clip
+                              # branches and bytes_written's None-returning cases remain
+                              # real-hardware-unexercised. See docs/rest/session.md's
+                              # confirm_new_clip() and record_start()/record_stop() sections)
+                              # and set_camera_format (Phase 5, dual-check
                               # verified, live-capability-gated via supported_formats(),
                               # optional sensor_resolution param for disambiguating
                               # among several camera-offered pairings — see

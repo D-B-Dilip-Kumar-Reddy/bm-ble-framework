@@ -672,6 +672,18 @@ trusts the field that has never been observed stale in any run: real bytes free.
 `remaining_record_time` remains available via `storage_state()` for informational use; it
 just no longer gates this precondition.
 
+**Real-hardware-confirmed, `POCKET_6K_G2 v8.6`, 2026-08-13** (`examples/rest_record_test_clip.py`,
+the ported version): a fourth run reconfirmed the staleness finding in the exact same shape —
+`remaining_record_time` read `61245`s both immediately before and immediately after the
+`set_camera_format()` switch, only updating to `12401`s once recording actually started —
+while `record_start()` itself succeeded cleanly under the new `remaining_space`-only gate.
+This run's `remaining_record_time` stayed comfortably positive throughout (never near `0`),
+so — like every run before it — it doesn't directly prove the old gate would have blocked a
+start the new one correctly allows; that specific failure mode remains real-hardware-
+unobserved. What this run does newly confirm is the gate change causing no regression: a real
+recording started, held for its full duration, and stopped cleanly with the reworked
+precondition in place.
+
 **Capability check is GET-only, deliberately.** Both methods refuse to run unless the
 target camera/firmware's `rest/<fw>.json` profile confirms `/transports/0/record`'s `GET`
 side was swept (design principle 7) — but `tools/rest/probe_endpoints.py --probe-writes`
@@ -746,7 +758,19 @@ hand-written loop in `rest_record_test_clip.py` silently tolerated any number of
 clips it found; `confirm_new_clip()` raises on both zero and more than one. Unit-tested
 (`TestConfirmNewClip`); the ported example script is the real-hardware re-verification
 harness — the manual-diff version already ran clean 3x, so a clean rerun against
-`confirm_new_clip()` confirms parity. **Not yet run against real hardware.**
+`confirm_new_clip()` confirms parity.
+
+**Real-hardware-confirmed, `POCKET_6K_G2 v8.6`, 2026-08-13** (`examples/rest_record_test_clip.py`,
+`BRAW 5:1 4K DCI 23.98`, 600s, 1TB card): clean end to end. `confirm_new_clip(clips_before)`
+correctly identified `clip_unique_id=20` (the only new id — clip count went `19` -> `20`) out
+of a real 19-clip-then-20-clip card, and `bytes_written` was computed as `35390881792` bytes
+(`842542612480 - 807151730688`, exact) — the first real-hardware confirmation of the positive
+path (exactly one new clip, both storage snapshots carrying an `active_device`). `record_stop`
+did not raise this run — the first real-hardware run of `record_stop` since
+`stop_verify_timeout_s` was added (the three runs that motivated the fix all predate it). The
+zero-new-clip and more-than-one-new-clip branches remain real-hardware-unexercised, as does
+`bytes_written`'s `None`-returning branches (`storage_before` omitted, or either snapshot
+missing an `active_device`) — this run always had a real active device on both sides.
 
 ### `set_camera_format(codec, variant, resolution, fps)`
 
