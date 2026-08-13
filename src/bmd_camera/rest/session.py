@@ -88,6 +88,7 @@ from .constants import MOUNTS_PATH, WS_PATH
 from .events import RestEventRouter
 from .exceptions import BMDRestError
 from .mapping import resolve_ble_codec_name, resolve_rest_codec_name
+from .media import resolve_active_mount
 from .state import CameraState, StorageDevice, StorageState
 from .timecode import Timecode, decode_rest_timecode
 
@@ -2300,3 +2301,126 @@ class RestCameraSession:
             f"'Formatting' state followed by a terminal state within {timeout}s "
             f"(seen_formatting={seen_formatting})"
         )
+
+    # ── Clip deletion (Phase 11) ────────────────────────────────────────────
+
+    async def delete_clip(self, clip_unique_id: int, *, confirm: bool) -> Clip:
+        """Permanently delete one clip from the active storage device via
+        `DELETE` on its real `/mounts/...` path — the capability
+        `tools/rest/probe_endpoints.py`'s `--probe-mounts-delete`/
+        `--delete-real-file` investigation exists to answer (design
+        principle 6, `docs/rest/transport.md`'s Mode 3 section).
+
+        **Real-hardware-confirmed working, `POCKET_6K_G2 v8.6`,
+        2026-08-13** — but the confirmation is of the underlying
+        `GET`/`DELETE`/`GET` sequence, done by hand in Postman after the
+        investigation tool itself crashed on the same binary-body defect
+        `RestClient.exists()` was already built to avoid (see `decode_body()`
+        in `probe_endpoints.py`, and this method's own use of `exists()`
+        below for the same reason): `GET` `200`
+        (`Content-Type: application/octet-stream`) -> `DELETE` `200 OK` ->
+        `GET` `404 Not Found`. This method composes that exact confirmed
+        sequence through this session's own machinery
+        (`clips()`/`resolve_active_mount()`/`RestClient.exists()`), but has
+        not itself been run against real hardware yet — the next real run
+        of this method is what closes that specific gap. **Only clip
+        deletion is confirmed** — no still's exact `/mounts/...` path has
+        been independently confirmed the way this clip's was (the Stills
+        directory's own `500` listing defect means one can't be read off a
+        listing), so there is no `delete_still()` here. Building one is a
+        separate step for once that confirmation exists.
+
+        **This permanently erases the clip, irreversibly.** `confirm` has
+        no default — a caller must pass `confirm=True` explicitly, or an
+        omitted/`False` value raises `ValueError` before a single request
+        is sent, mirroring `format_device()`'s exact gate and for the same
+        reason: unlike `record_start`/`set_camera_format`/`select_clip`,
+        this changes state the camera cannot be asked to change back.
+
+        `clip_unique_id` is resolved against a fresh `clips()` call,
+        raising `ValueError` if it isn't found — the same "never guess
+        which clip" discipline `select_clip()` already uses for the same
+        situation. Remember `clip_unique_id` is **not stable across
+        reconnects** (`docs/rest/session.md`'s `clips()` section) — resolve
+        it fresh in the current session, never reuse an id captured earlier.
+
+        **The real `/mounts/...` path is built from a single confirmed
+        real-hardware sample, not a general rule**: the one clip this was
+        confirmed against, `/mnt/sd0/A002/A002_08120218_C001.braw`
+        (`Clip.file_path`, the internal camera path `clips()` reports),
+        sits at `/mounts/A002-sd1/A002_08120218_C001.braw` over REST — the
+        file directly under the mount root, with the internal path's
+        `/A002/` reel subdirectory **not** present in the HTTP layout. This
+        method reuses `rest/media.py`'s `resolve_active_mount()` (the
+        camera's own real mount listing, never a `deviceName`-to-mount-
+        suffix guess — see that module's docstring) for the mount root,
+        then appends only `file_path`'s basename — mirroring the one
+        confirmed sample exactly. A camera or firmware where clips sit in
+        a real subdirectory under the mount root would break this; no
+        second data point exists yet to know whether that's ever the case
+        (same honesty `resolve_mount_path()`'s own docstring already
+        carries for the mount-selection side of this same problem).
+
+        Verification: `RestClient.exists()` before and after the `DELETE`
+        — never a plain `get()`, since a clip's body is binary
+        (`application/octet-stream`) and `exists()` is specifically built
+        to never attempt to parse or decode it (see its docstring — the
+        exact class of crash `probe_endpoints.py`'s `request()` hit on
+        this same kind of file before being fixed). Raises
+        `BMDVerificationError` before sending `DELETE` at all if the
+        resolved path doesn't exist yet — the path assumption above was
+        wrong, or the clip is already gone — and raises
+        `BMDVerificationError` again if the path still exists immediately
+        after `DELETE`. No polling loop: the confirmed real sequence
+        completed synchronously (no observed "still processing"
+        intermediate state), unlike `format_device()`'s multi-second
+        full-card format.
+        """
+        if not confirm:
+            raise ValueError(
+                "delete_clip() permanently erases this clip from the card — pass "
+                "confirm=True only once you are certain that is what you want."
+            )
+
+        matches = [clip for clip in await self.clips() if clip.clip_unique_id == clip_unique_id]
+        if not matches:
+            raise ValueError(
+                f"[{self.host}] No clip with clip_unique_id={clip_unique_id} in "
+                f"GET /clips/list on {self.profile.model_key} {self.profile.firmware}"
+            )
+        clip = matches[0]
+
+        mount_path = await resolve_active_mount(self)
+        filename = clip.file_path.rsplit("/", 1)[-1]
+        target = f"{mount_path}{filename}"
+
+        before = await self._rest_client.exists(target, api_prefixed=False)
+        if not before:
+            raise BMDVerificationError(
+                f"[{self.host}] delete_clip(clip_unique_id={clip_unique_id}): resolved "
+                f"path {target!r} does not exist — cannot confirm this clip's real "
+                "location before attempting DELETE"
+            )
+
+        self._log.warning(
+            "[%s] Deleting clip %s (clip_unique_id=%s) — irreversible",
+            self.host,
+            target,
+            clip_unique_id,
+        )
+        await self._rest_client.delete(target, api_prefixed=False)
+
+        after = await self._rest_client.exists(target, api_prefixed=False)
+        if after:
+            raise BMDVerificationError(
+                f"[{self.host}] delete_clip(clip_unique_id={clip_unique_id}): {target!r} "
+                "still exists after DELETE — not confirmed deleted"
+            )
+
+        self._log.info(
+            "[%s] Clip %s (clip_unique_id=%s) deleted and confirmed gone",
+            self.host,
+            target,
+            clip_unique_id,
+        )
+        return clip

@@ -314,9 +314,11 @@ unlike a same-value `PUT`, can never be a no-op. Sequence:
    rather than guessed at.
 
 Neither flag adds a capability to `RestCameraSession` on its own — this tool only gathers
-evidence. A `delete_still()`/`delete_clip()` method gets designed and built only once a
-real `--delete-real-file` run against real hardware answers the question, matching the
-same sniffer-first discipline that governs every other capability in this codebase.
+evidence, matching the same sniffer-first discipline that governs every other capability in
+this codebase. `delete_clip()` (`docs/rest/session.md`'s Phase 11) is the method that got
+designed and built once a real `--delete-real-file` run answered the question for clips —
+see the confirmed result below. `delete_still()` remains unbuilt; stills have no equivalent
+confirmation yet.
 
 **Status: CONFIRMED — `DELETE` on `/mounts/...` really deletes a real clip.**
 `--probe-mounts-delete` ran first (`POCKET_6K_G2 v8.6`, 2026-08-13) and was inconclusive —
@@ -765,11 +767,12 @@ real still path (e.g. via `rest/media.py`'s existing mtime-based discovery, whic
 needed the broken listing to begin with) and running `--delete-real-file` against it
 directly.
 
-No `delete_still()`/`delete_clip()` method has been added to `RestCameraSession` yet — this
-result is what the investigation's own exit condition (design principle 6, "a real
-`--delete-real-file` run answers the question") was waiting for, but building the actual
-library capability is a separate, deliberate next step, not an automatic consequence of
-this confirmation landing.
+This confirmation was the investigation's own exit condition (design principle 6, "a real
+`--delete-real-file` run answers the question") — building the actual library capability on
+top of it was a deliberate next step, not an automatic consequence, and it has now been
+taken: `RestCameraSession.delete_clip()` (Phase 11, `docs/rest/session.md`) composes this
+exact confirmed sequence. `delete_still()` remains unbuilt — still deletion has no
+independent confirmation of its own yet, for the reason above.
 
 ### `POCKET_6K_PRO v8.6`, over USB, plaintext HTTP — 2026-08-03
 

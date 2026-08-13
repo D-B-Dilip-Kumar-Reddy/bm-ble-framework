@@ -415,6 +415,39 @@ src/bmd_camera/
                               # after this PUT already found "Formatting"). See
                               # docs/rest/session.md's Phase 10 section and
                               # examples/rest_format_device.py
+                              # delete_clip(clip_unique_id, *, confirm) (Phase 11) —
+                              # permanently DELETEs one clip's real /mounts/... path.
+                              # Composes the exact sequence confirmed by hand in Postman
+                              # after tools/rest/probe_endpoints.py's own
+                              # --delete-real-file attempt crashed on a binary-body bug
+                              # (see that tool's entry below): GET 200
+                              # (application/octet-stream) -> DELETE 200 OK -> GET 404,
+                              # POCKET_6K_G2 v8.6, 2026-08-13. confirm has no default,
+                              # mirroring format_device()'s exact gate. clip_unique_id
+                              # resolved fresh via clips(), ValueError if not found
+                              # (matching select_clip()'s discipline). The real
+                              # /mounts/... path is built from a single confirmed
+                              # sample — file_path's basename placed directly under
+                              # resolve_active_mount()'s mount root (rest/media.py),
+                              # the internal path's reel subdirectory dropped entirely
+                              # — not a general rule; a camera with clips in a real
+                              # mount subdirectory would break this, no second data
+                              # point exists yet. Verification is RestClient.exists()
+                              # before and after DELETE, never get() (a clip's body is
+                              # binary — exists() is built to never touch it, the exact
+                              # crash class probe_endpoints.py's request() hit). No
+                              # polling loop — the confirmed sequence completed
+                              # synchronously. Only clip deletion is confirmed; no
+                              # delete_still() exists (Stills' own 500 listing defect
+                              # means no still path has been independently confirmed
+                              # the way this clip's was). This method itself is not
+                              # yet real-hardware-run — examples/rest_delete_clip.py's
+                              # first successful run is that confirmation. See
+                              # docs/rest/session.md's Phase 11 section.
+                              # RestClient.delete() (client.py) gained
+                              # api_prefixed: bool = True for this, mirroring
+                              # get()/exists() — it previously had no way to reach
+                              # /mounts/... at all.
     mapping.py                 # Codec name derivation between the BLE profile's vocabulary
                               # and REST's own spelling — confirmed strings always win
                               # (design principle 1); this is a fallback seed only.
@@ -729,6 +762,18 @@ examples/
                             # 20 -> 0, remaining_space restored — the first full real-hardware
                             # confirmation of format_device(), including its polling/
                             # completion path — see docs/rest/session.md's Phase 10 section
+  rest_delete_clip.py       # Phase 11 — RestCameraSession.delete_clip(). Layers a safety
+                            # gate on top of delete_clip()'s own mandatory confirm=True,
+                            # matching rest_format_device.py's convention: prints the
+                            # clips() inventory first, then requires typing the exact
+                            # clip filename back at a prompt before anything is sent.
+                            # delete_clip()'s underlying GET/DELETE/GET sequence is
+                            # real-hardware-confirmed (POCKET_6K_G2 v8.6, 2026-08-13, via
+                            # Postman after probe_endpoints.py's own attempt crashed on a
+                            # binary-body bug); this script itself, composed through
+                            # RestCameraSession's own machinery, has not yet been run
+                            # against real hardware — its first successful run is that
+                            # confirmation. See docs/rest/session.md's Phase 11 section
   playback.py               # (planned)
 
 tests/

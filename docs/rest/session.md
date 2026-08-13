@@ -1578,6 +1578,79 @@ transition out of `"Mounted"`, which this run's timing didn't produce.
 
 ---
 
+## Write verbs (Phase 11 — clip deletion)
+
+### `delete_clip(clip_unique_id, *, confirm)` → `Clip`
+
+`DELETE`s one clip's real `/mounts/...` path — the capability
+`tools/rest/probe_endpoints.py`'s `--probe-mounts-delete`/`--delete-real-file` investigation
+(`docs/rest/transport.md`'s Mode 3 section) exists to answer, and now has a real answer:
+**`DELETE` on `/mounts/...` really deletes a real clip file, real-hardware-confirmed,
+`POCKET_6K_G2 v8.6`, 2026-08-13.**
+
+That confirmation is of the underlying sequence, not of this method directly. The
+investigation tool's own `--delete-real-file` attempt crashed before reaching its `DELETE` —
+`request()` called `response.text()` on a real `.braw` clip's `application/octet-stream`
+body, which isn't valid UTF-8 (fixed in `probe_endpoints.py` via a new `decode_body()`
+helper; see that file's own section above). Since the tool crashed, the operator repeated
+the exact same three-step sequence by hand in Postman instead — arguably stronger evidence,
+since it rules out any bug in the tool's own status interpretation:
+
+```
+GET    /mounts/A002-sd1/A002_08120218_C001.braw  -> 200 (Content-Type: application/octet-stream)
+DELETE /mounts/A002-sd1/A002_08120218_C001.braw  -> 200 OK
+GET    /mounts/A002-sd1/A002_08120218_C001.braw  -> 404 Not Found
+```
+
+`delete_clip()` composes that confirmed sequence through this session's own machinery
+(`clips()`, `rest/media.py`'s `resolve_active_mount()`, `RestClient.exists()`) — but has not
+itself been run against real hardware yet. `examples/rest_delete_clip.py`'s first successful
+run is what closes that specific gap.
+
+**Only clip deletion is confirmed — there is no `delete_still()`.** No still's exact
+`/mounts/...` path has been independently confirmed the way this clip's was, because the
+Stills directory's own known `500` listing defect means one can't be read off a listing.
+Plausibly the same mechanism; not proven. Building a still-deletion method is a separate
+step for once that confirmation exists — not assumed from this one.
+
+**`confirm` has no default**, mirroring `format_device()`'s exact gate for the same reason:
+this permanently erases the clip, and unlike `record_start`/`set_camera_format`/`select_clip`
+it changes state the camera cannot be asked to change back. Omitting it or passing `False`
+raises `ValueError` before a single request is sent.
+
+`clip_unique_id` is resolved against a fresh `clips()` call, raising `ValueError` if it isn't
+found — the same discipline `select_clip()` already uses. Remember `clip_unique_id` is **not
+stable across reconnects** (`clips()`'s own section above) — resolve it fresh in the current
+session, never reuse an id captured earlier.
+
+**The real `/mounts/...` path is built from a single confirmed real-hardware sample, not a
+general rule.** The one clip this was confirmed against, `Clip.file_path`
+`/mnt/sd0/A002/A002_08120218_C001.braw` (the internal camera path `clips()` reports), sits at
+`/mounts/A002-sd1/A002_08120218_C001.braw` over REST — the file directly under the mount
+root, with the internal path's `/A002/` reel subdirectory **not** present in the HTTP layout.
+`delete_clip()` reuses `resolve_active_mount()` for the mount root (the camera's own real
+mount listing, never a `deviceName`-to-mount-suffix guess) and appends only `file_path`'s
+basename, mirroring the one confirmed sample exactly. A camera or firmware where clips sit in
+a real subdirectory under the mount root would break this — no second data point exists yet
+to know whether that's ever the case, the same honesty `resolve_mount_path()`'s own docstring
+already carries for the mount-*selection* side of this same problem.
+
+**Verification is `RestClient.exists()` before and after the `DELETE` — never a plain
+`get()`.** A clip's body is binary (`application/octet-stream`); `exists()` is specifically
+built to never attempt to parse or decode it (its own docstring names exactly this class of
+crash — the one `probe_endpoints.py`'s `request()` hit before being fixed). Raises
+`BMDVerificationError` before sending `DELETE` at all if the resolved path doesn't exist yet
+(the path assumption above was wrong, or the clip is already gone), and again if the path
+still exists immediately after `DELETE`. No polling loop: the confirmed real sequence
+completed synchronously — unlike `format_device()`'s multi-second full-card format, nothing
+in the Postman trail suggested an intermediate "still processing" state to wait through.
+
+`RestClient.delete()` gained an `api_prefixed: bool = True` parameter for this
+(`/mounts/...` is outside `API_BASE`, the same reason `get()`/`exists()` already have it) —
+it previously had no way to reach `/mounts/...` at all.
+
+---
+
 ## Codec name mapping (`rest/mapping.py`)
 
 `RestCameraSession`'s write path (`set_camera_format`) takes profile *names* — the
@@ -1741,6 +1814,24 @@ resolution can't happen at all; and a timeout test where `state` never leaves `"
 all, confirming the `"Formatting"`-must-be-observed-first guard actually gates completion
 rather than accepting the very first terminal-looking read.
 
+`TestDeleteClip` (Phase 11) covers `delete_clip()` with a `_delete_clip_client()` helper
+supplying everything the method composes through — `clips()` (one clip,
+`clip_unique_id=1`), `storage_state()`/`mount_names()` (so `resolve_active_mount()` resolves
+unambiguously to a single mount), and an `exists_responses` entry for the real
+`/mounts/<mount>/<basename>` path that composition resolves to. Coverage includes: the
+`ValueError` when `confirm=False` (asserting zero requests are sent at all, not even
+`clips()`); the `ValueError` when `clip_unique_id` isn't found; `BMDVerificationError` when
+the resolved path doesn't exist before `DELETE` is ever sent; `BMDVerificationError` when
+`exists()` still reports `True` after `DELETE` (a `delete()` call that raised nothing is not
+itself proof of deletion — only a fresh read counts); and the full success path, using a
+stateful `exists()` override (`True` on the first call, `False` on the second) rather than a
+static canned response, since the before/after distinction is the entire point of the
+verification being tested — asserting the returned `Clip`, the exact target path `DELETE`
+was called with, and that it was called with `api_prefixed=False`.
+`RestClient.delete()`'s new `api_prefixed` parameter has its own regression test in
+`test_client.py`, mirroring `get()`'s existing one for the same `/mounts/...`-is-outside-
+`API_BASE` reason.
+
 ---
 
 ## What's deliberately out of scope
@@ -1802,17 +1893,13 @@ rather than accepting the very first terminal-looking read.
   `set_timeline(clip_unique_ids)` because there's nothing on this camera for it to mean;
   the playable set is always every clip sharing the current format, one format group at a
   time.
-- **No `RestCameraSession` method for per-clip or per-still deletion, even though the
-  capability is now confirmed to exist.** `format_device()` (Phase 10, above) is the only
-  media-erasure capability the official REST spec itself exposes — confirmed by reading all
-  11 spec files given for that phase, none of which documents a delete-clip or delete-still
-  endpoint. The separate `/mounts/...` filesystem surface (outside the 11 control-API spec
-  files entirely) was investigated afterward (`tools/rest/probe_endpoints.py`'s
-  `--probe-mounts-delete`/`--delete-real-file`, `docs/rest/transport.md`'s Mode 3 section) and
-  **is now real-hardware-confirmed to support `DELETE` on at least one real clip file**
-  (`POCKET_6K_G2 v8.6`, 2026-08-13: `GET` `200` → `DELETE` `200 OK` → `GET` `404`). Still
-  deletion specifically has not had its own independent confirmation (the Stills directory's
-  known `500` listing defect means no still's exact path has been read off a listing the way
-  the confirmed clip's was) — plausibly the same mechanism, not yet proven. A
-  `delete_clip()`/`delete_still()` method on `RestCameraSession` is a deliberate next step
-  from here, not a consequence of this confirmation landing on its own.
+- **No `RestCameraSession` method for per-still deletion.** `delete_clip()` (Phase 11,
+  above) closes the clip half of this gap — the separate `/mounts/...` filesystem surface
+  (outside the 11 control-API spec files' documented capabilities, which stop at
+  `format_device()`, Phase 10) is real-hardware-confirmed to support `DELETE` on at least one
+  real clip file (`POCKET_6K_G2 v8.6`, 2026-08-13: `GET` `200` → `DELETE` `200 OK` → `GET`
+  `404`). Still deletion specifically has not had its own independent confirmation (the
+  Stills directory's known `500` listing defect means no still's exact path has been read off
+  a listing the way the confirmed clip's was) — plausibly the same mechanism, not yet proven.
+  A `delete_still()` method is a deliberate next step once that confirmation exists, not an
+  assumption riding on `delete_clip()`'s own.

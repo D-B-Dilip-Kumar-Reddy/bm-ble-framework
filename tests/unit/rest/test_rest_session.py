@@ -289,8 +289,9 @@ class FakeRestClient:
             raise self.errors[path]
         return self.put_responses.get(path)
 
-    async def delete(self, path: str):
+    async def delete(self, path: str, *, api_prefixed: bool = True):
         self.delete_calls.append(path)
+        self.api_prefixed_calls[path] = api_prefixed
         if path in self.errors:
             raise self.errors[path]
         return None
@@ -3174,3 +3175,110 @@ class TestFormatDevice:
                 timeout=0.05,
                 poll_interval_s=0.01,
             )
+
+
+DELETE_CLIP_MOUNT_NAME = "A001-sd1"
+DELETE_CLIP_TARGET = f"/mounts/{DELETE_CLIP_MOUNT_NAME}/clip_1.braw"
+
+
+def _delete_clip_client(*, exists_before: bool = True) -> FakeRestClient:
+    """Everything delete_clip() needs: clips() (one clip, clip_unique_id=1,
+    file_path basename clip_1.braw), storage_state() + mount_names() (so
+    resolve_active_mount() resolves unambiguously to the single mount
+    A001-sd1), and an exists_responses entry for the real target path
+    that composition resolves to."""
+    return FakeRestClient(
+        {
+            "/clips/list": _clip_list_body(1),
+            "/media/workingset": {
+                "size": 1,
+                "workingset": [
+                    {
+                        "activeDisk": True,
+                        "clipCount": 1,
+                        "deviceName": "sd0",
+                        "index": 0,
+                        "remainingRecordTime": 100,
+                        "remainingSpace": 123,
+                        "totalSpace": 456,
+                        "volume": "A001",
+                    }
+                ],
+            },
+            "/media/active": {"deviceName": "sd0", "workingsetIndex": 0},
+            "/mounts/": [{"name": DELETE_CLIP_MOUNT_NAME, "type": "directory"}],
+        },
+        exists_responses={DELETE_CLIP_TARGET: exists_before},
+    )
+
+
+class TestDeleteClip:
+    """delete_clip() — real-hardware-confirmed working via Postman,
+    POCKET_6K_G2 v8.6, 2026-08-13 (docs/rest/transport.md's Mode 3
+    section): GET 200 -> DELETE 200 OK -> GET 404. This method composes
+    that confirmed sequence through clips()/resolve_active_mount()/
+    RestClient.exists() — not yet itself run against real hardware."""
+
+    @pytest.mark.asyncio
+    async def test_raises_value_error_when_confirm_is_false(self):
+        client = _delete_clip_client()
+        session = make_session(make_profile(), client=client)
+
+        with pytest.raises(ValueError, match="confirm=True"):
+            await session.delete_clip(1, confirm=False)
+
+        assert client.calls == []
+        assert client.delete_calls == []
+
+    @pytest.mark.asyncio
+    async def test_raises_value_error_when_clip_not_found(self):
+        client = _delete_clip_client()
+        session = make_session(make_profile(), client=client)
+
+        with pytest.raises(ValueError, match="clip_unique_id=99"):
+            await session.delete_clip(99, confirm=True)
+
+        assert client.delete_calls == []
+
+    @pytest.mark.asyncio
+    async def test_raises_verification_error_when_resolved_path_not_found(self):
+        client = _delete_clip_client(exists_before=False)
+        session = make_session(make_profile(), client=client)
+
+        with pytest.raises(BMDVerificationError, match="does not exist"):
+            await session.delete_clip(1, confirm=True)
+
+        assert client.delete_calls == []
+
+    @pytest.mark.asyncio
+    async def test_raises_verification_error_when_still_exists_after_delete(self):
+        """delete() succeeding (no exception) is not itself proof of
+        deletion — only a fresh exists() read counts, matching
+        format_device()'s "confirm via a fresh read" discipline."""
+        client = _delete_clip_client(exists_before=True)  # exists() never flips to False
+        session = make_session(make_profile(), client=client)
+
+        with pytest.raises(BMDVerificationError, match="still exists after DELETE"):
+            await session.delete_clip(1, confirm=True)
+
+        assert client.delete_calls == [DELETE_CLIP_TARGET]
+
+    @pytest.mark.asyncio
+    async def test_full_flow_success_returns_the_deleted_clip(self):
+        client = _delete_clip_client(exists_before=True)
+        call_count = {"n": 0}
+
+        async def exists(path: str, *, api_prefixed: bool = True) -> bool:
+            client.exists_calls.append(path)
+            client.api_prefixed_calls[path] = api_prefixed
+            call_count["n"] += 1
+            return call_count["n"] == 1  # True before DELETE, False after
+
+        client.exists = exists
+        session = make_session(make_profile(), client=client)
+
+        deleted = await session.delete_clip(1, confirm=True)
+
+        assert deleted.clip_unique_id == 1
+        assert client.delete_calls == [DELETE_CLIP_TARGET]
+        assert client.api_prefixed_calls[DELETE_CLIP_TARGET] is False

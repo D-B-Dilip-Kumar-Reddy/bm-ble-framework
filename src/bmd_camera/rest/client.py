@@ -121,8 +121,8 @@ class RestClient:
     async def post(self, path: str, body: Any = None) -> Any:
         return await self._request("POST", path, json_body=body)
 
-    async def delete(self, path: str) -> Any:
-        return await self._request("DELETE", path)
+    async def delete(self, path: str, *, api_prefixed: bool = True) -> Any:
+        return await self._request("DELETE", path, api_prefixed=api_prefixed)
 
     async def exists(self, path: str, *, api_prefixed: bool = True) -> bool:
         """Whether `GET path` returns a successful status, without ever

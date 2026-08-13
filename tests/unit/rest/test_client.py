@@ -289,6 +289,19 @@ class TestWriteVerbs:
 
         assert [c["method"] for c in session.calls] == ["POST", "DELETE"]
 
+    @pytest.mark.asyncio
+    async def test_delete_api_prefixed_false_omits_api_base(self):
+        """RestCameraSession.delete_clip() DELETEs a real /mounts/... path —
+        outside API_BASE, same namespace test_api_prefixed_false_omits_api_base
+        already covers for get(). Regression coverage for delete() specifically,
+        since it lacked the api_prefixed parameter entirely before this."""
+        session = FakeSession(FakeResponse(200))
+        client = RestClient("cam.local", session=session)
+
+        await client.delete("/mounts/A001-sd1/clip.braw", api_prefixed=False)
+
+        assert session.calls[0]["url"] == "http://cam.local/mounts/A001-sd1/clip.braw"
+
 
 class TestSessionLifecycle:
     @pytest.mark.asyncio
