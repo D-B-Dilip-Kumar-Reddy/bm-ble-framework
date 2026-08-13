@@ -859,8 +859,12 @@ examples/
                             # (poll_interval_s/verify_timeout_s) instead of checking once.
                             # delete_clip() was deliberately left unchanged — both its real
                             # runs confirmed correctly on the first immediate check. A third
-                            # real-hardware run directly exercising the polling fix remains
-                            # outstanding. See docs/rest/session.md's delete_still() section.
+                            # run, same day, confirmed the fix: the same standalone script
+                            # deleted the still successfully with no error. delete_still()
+                            # composed through RestCameraSession's own machinery is now
+                            # real-hardware-confirmed end to end, the same status
+                            # delete_clip() already carried. See docs/rest/session.md's
+                            # delete_still() section.
   playback.py               # (planned)
 
 tests/

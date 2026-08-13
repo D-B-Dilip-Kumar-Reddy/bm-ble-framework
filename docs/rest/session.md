@@ -1744,10 +1744,17 @@ automated requests do not.
 `delete_clip()` is deliberately **not** changed to match — both of its real-hardware runs
 confirmed correctly on the first immediate check, so widening it would be speculative rather
 than evidence-driven, the same asymmetry this codebase already keeps between `record_start`
-(single-shot, unchanged) and `record_stop` (widened, evidence-driven). A third real-hardware run
-of `delete_still()` against the polling fix, to directly observe the poll recovering from a
-transient stale read, remains outstanding — this fix is unit-tested
-(`test_after_check_polls_past_a_transient_stale_exists`) but not yet itself real-hardware-run.
+(single-shot, unchanged) and `record_stop` (widened, evidence-driven).
+
+**Third run, `POCKET_6K_G2 v8.6`, 2026-08-13 — the polling fix confirmed on real hardware.** The
+same standalone script, rerun against the fix, deleted the still successfully with no
+`BMDVerificationError` — closing the gap the second run's false negative opened.
+`delete_still()`'s full real-hardware trail across all three runs: run 1 (via
+`examples/rest_delete_still.py`) stopped correctly at the clock-skew guess failure before ever
+reaching this method; run 2 (standalone script, real path, pre-fix) reached it and hit the
+polling race; run 3 (same standalone script, post-fix) succeeded. `delete_still()` composed
+through `RestCameraSession`'s own machinery end to end is now real-hardware-confirmed, the same
+status `delete_clip()` already carried.
 
 `confirm` has no default, mirroring `delete_clip()`/`format_device()`'s exact gate.
 Verification is `RestClient.exists()` before and after `DELETE` — never a plain `get()`,

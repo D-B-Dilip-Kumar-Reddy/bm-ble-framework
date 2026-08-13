@@ -810,8 +810,12 @@ after `DELETE` raced a brief camera-side propagation delay, the same shape `reco
 was fixed for. Fixed the same way: the after-`DELETE` check now polls
 (`poll_interval_s`/`verify_timeout_s`) instead of checking once — see `docs/rest/session.md`'s
 `delete_still()` section for the full write-up. `delete_clip()` was deliberately left unchanged,
-since both its real-hardware runs confirmed correctly on the first immediate check. A third run
-directly exercising the polling fix on real hardware remains outstanding.
+since both its real-hardware runs confirmed correctly on the first immediate check.
+
+**Third run, same day, confirms the fix**: the same standalone script, rerun against the
+polling fix, deleted the still successfully with no error. `delete_still()` composed through
+`RestCameraSession`'s own machinery is now real-hardware-confirmed end to end, the same status
+`delete_clip()` already carried.
 
 ### `POCKET_6K_PRO v8.6`, over USB, plaintext HTTP — 2026-08-03
 
