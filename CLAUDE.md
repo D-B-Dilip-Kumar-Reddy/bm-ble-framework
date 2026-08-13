@@ -835,11 +835,21 @@ examples/
                             # inventing a path), then delete_still(confirm=True) it.
                             # delete_still()'s underlying GET/DELETE/GET sequence is
                             # real-hardware-confirmed (POCKET_6K_G2 v8.6, 2026-08-13, via
-                            # Postman); this script itself, composed through
-                            # RestCameraSession's own machinery end to end (trigger,
-                            # confirm, guess, delete), has not yet been run against real
-                            # hardware — its first successful run is that confirmation.
-                            # See docs/rest/session.md's Phase 11 section
+                            # Postman). This script's own first real-hardware run, same
+                            # camera/firmware/day, confirmed the photo capture but
+                            # guess_new_still_path() returned None — the camera's onboard
+                            # clock was running ~37h21m behind the PC clock (confirmed via
+                            # the camera's own SETUP screen), well outside the default
+                            # minute_offsets search window, so the script correctly stopped
+                            # before ever reaching delete_still() rather than inventing a
+                            # path (design principle 7). Documented as a permanent
+                            # limitation of the "same minute" guessing assumption, not a
+                            # bug — see rest/media.py's module docstring ("CAMERA CLOCK
+                            # SKEW") and docs/rest/session.md's delete_still() section.
+                            # delete_still() composed through RestCameraSession's own
+                            # machinery end to end has not yet been run against real
+                            # hardware — that confirmation is still pending, using the real
+                            # filename obtained by other means.
   playback.py               # (planned)
 
 tests/
