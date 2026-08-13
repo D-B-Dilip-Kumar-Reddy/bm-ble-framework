@@ -1,4 +1,4 @@
-"""Unit tests for :mod:`bmd_ble.protocol.types`.
+"""Unit tests for :mod:`bmd_camera.ble.protocol.types`.
 
 Covers the BMD data type enum and its width/struct-format lookup tables.
 The numeric coding is pinned to the official *Blackmagic Camera Control
@@ -8,7 +8,7 @@ assumed enum (0=void, 1=bool, 2=int8, ..., 7=fixed16) fails loudly.
 
 import struct
 
-from bmd_ble.protocol.types import (
+from bmd_camera.ble.protocol.types import (
     DATA_TYPE_BYTE_WIDTHS,
     DATA_TYPE_STRUCT_FORMATS,
     DataType,

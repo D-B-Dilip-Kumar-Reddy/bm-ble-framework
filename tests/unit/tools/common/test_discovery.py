@@ -24,9 +24,9 @@ from discovery import (  # noqa: E402
     seed_triples_from_capture,
 )
 
-from bmd_ble.camera_profile import load_schema, validate_profile  # noqa: E402
-from bmd_ble.protocol.codec import encode_assign, encode_assign_void  # noqa: E402
-from bmd_ble.protocol.types import DataType  # noqa: E402
+from bmd_camera.ble.protocol.codec import encode_assign, encode_assign_void  # noqa: E402
+from bmd_camera.ble.protocol.types import DataType  # noqa: E402
+from bmd_camera.camera_profile import load_schema, validate_profile  # noqa: E402
 
 
 def make_candidate(value=2, reserved=1, **overrides) -> CandidateCommand:

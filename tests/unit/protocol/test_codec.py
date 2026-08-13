@@ -1,4 +1,4 @@
-"""Unit tests for :mod:`bmd_ble.protocol.codec`.
+"""Unit tests for :mod:`bmd_camera.ble.protocol.codec`.
 
 Covers BMD command packet header encode/decode round-trips and malformed
 packet handling.
@@ -6,7 +6,7 @@ packet handling.
 
 import pytest
 
-from bmd_ble.protocol.codec import (
+from bmd_camera.ble.protocol.codec import (
     DESTINATION_CAMERA,
     HEADER_LENGTH,
     RESERVED_BYTE,
@@ -18,7 +18,7 @@ from bmd_ble.protocol.codec import (
     encode_assign_void,
     encode_packet,
 )
-from bmd_ble.protocol.types import DataType
+from bmd_camera.ble.protocol.types import DataType
 
 
 class TestEncodePacket:
@@ -218,7 +218,7 @@ class TestEncodeAssign:
 
     def test_reproduces_known_g2_record_start_packet(self):
         """Byte-for-byte match with the sniffer-verified POCKET_6K_G2 v7.9
-        record-start command (see docs/protocol.md §6)."""
+        record-start command (see docs/ble/protocol.md §6)."""
         packet = encode_assign(
             category=0x0A, parameter=0x01, data_type=DataType.INT8, value=2, reserved=0x01
         )

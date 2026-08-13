@@ -1,13 +1,13 @@
-"""Unit tests for :mod:`bmd_ble.notification_router`."""
+"""Unit tests for :mod:`bmd_camera.ble.notification_router`."""
 
 import asyncio
 from types import SimpleNamespace
 
 import pytest
 
-from bmd_ble.notification_router import NotificationRouter
-from bmd_ble.protocol.codec import CommandHeader, Operation, decode_packet, encode_packet
-from bmd_ble.protocol.types import DataType
+from bmd_camera.ble.notification_router import NotificationRouter
+from bmd_camera.ble.protocol.codec import CommandHeader, Operation, decode_packet, encode_packet
+from bmd_camera.ble.protocol.types import DataType
 
 CATEGORY = 0x0A
 PARAMETER = 0x01
@@ -124,7 +124,7 @@ class TestWaitFor:
         value happens to match an older, unrelated consumption from before
         the timeout. Dedup must compare against what arm() saw *at arm
         time*, not against whatever was last successfully consumed — see
-        NotificationRouter's docstring and docs/recording.md."""
+        NotificationRouter's docstring and docs/ble/recording.md."""
         router = NotificationRouter()
 
         router.arm(CATEGORY, PARAMETER)

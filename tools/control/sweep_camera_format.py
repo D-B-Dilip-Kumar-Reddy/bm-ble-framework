@@ -9,19 +9,19 @@ combinations actually confirm.
 
 WHY THIS EXISTS
 ---------------
-`POCKET_6K_PRO v8.6`'s ProRes/4K DCI gap (docs/settings.md §16) was found by
+`POCKET_6K_PRO v8.6`'s ProRes/4K DCI gap (docs/ble/settings.md §16) was found by
 accident — nobody set out to test that specific combination, it surfaced
 mid-investigation of something else, and closing it took a full day of
 targeted hypothesis testing (dimension_enum sweep, data_type byte,
 video_format trailing elements, Operation.OFFSET, the exact camera-reported
-fps and codec variant — see docs/settings.md §16 for the whole trail) before
+fps and codec variant — see docs/ble/settings.md §16 for the whole trail) before
 being accepted as a genuine software capability gap
-(`resolutions.<name>.known_unreachable`, docs/payload_profiles.md). Nothing
+(`resolutions.<name>.known_unreachable`, docs/ble/payload_profiles.md). Nothing
 in this codebase's existing tooling would have caught it *before* a caller
 hit it in production, and nothing currently checks whether a similar gap
 exists on any of the other ~479 combinations these two profiles claim to
 support (8 resolutions x ~4-8 variants x 8 fps modes, per codec, per
-camera — see docs/active_camera_control.md for the exact count).
+camera — see docs/ble/active_camera_control.md for the exact count).
 
 This tool closes that gap systematically: it enumerates every combination a
 profile's lookup tables claim is supported, runs each one through
@@ -34,7 +34,7 @@ candidate for a new `known_unreachable` entry, exactly the shape of finding
 that took a full day to characterize by hand for ProRes/4K DCI). The saved
 report is evidence for a human to review, not something this tool writes
 into a profile itself — CLAUDE.md design principle 6 (sniffer-first) and
-`docs/payload_profiles.md`'s own framing of `known_unreachable` both apply
+`docs/ble/payload_profiles.md`'s own framing of `known_unreachable` both apply
 here: an unconfirmed candidate needs the same kind of real-hardware
 follow-up (repeat runs, on-screen confirmation, ruling out an unrelated
 no-op) that closed the ProRes/4K DCI investigation, not a mechanical
@@ -87,7 +87,7 @@ unconfirmed. A follow-up run with `--include-known-unreachable` (480
 combinations) reproduced the identical 17, plus correctly classified all 32
 ProRes/4K DCI combinations as `unsupported` via the `known_unreachable`
 guard — no write attempted for any of them, exactly as designed. Full
-write-up: `docs/settings.md`.
+write-up: `docs/ble/settings.md`.
 
 The 17 unconfirmed split into two genuinely different findings once checked
 against the real camera:
@@ -97,7 +97,7 @@ against the real camera:
   The operator confirmed these fps values aren't offered by the camera's own
   UI at 6K at all — a real hardware ceiling, not a software write-path gap
   like ProRes/4K DCI. This is now modeled as `resolutions.6K.max_fps_int`
-  (`docs/payload_profiles.md`) and excluded from this tool's default sweep
+  (`docs/ble/payload_profiles.md`) and excluded from this tool's default sweep
   the same way `known_unreachable` combinations are (see
   `--include-unsupported-fps` to re-sweep them anyway).
 - **1 was a genuine false negative in this tool's own default timeout**:
@@ -105,7 +105,7 @@ against the real camera:
   then-default 3.0s `--echo-timeout-seconds` — but the operator confirmed
   the write had actually succeeded on the camera. This is the same
   lens-metadata-burst confound documented elsewhere in this codebase
-  (`docs/session_and_verification.md`) delaying a genuine echo past a too-
+  (`docs/ble/session_and_verification.md`) delaying a genuine echo past a too-
   short timeout, this time demonstrated in this tool specifically rather
   than a single manual send. The default was raised from 3.0 to 6.0 as a
   direct result — a fast default here risks exactly this false-negative
@@ -134,7 +134,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "common"))
 
 from capture import CAPTURES_DIR, configure_console_logging  # noqa: E402
 
-from bmd_ble import (  # noqa: E402
+from bmd_camera import (  # noqa: E402
     BMDUnsupportedError,
     BMDVerificationError,
     CameraProfile,
@@ -166,12 +166,12 @@ def enumerate_combinations(
     `require_fps_mode` do elsewhere in this codebase).
 
     A codec listed in a resolution's `known_unreachable` map is skipped by
-    default (its outcome is already known — see docs/settings.md §16 for
+    default (its outcome is already known — see docs/ble/settings.md §16 for
     the ProRes/4K DCI precedent) unless `include_known_unreachable` is set,
     e.g. to re-verify one after a suspected fix.
 
     An fps whose `fps_int` exceeds a resolution's `max_fps_int` (a real
-    hardware ceiling, not a software gap — see `docs/settings.md`'s 6K
+    hardware ceiling, not a software gap — see `docs/ble/settings.md`'s 6K
     fps-ceiling finding) is likewise skipped by default unless
     `include_unsupported_fps` is set — re-sweeping a known camera limit
     would just reproduce the same `unsupported` result every time.
@@ -230,7 +230,7 @@ class ComboResult:
       never confirmed by echo. This is the outcome that matters most — a
       genuine candidate for a new `known_unreachable` entry, the same shape
       of finding the ProRes/4K DCI investigation eventually confirmed by
-      hand (docs/settings.md §16). Promoting one to `known_unreachable`
+      hand (docs/ble/settings.md §16). Promoting one to `known_unreachable`
       still needs the same real-hardware follow-up that investigation took
       (repeat runs from a genuinely different starting state, on-screen
       confirmation, ruling out a redundant no-op) — this tool surfaces the
@@ -340,8 +340,8 @@ def print_summary(results: list[ComboResult]) -> None:
     if unconfirmed:
         print(
             "\nUNCONFIRMED — candidates for a new resolutions.<name>.known_unreachable entry "
-            "(see docs/payload_profiles.md). Each still needs the same real-hardware "
-            "follow-up docs/settings.md §16's ProRes/4K DCI investigation took before being "
+            "(see docs/ble/payload_profiles.md). Each still needs the same real-hardware "
+            "follow-up docs/ble/settings.md §16's ProRes/4K DCI investigation took before being "
             "written into the profile — repeat from a genuinely different starting state, "
             "confirm on-screen, rule out a redundant no-op:"
         )
@@ -433,7 +433,7 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help=(
             "Also sweep (codec, resolution) pairs already recorded in the profile's "
-            "known_unreachable map (see docs/payload_profiles.md) — e.g. to re-verify one "
+            "known_unreachable map (see docs/ble/payload_profiles.md) — e.g. to re-verify one "
             "after a suspected fix. Default: excluded, since those outcomes are already known "
             "and would just raise BMDUnsupportedError immediately."
         ),
@@ -443,7 +443,7 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help=(
             "Also sweep fps values above a resolution's known max_fps_int hardware ceiling "
-            "(e.g. POCKET_6K_PRO v8.6's 6K topping out at 50, see docs/settings.md). "
+            "(e.g. POCKET_6K_PRO v8.6's 6K topping out at 50, see docs/ble/settings.md). "
             "Default: excluded, since those are a real camera limit, not a software gap, "
             "and would just raise BMDUnsupportedError immediately."
         ),

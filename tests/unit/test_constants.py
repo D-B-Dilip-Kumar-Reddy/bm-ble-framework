@@ -1,6 +1,6 @@
-"""Unit tests for :mod:`bmd_ble.constants`.
+"""Unit tests for :mod:`bmd_camera.ble.constants`.
 
-This module verifies protocol-level constants exposed by ``bmd_ble.constants``.
+This module verifies protocol-level constants exposed by ``bmd_camera.ble.constants``.
 The constants module contains values that are fixed by the Blackmagic Design BLE
 Camera Control protocol, including Bluetooth UUIDs, characteristic labels, and
 BLE timing defaults.
@@ -20,7 +20,7 @@ review whether the protocol constant really changed before updating the test.
 
 import re
 
-from bmd_ble import constants
+from bmd_camera.ble import constants
 
 # Matches normalized lowercase 128-bit UUID strings, for example:
 # "291d567a-6d75-11e6-8b77-86f30ca893d3".

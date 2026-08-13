@@ -2,12 +2,12 @@
 Set the camera to a full (codec, quality variant, resolution, fps)
 combination via CameraSession.set_camera_format — the orchestration method
 that sequences set_video_format / set_codec_quality / set_recording_format
-(see docs/settings.md §9 and set_camera_format's own docstring) so a script
+(see docs/ble/settings.md §9 and set_camera_format's own docstring) so a script
 doesn't need to know which of those three settings packets accomplishes
 which part, or that one combination (4K DCI/ProRes) needs a two-step
 workaround because its dimension_enum is still unknown.
 
-All three settings families are VERIFIED on real hardware (docs/settings.md
+All three settings families are VERIFIED on real hardware (docs/ble/settings.md
 §8, §10), including each one's no-echo-on-redundant-write behavior (§11,
 §14) — set_camera_format's steps silently skip a write that's already
 known to be satisfied rather than raising. Every step still raises
@@ -34,7 +34,7 @@ import asyncio
 import logging
 import sys
 
-from bmd_ble import BMDUnsupportedError, BMDVerificationError, CameraSession
+from bmd_camera import BMDUnsupportedError, BMDVerificationError, CameraSession
 
 MODEL_KEY = "POCKET_6K_G2"
 FIRMWARE = "v8.6"

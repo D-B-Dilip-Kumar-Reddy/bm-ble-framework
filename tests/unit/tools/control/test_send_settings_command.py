@@ -24,9 +24,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "tools" / "control"
 
 import send_settings_command as ssc  # noqa: E402
 
-from bmd_ble.camera_profile import CameraProfile  # noqa: E402
-from bmd_ble.protocol.codec import Operation, encode_assign_elements  # noqa: E402
-from bmd_ble.protocol.types import DataType  # noqa: E402
+from bmd_camera.ble.protocol.codec import Operation, encode_assign_elements  # noqa: E402
+from bmd_camera.ble.protocol.types import DataType  # noqa: E402
+from bmd_camera.camera_profile import CameraProfile  # noqa: E402
 
 
 def _g2_profile() -> CameraProfile:

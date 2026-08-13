@@ -4,13 +4,13 @@ tools/common/discovery.py
 Pure logic for the guided command-discovery workflow
 (tools/control/discover_command.py): candidate-command generation, seeding
 from saved passive captures, echo extraction, and emitting a profile
-``commands`` block in the payloads/schema.json shape.
+``commands`` block in the payloads/ble_schema.json shape.
 
 Everything here is side-effect free and fully unit-tested
 (tests/unit/tools/common/test_discovery.py) — no BLE, no ``input()``, no
 filesystem access. The interactive driver in tools/control/ owns all I/O.
 
-See docs/command_discovery.md for the workflow this supports.
+See docs/ble/command_discovery.md for the workflow this supports.
 """
 
 from __future__ import annotations
@@ -18,11 +18,11 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
-from bmd_ble.protocol.codec import Operation, encode_assign, encode_assign_void
-from bmd_ble.protocol.types import DataType
+from bmd_camera.ble.protocol.codec import Operation, encode_assign, encode_assign_void
+from bmd_camera.ble.protocol.types import DataType
 
 # Characteristic name used by tools/common/capture.py's saved JSON for the
-# incoming control characteristic (from bmd_ble.constants.CHARACTERISTIC_NAMES).
+# incoming control characteristic (from bmd_camera.ble.constants.CHARACTERISTIC_NAMES).
 INCOMING_CONTROL_NAME = "INCOMING_CONTROL (Indicate)"
 
 
@@ -216,7 +216,7 @@ def extract_echo(
 
     The operation arrives as an Operation name string in decoded captures;
     it is mapped back to its integer so the emitted profile block stores the
-    raw byte (see payloads/schema.json's echo_operation rationale).
+    raw byte (see payloads/ble_schema.json's echo_operation rationale).
     """
     for notification in notifications:
         if notification.get("characteristic_name") != INCOMING_CONTROL_NAME:
@@ -240,7 +240,7 @@ def build_command_block(
     capture_ref: str | None,
     discovered_on: str,
 ) -> dict:
-    """Assemble a payloads/schema.json-shaped ``commands`` block from
+    """Assemble a payloads/ble_schema.json-shaped ``commands`` block from
     operator-confirmed outcomes.
 
     Raises ValueError when outcomes disagree on the command coordinates

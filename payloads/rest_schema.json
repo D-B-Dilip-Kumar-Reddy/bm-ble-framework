@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/D-B-Dilip-Kumar-Reddy/bmd-camera-control/payloads/rest_schema.json",
+  "title": "BMD REST camera payload profile",
+  "description": "Validates payloads/models/<MODEL_KEY>/rest/<FIRMWARE>.json files at load time (camera_profile.validate_rest_profile). Populated from tools/rest/probe_endpoints.py sweep output (build_rest_profile_block's exact shape) — never hand-authored. See docs/rest/transport.md and CLAUDE.md design principle 6's REST sibling rule: no endpoint is trusted until swept on that exact camera, firmware, and transport.",
+  "type": "object",
+  "required": ["_meta", "endpoints"],
+  "properties": {
+    "_meta": {
+      "type": "object",
+      "required": ["model_key", "firmware", "status"],
+      "properties": {
+        "model_key": { "type": "string", "pattern": "^[A-Z0-9_]+$" },
+        "firmware": { "type": "string", "pattern": "^v[0-9]+(\\.[0-9]+)*$" },
+        "status": {
+          "enum": ["VERIFIED", "UNVERIFIED"],
+          "description": "Whole-profile status, mirroring the BLE schema's _meta.status. UNVERIFIED until a write probe has confirmed a *changing* value on a real camera, not just a same-value PUT."
+        }
+      },
+      "patternProperties": { "^_": {} },
+      "additionalProperties": false
+    },
+    "transport": {
+      "enum": ["usb", "lan"],
+      "description": "Which transport this sweep ran over. A result on one is not evidence about the other — see docs/rest/transport.md."
+    },
+    "endpoints": {
+      "type": "object",
+      "description": "REST path -> sweep outcome, keyed exactly as tools/rest/probe_endpoints.py reports it (e.g. \"/system/format\", \"/audio/channel/0/level\").",
+      "patternProperties": { "^_": {} },
+      "additionalProperties": { "$ref": "#/$defs/endpointResult" }
+    },
+    "websocket_properties": {
+      "type": "array",
+      "description": "Property paths that successfully subscribed over the WebSocket event feed during the sweep.",
+      "items": { "type": "string" }
+    },
+    "format_names": {
+      "type": "object",
+      "description": "Confirmed REST codec strings per family/variant, e.g. {\"BRAW\": {\"5:1\": \"BRaw:5_1\"}, \"ProRes\": {\"422\": \"Original\"}}. Not derived from a naming rule in code (design principle 1) — REST's spelling can diverge from the BLE profile's (BRaw's ':' -> '_' is a rule; ProRes's '422' -> 'Original' is not, confirmed on POCKET_6K_G2 v8.6, docs/rest/transport.md).",
+      "patternProperties": { "^_": {} },
+      "additionalProperties": {
+        "type": "object",
+        "description": "Codec family -> {variant name -> REST codec string}.",
+        "patternProperties": { "^_": {} },
+        "additionalProperties": { "type": "string" }
+      }
+    },
+    "provenance": { "$ref": "#/$defs/provenance" }
+  },
+  "patternProperties": { "^_": {} },
+  "additionalProperties": false,
+  "$defs": {
+    "endpointResult": {
+      "type": "object",
+      "description": "One endpoint's sweep outcome. status/supported come from the read sweep; put_status/put_supported are only present when --probe-writes ran for this path.",
+      "properties": {
+        "status": {
+          "type": ["integer", "null"],
+          "description": "HTTP status from the read sweep's GET. null means the request never got a reply (cable unplugged, wrong host, firewall) — see ProbeResult.status."
+        },
+        "supported": {
+          "type": "boolean",
+          "description": "Whether a caller should use this endpoint for reads — true only for a 2xx GET. A 501 (camera correctly declining) and a 5xx (firmware defect) are both false, deliberately not distinguished by this flag alone; see `status` for that."
+        },
+        "notes": {
+          "type": "string",
+          "description": "The exception message when status is null, or another free-text note."
+        },
+        "put_status": {
+          "type": "integer",
+          "description": "HTTP status from the idempotent same-value PUT probe."
+        },
+        "put_supported": {
+          "type": "boolean",
+          "description": "Whether PUT is implemented on this endpoint. A same-value PUT proves the endpoint exists, not that a changing write applies — see docs/rest/transport.md."
+        }
+      },
+      "patternProperties": { "^_": {} },
+      "additionalProperties": false
+    },
+    "provenance": {
+      "type": "object",
+      "required": ["status"],
+      "description": "Same shape as the BLE schema's provenance $def, deliberately kept structurally identical so REST endpoints carry VERIFIED/CANDIDATE/UNVERIFIED per firmware just as BLE commands do.",
+      "properties": {
+        "status": {
+          "enum": ["VERIFIED", "UNVERIFIED", "CANDIDATE"],
+          "description": "CANDIDATE = swept and either not yet re-run or only same-value-probed. VERIFIED = a changing write has been confirmed on real hardware for the endpoints this profile guards."
+        },
+        "method": { "type": "string" },
+        "capture_refs": { "type": "array", "items": { "type": "string" } },
+        "verified_on": { "type": "string" },
+        "notes": { "type": "string" }
+      },
+      "patternProperties": { "^_": {} },
+      "additionalProperties": false
+    }
+  }
+}

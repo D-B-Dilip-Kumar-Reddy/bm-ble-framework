@@ -1,7 +1,7 @@
 """
 tools/sniffers/sniffer_photo.py
 ================================
-Passive sniffer for photo capture (still capture) — see docs/photo_capture.md.
+Passive sniffer for photo capture (still capture) — see docs/ble/photo_capture.md.
 
 Connects to the camera, then runs one interactive capture window per action
 label. The operator triggers each photo on the physical camera (the body's
@@ -11,7 +11,7 @@ observed on INCOMING_CONTROL / CAMERA_STATUS and saves the full decoded
 capture to tools/captures/.
 
 The [spec] starting point is category 10 (Media), parameter 3 — "Still
-Capture", a void trigger (docs/protocol.md §5). That is a map for reading
+Capture", a void trigger (docs/ble/protocol.md §5). That is a map for reading
 the capture, not a value to trust: whether this camera reports anything on
 10.3 (or anywhere else) when a photo is taken from the body is exactly what
 this sniffer determines.
@@ -30,10 +30,10 @@ Default windows and why:
   photo_capture_2   windows show whether the same triple fires on *every*
   photo_capture_3   capture (a genuine per-capture signal) rather than only
                     once (a one-time dump, like the connect-burst reports
-                    seen during settings work — docs/settings.md).
+                    seen during settings work — docs/ble/settings.md).
 
 Operational note (learned on the first real runs, 2026-07-27, both
-cameras — see docs/photo_capture.md): after connect the camera drains a
+cameras — see docs/ble/photo_capture.md): after connect the camera drains a
 large state-report burst over the indication channel at a throttled ~180ms
 cadence, lasting 10s or more. Open the idle_baseline window only AFTER that
 burst has finished — wait until notifications slow to the ~1/s ambient
@@ -45,7 +45,7 @@ recognition signature).
 
 Since a photo consumes card space, also watch the category 0x09 signals in
 the output: 9.2 is a live remaining-recording-time hypothesis
-(docs/protocol.md §5) and a per-photo storage tick would be the first lead
+(docs/ble/protocol.md §5) and a per-photo storage tick would be the first lead
 toward the remaining-photo-capacity state CLAUDE.md's storage gating needs.
 
 Known passive limit — CONFIRMED for photo on both cameras (2026-07-27, 3
@@ -56,7 +56,7 @@ spillover — see the operational note above). The trigger therefore needs
 active probing (tools/control/discover_command.py --data-type VOID); this
 sniffer remains useful for re-checking that result on new models/firmware
 and for baseline windows around active probes. Full findings:
-docs/photo_capture.md.
+docs/ble/photo_capture.md.
 
 Override --actions for other attribution sessions, e.g. a photo while
 recording, or per-codec photo windows:
@@ -88,9 +88,9 @@ from capture import (  # noqa: E402
     save_capture,
 )
 
-from bmd_ble.camera_controller import BMDCameraController  # noqa: E402
-from bmd_ble.camera_profile import CameraProfile  # noqa: E402
-from bmd_ble.scanner import scan_for_camera  # noqa: E402
+from bmd_camera.ble.camera_controller import BMDCameraController  # noqa: E402
+from bmd_camera.ble.scanner import scan_for_camera  # noqa: E402
+from bmd_camera.camera_profile import CameraProfile  # noqa: E402
 
 DEFAULT_MODEL_KEY = "POCKET_6K_G2"
 DEFAULT_FIRMWARE = "v8.6"

@@ -21,8 +21,8 @@ principle 6, "sniffer-first").
 This module has no knowledge of any specific feature (recording, settings,
 media, ...) — feature scripts supply only their own action labels (and, for
 `run_send_and_capture`, the raw command bytes) and reuse
-`print_window_summary` / `save_capture`. See docs/sniffer_capture_engine.md
-and docs/active_camera_control.md for the full design writeup.
+`print_window_summary` / `save_capture`. See docs/ble/sniffer_capture_engine.md
+and docs/ble/active_camera_control.md for the full design writeup.
 """
 
 from __future__ import annotations
@@ -35,9 +35,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from bmd_ble.camera_controller import BMDCameraController
-from bmd_ble.constants import CHARACTERISTIC_NAMES
-from bmd_ble.protocol.codec import decode_packet
+from bmd_camera.ble.camera_controller import BMDCameraController
+from bmd_camera.ble.constants import CHARACTERISTIC_NAMES
+from bmd_camera.ble.protocol.codec import decode_packet
 
 CAPTURES_DIR = Path(__file__).resolve().parents[1] / "captures"
 
@@ -243,7 +243,7 @@ async def run_send_and_capture(
     "0 notifications" if nothing arrived, not silently succeeding).
 
     This actively sends commands to a real camera — see
-    docs/active_camera_control.md.
+    docs/ble/active_camera_control.md.
     """
     session = CaptureSession()
     await _subscribe_capture_callback(cam, session)

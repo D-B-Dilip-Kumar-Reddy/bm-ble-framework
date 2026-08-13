@@ -9,13 +9,13 @@ on the body's screen.
 WHY THIS EXISTS
 ----------------
 `tools/control/send_settings_command.py --packet video_format --dimension-enum
-0x..` already sends one candidate at a time (see docs/settings.md §7-§8 for
+0x..` already sends one candidate at a time (see docs/ble/settings.md §7-§8 for
 the workflow it supports), but each invocation re-scans and reconnects
 (~15-20s of overhead) and leaves match detection to the operator reading the
 resulting resolution off the camera body. That's unreliable on some cameras:
 `POCKET_6K_PRO v8.6`'s on-screen display does NOT live-update after a
 video_format write until the camera is power-cycled, even though the write
-demonstrably takes effect (docs/settings.md §15) — so an operator watching
+demonstrably takes effect (docs/ble/settings.md §15) — so an operator watching
 the screen during a sweep would see nothing change on every single candidate,
 match or not.
 
@@ -27,7 +27,7 @@ elsewhere in this codebase. Give it `--target-resolution` (and optionally
 `--target-codec`) and it flags a match automatically: no on-screen check
 needed, no guessing.
 
-Motivating case (see docs/settings.md §16): `POCKET_6K_PRO v8.6` has no known
+Motivating case (see docs/ble/settings.md §16): `POCKET_6K_PRO v8.6` has no known
 `dimension_enum` for ProRes/4K DCI, and `set_recording_format`'s two-step
 proxy workaround that closes the equivalent gap on the G2 does not work here.
 A same-day passive capture confirmed the camera genuinely holds and reports
@@ -41,7 +41,7 @@ most promising way to find whatever value (if any) reaches it directly.
 
 With no `--enums`/`--range`, the default candidate range is `0x00`-`0x16`
 (matching the range the G2's own exhaustive 4K DCI/ProRes search covered,
-docs/settings.md §7-§8), minus every `dimension_enum` value already present
+docs/ble/settings.md §7-§8), minus every `dimension_enum` value already present
 in the profile's `resolutions` table (no point resending a value whose
 target is already known) — pass `--include-known` to sweep those too.
 
@@ -52,13 +52,13 @@ plan before confirming is the operator's chance to trim it down with
 `--enums`/`--range`/`--include-known` first.
 
 STALE-MATCH GUARD (added 2026-07-27, real false positive on
-`POCKET_6K_PRO v8.6` — see docs/photo_capture.md §10.1's dimension_enum-
+`POCKET_6K_PRO v8.6` — see docs/ble/photo_capture.md §10.1's dimension_enum-
 aliasing hunt). `is_match` only checks whether a candidate's decoded state
 equals the target — it has no way to know whether that state was actually
 *caused* by this candidate, versus already being true beforehand (an
 invalid/no-op enum produces no real write, but the camera still reflects
 whatever it was already at — the same "report isn't an ack, it's a state
-reflection" mechanism documented in `docs/settings.md` §7). Candidate
+reflection" mechanism documented in `docs/ble/settings.md` §7). Candidate
 `0x00` demonstrated this directly: an apparent MATCH against ProRes/HD in
 one run, and a completely different, non-matching resolution in an
 otherwise-identical rerun — both times exactly reproducing whatever the
@@ -90,16 +90,16 @@ from capture import (  # noqa: E402
 )
 from discovery import INCOMING_CONTROL_NAME  # noqa: E402
 
-from bmd_ble.camera_controller import BMDCameraController  # noqa: E402
-from bmd_ble.camera_profile import CameraProfile  # noqa: E402
-from bmd_ble.protocol.categories.settings import (  # noqa: E402
+from bmd_camera.ble.camera_controller import BMDCameraController  # noqa: E402
+from bmd_camera.ble.protocol.categories.settings import (  # noqa: E402
     RecordingFormat,
     decode_codec_quality,
     decode_recording_format,
     encode_video_format,
 )
-from bmd_ble.protocol.types import DataType  # noqa: E402
-from bmd_ble.scanner import scan_for_camera  # noqa: E402
+from bmd_camera.ble.protocol.types import DataType  # noqa: E402
+from bmd_camera.ble.scanner import scan_for_camera  # noqa: E402
+from bmd_camera.camera_profile import CameraProfile  # noqa: E402
 
 DEFAULT_RANGE = (0x00, 0x16)
 
@@ -356,7 +356,7 @@ async def run(args: argparse.Namespace) -> int:
                         "  ⚠ POSSIBLE STALE MATCH: this report is byte-identical to what the "
                         "camera was already reporting BEFORE this candidate was sent — it may "
                         "be leftover state, not a result this candidate caused (the report "
-                        "isn't an ack, it's a state reflection — docs/settings.md §7). Do not "
+                        "isn't an ack, it's a state reflection — docs/ble/settings.md §7). Do not "
                         "trust this as a confirmed dimension_enum without an independent "
                         "repeat from a genuinely different starting state."
                     )
@@ -418,7 +418,7 @@ async def run(args: argparse.Namespace) -> int:
             print(
                 f"\n{len(clean)} candidate(s) matched: {enums}. Add the confirmed enum to the "
                 "profile's resolutions table (dimension_enums) and re-run the family's normal "
-                "write+echo confirmation (docs/settings.md's runbook) before trusting it."
+                "write+echo confirmation (docs/ble/settings.md's runbook) before trusting it."
             )
         if stale_matches:
             enums = ", ".join(f"0x{c:02X}" for c in stale_matches)
@@ -432,7 +432,7 @@ async def run(args: argparse.Namespace) -> int:
 
     print(
         "\nNo candidate matched the target. If every candidate in range is now tried, "
-        "the gap may need a different approach (see docs/settings.md for open hypotheses) "
+        "the gap may need a different approach (see docs/ble/settings.md for open hypotheses) "
         "rather than a wider sweep."
     )
     return 1
@@ -444,7 +444,7 @@ def parse_args() -> argparse.Namespace:
             "Exhaustive video_format dimension_enum sweep: sends every candidate in one "
             "connected session and decodes the result from the wire (recording_format / "
             "codec_quality reports) instead of relying on the on-screen display, which is "
-            "known-unreliable on at least one camera (see docs/settings.md §15). No "
+            "known-unreliable on at least one camera (see docs/ble/settings.md §15). No "
             "defaults for --model-key/--firmware — be explicit about which camera you are "
             "changing."
         )
@@ -470,7 +470,7 @@ def parse_args() -> argparse.Namespace:
             f"Inclusive dimension_enum range to sweep (accepts 0x.. hex or decimal). "
             f"Default: 0x{DEFAULT_RANGE[0]:02X}-0x{DEFAULT_RANGE[1]:02X}, matching the "
             f"range the G2's own exhaustive 4K DCI/ProRes search covered "
-            f"(docs/settings.md §7-§8). Ignored if --enums is given."
+            f"(docs/ble/settings.md §7-§8). Ignored if --enums is given."
         ),
     )
     parser.add_argument(

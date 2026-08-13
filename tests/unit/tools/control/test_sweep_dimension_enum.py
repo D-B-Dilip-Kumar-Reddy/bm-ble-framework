@@ -20,8 +20,8 @@ import sweep_dimension_enum as sde  # noqa: E402
 from capture import CaptureWindow, DecodedNotification  # noqa: E402
 from discovery import INCOMING_CONTROL_NAME  # noqa: E402
 
-from bmd_ble.camera_profile import CameraProfile  # noqa: E402
-from bmd_ble.protocol.categories.settings import RecordingFormat  # noqa: E402
+from bmd_camera.ble.protocol.categories.settings import RecordingFormat  # noqa: E402
+from bmd_camera.camera_profile import CameraProfile  # noqa: E402
 
 
 def _g2_profile() -> CameraProfile:

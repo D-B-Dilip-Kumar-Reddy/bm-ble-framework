@@ -1,6 +1,6 @@
 import pytest
 
-from bmd_ble.scanner import DiscoveredCamera, scan_for_camera
+from bmd_camera.ble.scanner import DiscoveredCamera, scan_for_camera
 
 
 class FakeDevice:
@@ -38,8 +38,8 @@ async def test_scan_for_camera_returns_discovered_camera(monkeypatch):
     async def fake_sleep(timeout):
         return None
 
-    monkeypatch.setattr("bmd_ble.scanner.BleakScanner", FakeBleakScanner)
-    monkeypatch.setattr("bmd_ble.scanner.asyncio.sleep", fake_sleep)
+    monkeypatch.setattr("bmd_camera.ble.scanner.BleakScanner", FakeBleakScanner)
+    monkeypatch.setattr("bmd_camera.ble.scanner.asyncio.sleep", fake_sleep)
 
     result = await scan_for_camera("BMPCC 6K G2", timeout=0.01)
 
@@ -73,8 +73,8 @@ async def test_scan_for_camera_matches_case_insensitive_name(monkeypatch):
     async def fake_sleep(timeout):
         return None
 
-    monkeypatch.setattr("bmd_ble.scanner.BleakScanner", FakeBleakScanner)
-    monkeypatch.setattr("bmd_ble.scanner.asyncio.sleep", fake_sleep)
+    monkeypatch.setattr("bmd_camera.ble.scanner.BleakScanner", FakeBleakScanner)
+    monkeypatch.setattr("bmd_camera.ble.scanner.asyncio.sleep", fake_sleep)
 
     result = await scan_for_camera("pocket 6k", timeout=0.01)
 
@@ -107,8 +107,8 @@ async def test_scan_for_camera_strips_query_whitespace(monkeypatch):
     async def fake_sleep(timeout):
         return None
 
-    monkeypatch.setattr("bmd_ble.scanner.BleakScanner", FakeBleakScanner)
-    monkeypatch.setattr("bmd_ble.scanner.asyncio.sleep", fake_sleep)
+    monkeypatch.setattr("bmd_camera.ble.scanner.BleakScanner", FakeBleakScanner)
+    monkeypatch.setattr("bmd_camera.ble.scanner.asyncio.sleep", fake_sleep)
 
     result = await scan_for_camera("   bmpcc 6k   ", timeout=0.01)
 
@@ -145,8 +145,8 @@ async def test_scan_for_camera_ignores_non_matching_devices(monkeypatch):
     async def fake_sleep(timeout):
         return None
 
-    monkeypatch.setattr("bmd_ble.scanner.BleakScanner", FakeBleakScanner)
-    monkeypatch.setattr("bmd_ble.scanner.asyncio.sleep", fake_sleep)
+    monkeypatch.setattr("bmd_camera.ble.scanner.BleakScanner", FakeBleakScanner)
+    monkeypatch.setattr("bmd_camera.ble.scanner.asyncio.sleep", fake_sleep)
 
     result = await scan_for_camera("BMPCC", timeout=0.01)
 
@@ -187,8 +187,8 @@ async def test_scan_for_camera_selects_strongest_rssi(monkeypatch):
     async def fake_sleep(timeout):
         return None
 
-    monkeypatch.setattr("bmd_ble.scanner.BleakScanner", FakeBleakScanner)
-    monkeypatch.setattr("bmd_ble.scanner.asyncio.sleep", fake_sleep)
+    monkeypatch.setattr("bmd_camera.ble.scanner.BleakScanner", FakeBleakScanner)
+    monkeypatch.setattr("bmd_camera.ble.scanner.asyncio.sleep", fake_sleep)
 
     result = await scan_for_camera("BMPCC 6K G2", timeout=0.01)
 
@@ -224,8 +224,8 @@ async def test_scan_for_camera_handles_none_rssi_as_weak_signal(monkeypatch):
     async def fake_sleep(timeout):
         return None
 
-    monkeypatch.setattr("bmd_ble.scanner.BleakScanner", FakeBleakScanner)
-    monkeypatch.setattr("bmd_ble.scanner.asyncio.sleep", fake_sleep)
+    monkeypatch.setattr("bmd_camera.ble.scanner.BleakScanner", FakeBleakScanner)
+    monkeypatch.setattr("bmd_camera.ble.scanner.asyncio.sleep", fake_sleep)
 
     result = await scan_for_camera("BMPCC 6K G2", timeout=0.01)
 
@@ -257,8 +257,8 @@ async def test_scan_for_camera_raises_runtime_error_when_no_camera_found(monkeyp
     async def fake_sleep(timeout):
         return None
 
-    monkeypatch.setattr("bmd_ble.scanner.BleakScanner", FakeBleakScanner)
-    monkeypatch.setattr("bmd_ble.scanner.asyncio.sleep", fake_sleep)
+    monkeypatch.setattr("bmd_camera.ble.scanner.BleakScanner", FakeBleakScanner)
+    monkeypatch.setattr("bmd_camera.ble.scanner.asyncio.sleep", fake_sleep)
 
     with pytest.raises(RuntimeError) as exc_info:
         await scan_for_camera("BMPCC 6K G2", timeout=0.01)
