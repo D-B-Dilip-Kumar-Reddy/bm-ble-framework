@@ -101,6 +101,37 @@ under BRAW. Irrelevant to confirmation (the `mtime` signal doesn't care
 about extension) but directly relevant to `guess_new_still_path()`, which
 defaults to trying both extensions per candidate since it has no cheap way
 to know the active codec on its own.
+
+CAMERA CLOCK SKEW BREAKS THE "SAME MINUTE" ASSUMPTION — CONFIRMED, 2026-08-13
+-------------------------------------------------------------------------------
+The "same minute" claim above holds only when the camera's own onboard
+clock agrees with the operator's PC clock. It does not always. A real
+`examples/rest_delete_still.py` run (`POCKET_6K_G2 v8.6`, 2026-08-13) sent
+its BLE trigger at PC wall-clock `17:23:06`, and `guess_new_still_path()`
+correctly returned `None` — its default `minute_offsets=(0, 1, -1)` window
+found nothing, and it did not invent a path (design principle 7). The
+still's real filename, read off the camera by another means, was
+`A002_08120402_S009.braw` — a camera-clock timestamp of `08-12 04:02`,
+about 37h21m behind the PC clock at trigger time. The camera's own SETUP
+screen, photographed the same session, read `DATE AND TIME: 2026/08/12 -
+04:09` — directly confirming the camera's own clock, not this module's
+logic, is the cause: the camera had simply never had its date/time set
+correctly. This matches, within about a minute, two earlier, independently
+computed timestamp offsets from a clip recording and a still capture taken
+the same day, so all three samples agree on the same root cause.
+
+This is a real, permanent limitation of `guess_new_still_path()`'s
+approach, not a bug to fix here — the function has no way to learn the
+camera's actual clock skew on its own, and widening `minute_offsets` to
+cover an unknown, potentially many-hour drift would defeat the
+"deliberately narrow" search space this function is built around (see its
+own docstring). A caller who knows the camera's clock is wrong should pass
+a `minute_offsets`/`around` combination derived from the camera's own
+reported time instead of the operator's wall clock, or read the real
+filename by another means (as this session did) and skip
+`guess_new_still_path()` entirely. Operators should also just set the
+camera's clock correctly — this failure mode disappears once the camera's
+onboard date/time matches reality.
 """
 
 from __future__ import annotations
@@ -241,9 +272,15 @@ async def guess_new_still_path(
     already known (derived from `mount_path`'s own name — the camera's own
     reported mount, not guessed) and the timestamp lands on the same
     minute the trigger was sent (real evidence: a trigger logged at
-    `11:26:24` produced a still stamped exactly `08041126`). Only the
-    counter `<NNN>` is genuinely unknowable without a directory listing
-    (Stills always `500`s — module docstring), so this probes every
+    `11:26:24` produced a still stamped exactly `08041126`) — **provided
+    the camera's own clock agrees with `around`'s clock** (normally the
+    operator's PC, via `datetime.now()`). It does not always: see the
+    module docstring's "CAMERA CLOCK SKEW" section for a confirmed
+    real-hardware case where the camera's clock ran ~37h21m behind, and
+    every `minute_offsets` candidate missed as a result — this function
+    correctly returned `None` rather than guess wrong. Only the counter
+    `<NNN>` is genuinely unknowable without a directory listing (Stills
+    always `500`s — module docstring), so this probes every
     `(minute offset, index, extension)` combination in
     `index_candidates` × `minute_offsets` × `extensions`.
 

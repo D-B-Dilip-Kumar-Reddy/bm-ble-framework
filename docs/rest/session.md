@@ -1712,6 +1712,22 @@ from `guess_new_still_path()` (after independently confirming a photo was taken 
 `wait_for_new_still()`) or from manual investigation — the same way the real-hardware
 confirmation above was obtained.
 
+**First `examples/rest_delete_still.py` run, `POCKET_6K_G2 v8.6`, 2026-08-13** — capture
+confirmed (Stills `mtime` changed within the timeout), but `guess_new_still_path()` returned
+`None`: every `(minute_offset, index, extension)` candidate around the BLE trigger's PC-clock
+timestamp (`17:23:06`) missed, so the script correctly stopped without deleting anything
+(design principle 7). The operator located the real filename by another means —
+`A002_08120402_S009.braw` — a camera-clock timestamp of `08-12 04:02`, ~37h21m behind the PC
+clock at trigger time. **Root cause confirmed three independent ways**: this offset matches,
+within about a minute, two earlier timestamp-offset samples computed from a clip recording and
+a still capture the same day, and the camera's own SETUP screen (photographed the same
+session) read `DATE AND TIME: 2026/08/12 - 04:09` — the camera's onboard clock had simply never
+been set correctly, not a defect in `guess_new_still_path()`'s logic. This is a permanent,
+now-documented limitation of the guessing approach — see `rest/media.py`'s module docstring
+("CAMERA CLOCK SKEW BREAKS THE 'SAME MINUTE' ASSUMPTION") for the full write-up and the guidance
+for a caller working against a camera with a known-wrong clock. `delete_still()` itself was not
+exercised by this run — the script correctly stopped one step before it, at the guess.
+
 `confirm` has no default, mirroring `delete_clip()`/`format_device()`'s exact gate.
 Verification is `RestClient.exists()` before and after `DELETE` — never a plain `get()`,
 since a still's body is binary (a real `.dng`/`.braw` image), the same reasoning
