@@ -1,40 +1,44 @@
 """
-Permanently delete one clip from the active storage device — entirely over
-REST, no BLE involved. `RestCameraSession.delete_clip()` (Phase 11) is the
-capability `tools/rest/probe_endpoints.py`'s `--probe-mounts-delete`/
-`--delete-real-file` investigation exists to answer — see
-`docs/rest/transport.md`'s Mode 3 section for the full evidentiary trail and
-`delete_clip()`'s own docstring for exactly what is and isn't confirmed.
+Record a real 10-second clip, then permanently delete it — a self-contained
+round-trip real-hardware test of `RestCameraSession.delete_clip()` (Phase
+11). Recording its own disposable clip rather than asking the operator to
+pick one from the card's existing footage means this script needs no
+typed-confirmation prompt: whatever it deletes is guaranteed to be
+something it just created itself in this exact run, never irreplaceable
+existing footage — the same reasoning `examples/rest_record_test_clip.py`
+already relies on to record real clips with no interactive gate.
 
-**THIS PERMANENTLY ERASES THE CLIP, IRREVERSIBLY.** Because of that, this
-script layers a safety gate on top of `delete_clip()`'s own mandatory
-`confirm=True` argument, matching `examples/rest_format_device.py`'s
-convention rather than every other examples/ script's plain "edit the
-constants and run it" shape:
+WHAT THIS SCRIPT CHANGES ON THE CAMERA: records a real `RECORD_SECONDS`
+clip (consuming a small amount of real storage and time), then deletes
+that exact clip. Net effect on the card is nothing, once it succeeds —
+unlike `examples/rest_format_device.py`/`rest_delete_clip.py`'s earlier
+version, there is no existing data at risk here by construction.
 
-  1. Prints the full `clips()` inventory first, so the operator can see
-     exactly what's on the card and pick a real `clip_unique_id` from it.
-  2. Requires typing the *exact* clip filename back at a prompt — not just
-     "yes" — before `delete_clip()` is ever called. Ctrl-C or any other
-     input aborts with nothing sent to the camera.
+SEQUENCE: `record_start()` -> `wait_while_recording(RECORD_SECONDS)` ->
+`record_stop()` -> `confirm_new_clip()` (Phase 9 — the before/after
+`clips()` diff that names the just-written clip; `GET /clips/list` has no
+"just-written" flag of its own) -> `delete_clip(confirm=True)` (Phase
+11) -> a final `clips()` printout to show it's actually gone. Modeled
+directly on `rest_record_test_clip.py`'s recording step and state-
+printing shape.
 
 STATUS: `delete_clip()`'s underlying `GET`/`DELETE`/`GET` sequence is
 real-hardware-confirmed (`POCKET_6K_G2 v8.6`, 2026-08-13, done by hand in
 Postman after `tools/rest/probe_endpoints.py`'s own attempt crashed on a
 binary-body bug — since fixed). This script, and `delete_clip()` composed
-through `RestCameraSession`'s own machinery, has not itself been run
-against real hardware yet — this script's first successful run *is* that
-confirmation.
+through `RestCameraSession`'s own machinery end to end, has not itself
+been run against real hardware yet — this script's first successful run
+*is* that confirmation. See `delete_clip()`'s own docstring
+(`docs/rest/session.md`'s Phase 11 section) for exactly what is and isn't
+confirmed, including the single-sample path-construction caveat.
 
 **Only clip deletion is confirmed.** No still's exact `/mounts/...` path
-has been independently confirmed the way this clip's was (the Stills
-directory's own known `500` listing defect means one can't be read off a
-listing) — there is no `delete_still()` yet, and this script only ever
-targets clips from `clips()`.
+has been independently confirmed the way this clip's is about to be (the
+Stills directory's own known `500` listing defect means one can't be read
+off a listing) — there is no `delete_still()`.
 
-Edit HOST / MODEL_KEY / FIRMWARE below to target a different camera.
-CLIP_UNIQUE_ID is left unset on purpose — the printed inventory below is
-where a real id comes from, never a guess.
+Edit HOST / MODEL_KEY / FIRMWARE / RECORD_SECONDS below to target a
+different camera or recording length.
 
 Usage:
     python examples/rest_delete_clip.py
@@ -54,69 +58,67 @@ FIRMWARE = "v8.6"
 # MODEL_KEY = "POCKET_6K_G2"
 # FIRMWARE = "v8.6"
 
-# Required — must be a real clip_unique_id from the printed clips() inventory
-# below. Left None here on purpose, so a caller who hasn't looked at that
-# printout yet gets a clear abort rather than an unverified guess sent to
-# the camera.
-CLIP_UNIQUE_ID: int | None = None
+RECORD_SECONDS = 10
 
 
-async def _print_clips(session: RestCameraSession):
+async def _print_clips(session: RestCameraSession, label: str):
+    print(f"--- {label}: clip inventory ---")
     try:
         clips = await session.clips()
+        print(f"  {len(clips)} clip(s) on card")
     except BMDStorageError as exc:
         print(f"  {exc}")
-        return ()
-    if not clips:
-        print("  No clips on card.")
-        return clips
-    for clip in clips:
-        print(
-            f"  clip_unique_id={clip.clip_unique_id}  {clip.file_path}  "
-            f"({clip.duration_timecode}, {clip.codec}, {clip.video_format})"
-        )
+        clips = ()
     return clips
-
-
-def _confirm_by_typing_filename(filename: str) -> bool:
-    print(f"\nThis will PERMANENTLY DELETE {filename!r} from {HOST}. This cannot be undone.")
-    answer = input(f"Type the file name ({filename!r}) to proceed, anything else aborts: ")
-    return answer == filename
 
 
 async def main() -> int:
     async with RestCameraSession(HOST, MODEL_KEY, FIRMWARE) as session:
-        print("--- Clips before deletion ---")
-        clips = await _print_clips(session)
+        clips_before = await _print_clips(session, "BEFORE recording")
+        storage_before = await session.storage_state()
 
-        if CLIP_UNIQUE_ID is None:
-            print(
-                "\nCLIP_UNIQUE_ID is not set. Edit this script and set it to one of the "
-                "clip_unique_id values printed above, then run it again. Nothing was sent "
-                "to the camera."
-            )
-            return 1
-
-        target_clip = next((c for c in clips if c.clip_unique_id == CLIP_UNIQUE_ID), None)
-        if target_clip is None:
-            print(f"\nclip_unique_id={CLIP_UNIQUE_ID} is not in the printout above.")
-            return 1
-        filename = target_clip.file_path.rsplit("/", 1)[-1]
-
-        if not _confirm_by_typing_filename(filename):
-            print("Aborted — file name did not match, nothing was sent to the camera.")
-            return 1
-
-        print(f"\n=== Deleting clip_unique_id={CLIP_UNIQUE_ID} ({filename}) ===")
+        print(f"\n=== Recording for {RECORD_SECONDS}s ===")
         try:
-            deleted = await session.delete_clip(CLIP_UNIQUE_ID, confirm=True)
-        except (ValueError, BMDVerificationError) as exc:
-            print(f"delete_clip({CLIP_UNIQUE_ID}) NOT confirmed: {exc}")
+            await session.record_start()
+        except (BMDStorageError, BMDVerificationError) as exc:
+            print(f"record_start failed: {exc}")
             return 1
-        print(f"delete_clip({CLIP_UNIQUE_ID}) confirmed ✓ — {deleted.file_path} is gone")
+        print("record_start confirmed ✓")
 
-        print("\n--- Clips after deletion ---")
-        await _print_clips(session)
+        held = await session.wait_while_recording(RECORD_SECONDS)
+        if not held:
+            print(f"Recording stopped before the requested {RECORD_SECONDS}s")
+
+        try:
+            await session.record_stop()
+        except BMDVerificationError as exc:
+            print(f"record_stop failed: {exc}")
+            return 1
+        print("record_stop confirmed ✓")
+
+        await _print_clips(session, "AFTER recording")
+
+        print("\n=== Identifying the new clip ===")
+        try:
+            result = await session.confirm_new_clip(clips_before, storage_before=storage_before)
+        except BMDVerificationError as exc:
+            print(f"confirm_new_clip failed: {exc}")
+            return 1
+
+        clip = result.clip
+        print(f"  clip_unique_id: {clip.clip_unique_id}")
+        print(f"  name:           {clip.file_path}")
+        print(f"  length:         {clip.duration_timecode}")
+
+        print(f"\n=== Deleting clip_unique_id={clip.clip_unique_id} ({clip.file_path}) ===")
+        try:
+            deleted = await session.delete_clip(clip.clip_unique_id, confirm=True)
+        except (ValueError, BMDVerificationError) as exc:
+            print(f"delete_clip({clip.clip_unique_id}) NOT confirmed: {exc}")
+            return 1
+        print(f"delete_clip({clip.clip_unique_id}) confirmed ✓ — {deleted.file_path} is gone")
+
+        await _print_clips(session, "AFTER deletion")
 
     return 0
 

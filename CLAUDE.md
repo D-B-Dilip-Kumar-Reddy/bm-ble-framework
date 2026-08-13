@@ -762,16 +762,26 @@ examples/
                             # 20 -> 0, remaining_space restored — the first full real-hardware
                             # confirmation of format_device(), including its polling/
                             # completion path — see docs/rest/session.md's Phase 10 section
-  rest_delete_clip.py       # Phase 11 — RestCameraSession.delete_clip(). Layers a safety
-                            # gate on top of delete_clip()'s own mandatory confirm=True,
-                            # matching rest_format_device.py's convention: prints the
-                            # clips() inventory first, then requires typing the exact
-                            # clip filename back at a prompt before anything is sent.
+  rest_delete_clip.py       # Phase 11 — RestCameraSession.delete_clip(). Self-contained
+                            # round trip: record_start()/wait_while_recording(10)/
+                            # record_stop() a real 10s throwaway clip, confirm_new_clip()
+                            # (Phase 9) to identify it, then delete_clip(confirm=True) it.
+                            # No interactive typed-confirmation gate, unlike
+                            # rest_format_device.py — whatever this script deletes is
+                            # guaranteed to be the clip it just recorded in this exact
+                            # run, never irreplaceable existing footage, the same
+                            # reasoning rest_record_test_clip.py already relies on to
+                            # record real clips with no interactive prompt. An earlier
+                            # version of this script instead asked the operator to pick
+                            # an existing clip from a printed inventory and type its
+                            # filename back to confirm — replaced once record-then-delete
+                            # made that gate unnecessary rather than kept alongside it.
                             # delete_clip()'s underlying GET/DELETE/GET sequence is
                             # real-hardware-confirmed (POCKET_6K_G2 v8.6, 2026-08-13, via
                             # Postman after probe_endpoints.py's own attempt crashed on a
                             # binary-body bug); this script itself, composed through
-                            # RestCameraSession's own machinery, has not yet been run
+                            # RestCameraSession's own machinery end to end (record,
+                            # confirm_new_clip, delete_clip), has not yet been run
                             # against real hardware — its first successful run is that
                             # confirmation. See docs/rest/session.md's Phase 11 section
   playback.py               # (planned)
