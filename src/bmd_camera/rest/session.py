@@ -184,6 +184,21 @@ class RecordingResult:
     bytes_written: int | None
 
 
+@dataclass(frozen=True)
+class DeviceInfo:
+    """`GET /media/devices/{deviceName}`'s body (Phase 10) — per the
+    official BMD REST spec (`MediaControl.yaml`), `state` is one of
+    `"None"`, `"Scanning"`, `"Mounted"`, `"Uninitialised"`, `"Formatting"`,
+    `"RaidComponent"`. Kept as a plain `str`, not a Python enum — the spec
+    is the source of truth for the exact allowed values, and validating
+    against a hardcoded set here would just be another way to be wrong
+    about a value this codebase hasn't independently confirmed on real
+    hardware yet (design principle 6). Not yet real-hardware-confirmed —
+    this dataclass's shape comes from the spec, not a sweep."""
+
+    state: str
+
+
 # ── Parsing helpers ──────────────────────────────────────────────────────────
 
 
@@ -290,6 +305,10 @@ def _parse_clip(entry: dict) -> Clip:
         duration_timecode=entry.get("durationTimecode"),
         video_format=entry.get("videoFormat"),
     )
+
+
+def _parse_device_info(body: dict) -> DeviceInfo:
+    return DeviceInfo(state=body.get("state", "None"))
 
 
 def _transport_mode(value: Any) -> str | None:
@@ -951,6 +970,32 @@ class RestCameraSession:
         workingset = await self._rest_client.get("/media/workingset")
         active = await self._rest_client.get("/media/active")
         return _parse_storage_state(workingset, active)
+
+    async def device_info(self, device_name: str) -> DeviceInfo:
+        """`GET /media/devices/{deviceName}` (Phase 10) — per the spec, the
+        `state` a media device reports (`Mounted`, `Formatting`, ...).
+        `device_name` is a `StorageDevice.device_name` value (e.g. `"sd0"`),
+        not a mount name (`mount_names()`'s `"A001-sd1"` style) — the two
+        are confirmed-different strings elsewhere in this codebase
+        (`rest/media.py`'s module docstring), and this endpoint takes the
+        device name specifically, per the spec's own parameter description
+        ("as returned by deviceName member of Workingset or ActiveMedia").
+        Used internally by `format_device()`'s completion poll; also a
+        plain read verb on its own. Not yet real-hardware-confirmed."""
+        body = await self._rest_client.get(f"/media/devices/{device_name}")
+        return _parse_device_info(body)
+
+    async def doformat_supported_filesystems(self) -> tuple[str, ...]:
+        """`GET /media/devices/doformatSupportedFilesystems` (Phase 10) —
+        the filesystem names `format_device()` will accept (spec example:
+        `["ExFat", "HFS"]`). `format_device()` validates its own
+        `filesystem` argument against a live call to this, the same
+        live-capability-over-hardcoded-assumption discipline
+        `set_camera_format()` already uses for codec/resolution/fps
+        (design principle 7's REST sibling). Not yet real-hardware-
+        confirmed."""
+        body = await self._rest_client.get("/media/devices/doformatSupportedFilesystems")
+        return tuple(fs for fs in body if isinstance(fs, str)) if isinstance(body, list) else ()
 
     async def clips(self) -> tuple[Clip, ...]:
         """`GET /clips/list`.
@@ -2041,3 +2086,162 @@ class RestCameraSession:
             )
         if "speed" in changes:
             self._expected_speed = changes["speed"]
+
+    # ── Media device formatting (Phase 10) ──────────────────────────────────
+
+    async def format_device(
+        self,
+        device_name: str,
+        *,
+        confirm: bool,
+        filesystem: str | None = None,
+        volume: str | None = None,
+        timeout: float = 120.0,
+        poll_interval_s: float = 1.0,
+    ) -> None:
+        """Format a media device — `GET .../doformat` for a one-time `key`,
+        then `PUT .../doformat` with `{key, filesystem, volume}` — per the
+        official BMD REST spec (`MediaControl.yaml`), the only
+        media-erasure capability this API exposes at all. There is no
+        per-clip or per-still delete endpoint anywhere in the 11 official
+        spec files this codebase has been given (`TimelineControl.yaml`'s
+        `DELETE /timelines/0` only clears the timeline *object*, never
+        touching clip files on disk — already implemented via
+        `select_clip()`). Whether the separate `/mounts/...` filesystem
+        surface (`rest/media.py`'s `list_mount`/`path_exists`) supports
+        `DELETE` for individual files is a genuinely open question, out of
+        scope for this method and deferred by the user's own request — see
+        CLAUDE.md's Phase 10 note.
+
+        **This erases every clip and every still on `device_name`,
+        irreversibly.** `confirm` has no default — callers must pass
+        `confirm=True` explicitly, or this raises `ValueError` before
+        sending a single request. This is deliberately stricter than every
+        other write in this codebase (none of which gate on an explicit
+        confirm flag) because none of them are destructive in this way —
+        `record_start`/`set_camera_format`/`select_clip` all change state
+        the camera can be asked to change back; a completed format cannot.
+
+        `device_name` is a `StorageDevice.device_name` value (e.g.
+        `"sd0"`), sourced from `storage_state()` — not a mount name
+        (`mount_names()`'s `"A001-sd1"` style, a different string, see
+        `device_info()`'s docstring).
+
+        **Capability check deliberately does not follow `set_camera_format`
+        /`_put_playback`'s own pattern of gating on `endpoint.put_supported`.**
+        `tools/rest/probe_endpoints.py`'s `NEVER_WRITE` list includes this
+        exact path (`/media/devices/{deviceName}/doformat`) — the sweep
+        tool refuses to PUT it even with a same-value probe, since there is
+        no such thing as a harmless format probe. `put_supported` is
+        therefore structurally always `None` for this endpoint; gating on
+        it the way every other write here does would make `format_device()`
+        permanently unusable regardless of real camera support. This
+        method instead gates on `endpoint.supported` — the GET side,
+        confirming the endpoint exists and actually returns a format key —
+        which is the only sweep-confirmed signal this endpoint can ever
+        carry. Real PUT capability rests on the official spec being
+        accurate, not on a sweep probe, for this one endpoint only.
+
+        `filesystem`, if given, is validated against a live call to
+        `doformat_supported_filesystems()` first, raising
+        `BMDUnsupportedError` if the camera doesn't currently offer it —
+        the same live-capability-over-hardcoded-assumption discipline
+        `set_camera_format` uses for codec/resolution/fps (design
+        principle 7's REST sibling). If omitted, the `filesystem` field is
+        left out of the `PUT` body entirely rather than guessing a default
+        — per the spec, `filesystem`/`volume` are both optional.
+
+        **Verification is structurally weaker than every other write in
+        this codebase, and this is stated here rather than overstated
+        away**: `Notification.yaml`'s `deviceProperty` enum — the complete
+        list of WS-subscribable properties — has no entry for any
+        `/media/devices/...` path, confirmed by reading the spec directly.
+        There is no WS event for format progress or completion at all, so
+        design principle 3's "event primary, GET readback secondary"
+        dual-check cannot apply here; this method's only verification
+        signal is polling `device_info(device_name).state` via `GET`.
+
+        A poll immediately after the `PUT` risks reading a stale `state`
+        left over from before the format began (the camera has not
+        necessarily transitioned out of `"Mounted"` yet) and treating that
+        as a false-positive completion. To guard against exactly that,
+        this method requires **observing `state == "Formatting"` at least
+        once** before it will accept a later `"Mounted"` reading as genuine
+        completion — an unconfirmed heuristic, not a real-hardware-tested
+        one; `poll_interval_s`/`timeout` (both unconfirmed guesses) may
+        need adjusting once this is actually run against a real camera. If
+        `timeout` elapses without observing both a `"Formatting"` state and
+        a subsequent terminal state, raises `BMDVerificationError`. A
+        terminal state other than `"Mounted"` (e.g. `"Uninitialised"`) is
+        also accepted as completion — the spec does not promise a freshly
+        formatted device always lands in `"Mounted"`, and refusing to
+        recognize a real terminal state here would be its own kind of
+        wrong guess about the camera's behavior.
+
+        Not yet real-hardware-confirmed — see CLAUDE.md's Phase 10 note.
+        """
+        if not confirm:
+            raise ValueError(
+                "format_device() erases every clip and still on "
+                f"{device_name!r} irreversibly — pass confirm=True only once you are "
+                "certain that is what you want."
+            )
+
+        path = f"/media/devices/{device_name}/doformat"
+        endpoint = self.profile.rest_endpoint(path)
+        if endpoint is None or not endpoint.supported:
+            raise BMDUnsupportedError(
+                f"[{self.host}] GET {path} is not confirmed supported in the "
+                f"{self.profile.model_key} {self.profile.firmware} rest/ profile — run "
+                "tools/rest/probe_endpoints.py against this camera first."
+            )
+
+        if filesystem is not None:
+            supported_filesystems = await self.doformat_supported_filesystems()
+            if filesystem not in supported_filesystems:
+                raise BMDUnsupportedError(
+                    f"[{self.host}] {device_name}: filesystem {filesystem!r} is not in the "
+                    f"camera's live doformatSupportedFilesystems {supported_filesystems!r}"
+                )
+
+        key_body = await self._rest_client.get(path)
+        key = key_body.get("key") if isinstance(key_body, dict) else None
+        if not key:
+            raise BMDVerificationError(
+                f"[{self.host}] GET {path} returned no format key for {device_name!r} — "
+                f"body was {key_body!r}"
+            )
+
+        put_body: dict[str, Any] = {"key": key}
+        if filesystem is not None:
+            put_body["filesystem"] = filesystem
+        if volume is not None:
+            put_body["volume"] = volume
+
+        self._log.warning(
+            "[%s] Formatting media device %s (filesystem=%s, volume=%s) — irreversible",
+            self.host,
+            device_name,
+            filesystem,
+            volume,
+        )
+        await self._rest_client.put(path, put_body)
+
+        deadline = time.monotonic() + timeout
+        seen_formatting = False
+        while time.monotonic() < deadline:
+            info = await self.device_info(device_name)
+            if info.state == "Formatting":
+                seen_formatting = True
+            elif seen_formatting and info.state != "Formatting":
+                self._log.info(
+                    "[%s] Format of %s complete — state=%s", self.host, device_name, info.state
+                )
+                return
+            await asyncio.sleep(poll_interval_s)
+
+        raise BMDVerificationError(
+            f"[{self.host}] format_device({device_name!r}): did not observe a "
+            f"'Formatting' state followed by a terminal state within {timeout}s "
+            f"(seen_formatting={seen_formatting})"
+        )

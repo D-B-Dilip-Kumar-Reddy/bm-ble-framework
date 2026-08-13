@@ -349,7 +349,39 @@ src/bmd_camera/
                               # (against the fixed==0 check once more, then twice against the
                               # broadened trigger after pulling it) reconfirmed both versions
                               # clean at 19.1s/6.2s/3.2s — see docs/rest/session.md's
-                              # playback_interrupted section for the full five-run trail
+                              # playback_interrupted section for the full five-run trail.
+                              # device_info(device_name)/doformat_supported_filesystems()
+                              # (Phase 10 — read verbs, `DeviceInfo` dataclass) and
+                              # format_device(device_name, *, confirm, filesystem=None,
+                              # volume=None, timeout=120.0, poll_interval_s=1.0) — the only
+                              # media-erasure capability the official BMD REST spec (11
+                              # OpenAPI/AsyncAPI YAML files supplied by the user) documents
+                              # at all; no spec file has a per-clip or per-still delete
+                              # endpoint, TimelineControl.yaml's DELETE /timelines/0 only
+                              # clears the timeline object, never clip files on disk.
+                              # format_device() GETs a one-time format key then PUTs it back
+                              # with filesystem/volume, gated behind a mandatory
+                              # confirm=True (ValueError otherwise, before any request is
+                              # sent) since this is the first genuinely irreversible write in
+                              # this codebase. Its capability check deliberately gates on
+                              # endpoint.supported (GET), not put_supported, unlike every
+                              # other write here — .../doformat is in
+                              # tools/rest/probe_endpoints.py's NEVER_WRITE list, so
+                              # put_supported can structurally never be sweep-confirmed for
+                              # it. Verification is the weakest in this codebase by
+                              # necessity: Notification.yaml's deviceProperty enum has no
+                              # entry for any /media/devices/... path, so there is no WS
+                              # event to dual-check against at all — the only signal is
+                              # polling device_info(device_name).state, requiring an observed
+                              # "Formatting" state before a later terminal state counts as
+                              # completion (guards against a stale pre-format "Mounted" read
+                              # being mistaken for success). Whether /mounts/... (the separate
+                              # filesystem surface Phase 6 already uses for photo
+                              # confirmation, outside the 11 spec files entirely) supports
+                              # DELETE for individual clip/still files remains an open
+                              # question, explicitly deferred at the user's own request. Not
+                              # yet real-hardware-confirmed — see docs/rest/session.md's Phase
+                              # 10 section and examples/rest_format_device.py
     mapping.py                 # Codec name derivation between the BLE profile's vocabulary
                               # and REST's own spelling — confirmed strings always win
                               # (design principle 1); this is a fallback seed only.
@@ -599,6 +631,17 @@ examples/
                             # verify_timeout_s * 3), with its secondary GET polled instead
                             # of fired once — record_start's single-shot behavior is
                             # unchanged
+  rest_format_device.py     # Phase 10 — RestCameraSession.format_device() via the GET-key/
+                            # PUT flow. The only media-erasure capability the official BMD
+                            # REST spec exposes at all (no per-clip/per-still delete endpoint
+                            # in any of the 11 supplied spec files). Layers two safety gates
+                            # on top of format_device()'s own mandatory confirm=True,
+                            # deliberately departing from every other examples/ script's
+                            # plain edit-and-run convention: prints storage_state() first, then
+                            # requires typing the exact device name back at a prompt before
+                            # anything is sent to the camera. Not yet real-hardware-confirmed
+                            # — this script's first successful run against real hardware is
+                            # that confirmation. See docs/rest/session.md's Phase 10 section
   playback.py               # (planned)
 
 tests/

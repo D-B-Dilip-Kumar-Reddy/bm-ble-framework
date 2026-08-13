@@ -2907,3 +2907,174 @@ class TestSelectClip:
 
         with pytest.raises(BMDRestError):
             await session.select_clip(1)
+
+
+DEVICE_NAME = "sd0"
+DOFORMAT_PATH = f"/media/devices/{DEVICE_NAME}/doformat"
+DEVICE_INFO_PATH = f"/media/devices/{DEVICE_NAME}"
+DOFORMAT_FILESYSTEMS_PATH = "/media/devices/doformatSupportedFilesystems"
+
+
+def make_format_device_profile() -> CameraProfile:
+    """A profile whose rest/ file confirms `.../doformat`'s GET side only —
+    `tools/rest/probe_endpoints.py`'s NEVER_WRITE list means the PUT side
+    can never be sweep-confirmed for this endpoint at all, so
+    `format_device()` deliberately gates on `supported` (GET), not
+    `put_supported`, unlike every other write in this file — see
+    `format_device()`'s own docstring."""
+    rest_raw = {
+        "_meta": {"model_key": MODEL_KEY, "firmware": FIRMWARE, "status": "UNVERIFIED"},
+        "endpoints": {DOFORMAT_PATH: {"status": 200, "supported": True}},
+    }
+    return make_profile(rest_raw=rest_raw)
+
+
+class TestDeviceInfo:
+    @pytest.mark.asyncio
+    async def test_parses_state(self):
+        client = FakeRestClient({DEVICE_INFO_PATH: {"state": "Mounted"}})
+        session = make_session(make_profile(), client=client)
+
+        info = await session.device_info(DEVICE_NAME)
+
+        assert info.state == "Mounted"
+
+    @pytest.mark.asyncio
+    async def test_defaults_state_to_none_string_when_missing(self):
+        client = FakeRestClient({DEVICE_INFO_PATH: {}})
+        session = make_session(make_profile(), client=client)
+
+        info = await session.device_info(DEVICE_NAME)
+
+        assert info.state == "None"
+
+
+class TestDoformatSupportedFilesystems:
+    @pytest.mark.asyncio
+    async def test_returns_parsed_filesystem_list(self):
+        client = FakeRestClient({DOFORMAT_FILESYSTEMS_PATH: ["ExFat", "HFS"]})
+        session = make_session(make_profile(), client=client)
+
+        assert await session.doformat_supported_filesystems() == ("ExFat", "HFS")
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_tuple_when_body_is_not_a_list(self):
+        client = FakeRestClient({DOFORMAT_FILESYSTEMS_PATH: {}})
+        session = make_session(make_profile(), client=client)
+
+        assert await session.doformat_supported_filesystems() == ()
+
+
+class TestFormatDevice:
+    """format_device() — GET a one-time key, PUT it back with
+    filesystem/volume, then poll device_info() for completion. Per the
+    official BMD REST spec (MediaControl.yaml), the only media-erasure
+    capability the REST API exposes at all — see the method's own
+    docstring for why verification here is structurally weaker (no WS
+    event exists for this operation) than every other write in this file,
+    and why the capability check gates on `supported` rather than
+    `put_supported`."""
+
+    @pytest.mark.asyncio
+    async def test_raises_value_error_when_confirm_is_false(self):
+        client = FakeRestClient({})
+        session = make_session(make_format_device_profile(), client=client)
+
+        with pytest.raises(ValueError, match="confirm=True"):
+            await session.format_device(DEVICE_NAME, confirm=False)
+
+        assert client.calls == []
+        assert client.put_calls == []
+
+    @pytest.mark.asyncio
+    async def test_raises_bmd_unsupported_when_endpoint_not_confirmed(self):
+        session = make_session(make_profile(), client=FakeRestClient({}))
+
+        with pytest.raises(BMDUnsupportedError, match="doformat"):
+            await session.format_device(DEVICE_NAME, confirm=True)
+
+    @pytest.mark.asyncio
+    async def test_raises_bmd_unsupported_when_filesystem_not_offered(self):
+        client = FakeRestClient({DOFORMAT_FILESYSTEMS_PATH: ["ExFat"]})
+        session = make_session(make_format_device_profile(), client=client)
+
+        with pytest.raises(BMDUnsupportedError, match="HFS"):
+            await session.format_device(DEVICE_NAME, confirm=True, filesystem="HFS")
+
+        assert DOFORMAT_PATH not in client.calls
+        assert client.put_calls == []
+
+    @pytest.mark.asyncio
+    async def test_raises_bmd_verification_error_when_no_key_returned(self):
+        client = FakeRestClient({DOFORMAT_PATH: {"deviceName": DEVICE_NAME}})
+        session = make_session(make_format_device_profile(), client=client)
+
+        with pytest.raises(BMDVerificationError, match="no format key"):
+            await session.format_device(DEVICE_NAME, confirm=True)
+
+        assert client.put_calls == []
+
+    @pytest.mark.asyncio
+    async def test_full_flow_success_with_filesystem_and_volume(self):
+        client = FakeRestClient(
+            {
+                DOFORMAT_PATH: {"deviceName": DEVICE_NAME, "key": "abc123"},
+                DOFORMAT_FILESYSTEMS_PATH: ["ExFat", "HFS"],
+                DEVICE_INFO_PATH: {"state": "Mounted"},
+            }
+        )
+        session = make_session(make_format_device_profile(), client=client)
+
+        async def drive_state_transitions():
+            await asyncio.sleep(0.02)
+            client.responses[DEVICE_INFO_PATH] = {"state": "Formatting"}
+            await asyncio.sleep(0.02)
+            client.responses[DEVICE_INFO_PATH] = {"state": "Mounted"}
+
+        asyncio.create_task(drive_state_transitions())
+        await session.format_device(
+            DEVICE_NAME,
+            confirm=True,
+            filesystem="HFS",
+            volume="My disk",
+            timeout=1.0,
+            poll_interval_s=0.01,
+        )
+
+        assert client.put_calls == [
+            (DOFORMAT_PATH, {"key": "abc123", "filesystem": "HFS", "volume": "My disk"})
+        ]
+
+    @pytest.mark.asyncio
+    async def test_omits_filesystem_and_volume_when_not_given(self):
+        client = FakeRestClient(
+            {
+                DOFORMAT_PATH: {"deviceName": DEVICE_NAME, "key": "abc123"},
+                DEVICE_INFO_PATH: {"state": "Formatting"},
+            }
+        )
+        session = make_session(make_format_device_profile(), client=client)
+
+        async def finish_formatting():
+            await asyncio.sleep(0.02)
+            client.responses[DEVICE_INFO_PATH] = {"state": "Uninitialised"}
+
+        asyncio.create_task(finish_formatting())
+        await session.format_device(DEVICE_NAME, confirm=True, timeout=1.0, poll_interval_s=0.01)
+
+        assert client.put_calls == [(DOFORMAT_PATH, {"key": "abc123"})]
+
+    @pytest.mark.asyncio
+    async def test_raises_verification_error_on_timeout_without_formatting_observed(self):
+        client = FakeRestClient(
+            {
+                DOFORMAT_PATH: {"deviceName": DEVICE_NAME, "key": "abc123"},
+                DEVICE_INFO_PATH: {"state": "Mounted"},
+            }
+        )
+        session = make_session(make_format_device_profile(), client=client)
+
+        with pytest.raises(BMDVerificationError, match="format_device"):
+            await session.format_device(
+                DEVICE_NAME, confirm=True, timeout=0.05, poll_interval_s=0.01
+            )
