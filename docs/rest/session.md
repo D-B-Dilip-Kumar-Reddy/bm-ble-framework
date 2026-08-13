@@ -1451,9 +1451,10 @@ by deviceName member of Workingset or ActiveMedia"). `state` is kept as a plain 
 Python enum — the spec is the source of truth for the exact allowed values, and hardcoding a
 validated set here would just be another way to be wrong about a value this codebase hasn't
 independently confirmed on real hardware yet (design principle 6). Used internally by
-`format_device()`'s completion poll; also a plain read verb on its own. **Not yet
-real-hardware-confirmed** — this method's shape comes from the official spec
-(`MediaControl.yaml`), not a sweep.
+`format_device()`'s completion poll; also a plain read verb on its own. **Real-hardware-
+confirmed, `POCKET_6K_G2 v8.6`, 2026-08-13**: `state` observed moving `"Mounted"` ->
+`"Formatting"` -> `"Mounted"` across `format_device()`'s successful run — see that method's
+section below.
 
 ### `doformat_supported_filesystems()` → `tuple[str, ...]`
 
@@ -1461,7 +1462,11 @@ real-hardware-confirmed** — this method's shape comes from the official spec
 will accept (spec example: `["ExFat", "HFS"]`). `format_device()` validates its own
 `filesystem` argument against a live call to this, the same live-capability-over-hardcoded-
 assumption discipline `set_camera_format()` already uses for codec/resolution/fps (design
-principle 7's REST sibling). **Not yet real-hardware-confirmed.**
+principle 7's REST sibling). **Real-hardware-confirmed, `POCKET_6K_G2 v8.6`, 2026-08-13**:
+returned `("ExFAT", "HFS")` — note the real camera's casing (`"ExFAT"`) differs from the
+spec's own example (`"ExFat"`); a script hardcoding the spec's casing instead of this live
+value gets rejected by `format_device()`'s own validation (see below) rather than silently
+sending the wrong string.
 
 ### `format_device(device_name, *, confirm, filesystem, volume=None, timeout=120.0, poll_interval_s=1.0)`
 
@@ -1549,18 +1554,27 @@ and refusing to recognize a real terminal state would just be a different kind o
 about the camera's behavior. Raises `BMDVerificationError` if `timeout` elapses without ever
 observing both a `"Formatting"` state and a subsequent terminal one.
 
-**This entire guard shape — the settle-before-first-poll heuristic, `timeout=120.0`,
-`poll_interval_s=1.0` — remains an unconfirmed design, not a real-hardware-tested one, even
-after the two runs below.** `examples/rest_format_device.py`'s first two real-hardware runs
-(`POCKET_6K_G2 v8.6`, 2026-08-13) both confirmed the capability check, the typed-confirmation
-flow, and the `GET` key round trip all work end to end, and both reached a real `PUT` — the
-first failing on the missing-`filesystem` defect above, the second (after that fix) failing
-on the missing-`volume` defect above. Neither request reached the camera's format logic at
-all — both were `400`s up front, not failures partway through, so nothing on the card was
-touched in either run. The polling/completion path, and `timeout`/`poll_interval_s`'s real
-suitability (a full-card format is plausibly a multi-minute operation, unlike every other
-write this codebase verifies), remain unconfirmed. A rerun with both fields now resolved is
-the next real-hardware step.
+**Three real-hardware runs, `POCKET_6K_G2 v8.6`, 2026-08-13** (via `examples/rest_format_device.py`).
+The first two confirmed the capability check, the typed-confirmation flow, and the `GET` key
+round trip all work end to end, and both reached a real `PUT` — the first failing on the
+missing-`filesystem` defect above, the second (after that fix) failing on the missing-`volume`
+defect above. Neither request reached the camera's format logic at all — both were `400`s up
+front, not failures partway through, so nothing on the card was touched in either run.
+
+**The third run, with both fields fixed, succeeded end to end** — the first real-hardware
+confirmation of the polling/completion path, not just the setup steps before it. `PUT` sent at
+`15:37:02.796`; `device_info("sd0").state` observed moving `"Mounted"` -> `"Formatting"` ->
+`"Mounted"`; completion logged at `15:37:07.871` — a real full-card format (1TB,
+`filesystem="ExFAT"`, `volume` defaulted to the card's existing `"A002"`) in **~5 seconds**,
+comfortably inside the default `timeout=120.0`/`poll_interval_s=1.0`. The resulting
+`storage_state()` confirms it actually happened: `clip_count` `20` -> `0`, `remaining_space`
+restored to within ~33MB of `total_space` (filesystem overhead). This is the first
+real-hardware confirmation that the `"Formatting"`-must-be-observed-first guard works on the
+success path — the first poll after the `PUT` already found `"Formatting"`, so the guard
+never had to reject a stale read on this run. Its *correctness* is confirmed; its *necessity*
+(rejecting a genuinely stale `"Mounted"` read immediately after the `PUT`) still has no
+real-hardware reproduction of its own — that would need a poll landing before the camera's own
+transition out of `"Mounted"`, which this run's timing didn't produce.
 
 ---
 

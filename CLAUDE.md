@@ -394,11 +394,22 @@ src/bmd_camera/
                               # omitted, format_device() reads the device's current volume
                               # from storage_state() and sends that, raising ValueError
                               # before any request if the device isn't found there or has no
-                              # volume of its own. Both runs confirmed the capability check,
-                              # typed-confirmation flow, and GET-key round trip all work end
-                              # to end, but neither reached the polling/completion path — a
-                              # rerun with both fields now resolved is the next real-hardware
-                              # step. See docs/rest/session.md's Phase 10 section and
+                              # volume of its own. A third run (2026-08-13, both fields
+                              # resolved — filesystem="ExFAT", note the real camera's casing
+                              # differs from the spec's own "ExFat" example; volume defaulted
+                              # from the device's current name) SUCCEEDED end to end: PUT at
+                              # 15:37:02.796, device_info("sd0").state observed moving
+                              # "Mounted" -> "Formatting" -> "Mounted", completion logged at
+                              # 15:37:07.871 — a real 1TB full-card format in ~5s, well inside
+                              # the default timeout=120.0/poll_interval_s=1.0. Confirmed by
+                              # storage_state(): clip_count 20 -> 0, remaining_space restored
+                              # to within ~33MB of total_space. First real-hardware
+                              # confirmation of the "Formatting"-must-be-observed-first guard
+                              # working on the success path (necessity of the guard — i.e.
+                              # rejecting a genuinely stale "Mounted" read — still has no
+                              # dedicated real-hardware reproduction, since the first poll
+                              # after this PUT already found "Formatting"). See
+                              # docs/rest/session.md's Phase 10 section and
                               # examples/rest_format_device.py
     mapping.py                 # Codec name derivation between the BLE profile's vocabulary
                               # and REST's own spelling — confirmed strings always win
@@ -657,21 +668,25 @@ examples/
                             # deliberately departing from every other examples/ script's
                             # plain edit-and-run convention: prints storage_state() first, then
                             # requires typing the exact device name back at a prompt before
-                            # anything is sent to the camera. Two real-hardware runs
-                            # (POCKET_6K_G2 v8.6, 2026-08-13) confirmed the capability check,
-                            # typed-confirmation flow, and GET-key round trip, then surfaced
-                            # the filesystem-required defect above via a real 400, then (after
-                            # that fix) the volume-required defect via a second real 400 —
-                            # neither reached the camera's format logic; nothing on the card
-                            # was touched either time. Now prints
+                            # anything is sent to the camera. Three real-hardware runs
+                            # (POCKET_6K_G2 v8.6, 2026-08-13): the first two confirmed the
+                            # capability check, typed-confirmation flow, and GET-key round
+                            # trip, then surfaced the filesystem-required defect above via a
+                            # real 400, then (after that fix) the volume-required defect via a
+                            # second real 400 — neither reached the camera's format logic;
+                            # nothing on the card was touched either time. Now prints
                             # doformat_supported_filesystems()'s live result before prompting
                             # and aborts with no request sent if FILESYSTEM is still unset, so
                             # a rerun uses a real camera-offered value rather than a guess;
                             # VOLUME stays None by default and is now resolved from the
                             # device's current name via format_device()'s own storage_state()
-                            # lookup rather than sent bare. A successful full run (capability
-                            # check through the polling/completion path) is still outstanding
-                            # — see docs/rest/session.md's Phase 10 section
+                            # lookup rather than sent bare. The THIRD run (both fields
+                            # resolved — filesystem="ExFAT", the real camera's casing,
+                            # different from the spec's own "ExFat" example) SUCCEEDED end to
+                            # end: a real 1TB full-card format completed in ~5s, clip_count
+                            # 20 -> 0, remaining_space restored — the first full real-hardware
+                            # confirmation of format_device(), including its polling/
+                            # completion path — see docs/rest/session.md's Phase 10 section
   playback.py               # (planned)
 
 tests/

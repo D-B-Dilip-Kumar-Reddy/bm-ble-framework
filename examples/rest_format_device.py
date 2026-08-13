@@ -33,9 +33,12 @@ rather than `put_supported` (this endpoint is in
 `tools/rest/probe_endpoints.py`'s `NEVER_WRITE` list, so `put_supported`
 can never be sweep-confirmed).
 
-STATUS: real-hardware-run twice, `POCKET_6K_G2 v8.6`, 2026-08-13 — both
-runs surfaced a real defect (see below) and neither reached the polling/
-completion path. A rerun with both fixes is the next real-hardware step.
+STATUS: real-hardware-confirmed end to end, `POCKET_6K_G2 v8.6`, 2026-08-13.
+The first two of three runs surfaced real defects (see below); the third,
+with both fixed, completed a real 1TB full-card format in ~5 seconds —
+`state` observed moving `"Mounted"` -> `"Formatting"` -> `"Mounted"`,
+`clip_count` `20` -> `0`, `remaining_space` restored. See
+`format_device()`'s own docstring for the full three-run trail.
 
 **`FILESYSTEM` is required, not optional.** The first version of this
 script (and of `RestCameraSession.format_device()`) left it `None` by
@@ -88,7 +91,11 @@ DEVICE_NAME = "sd0"
 # doformat_supported_filesystems() call below. Left None here on purpose,
 # so a caller who hasn't looked at that printout yet gets a clear abort
 # rather than an unverified guess sent to the camera.
-FILESYSTEM: str | None = None  # e.g. "ExFat" — see the live printout below
+# Real-hardware-confirmed value on POCKET_6K_G2 v8.6, 2026-08-13: "ExFAT"
+# (note the casing — the camera's own value differs from MediaControl.yaml's
+# "ExFat" example, and format_device() validates the exact string given
+# against this live list, so the wrong casing is rejected, not silently sent).
+FILESYSTEM: str | None = None  # see the live printout below before setting this
 # None resolves to the device's own current volume name (format_device()'s
 # default) — set explicitly only to rename the volume as part of the format.
 VOLUME: str | None = None  # e.g. "My disk"

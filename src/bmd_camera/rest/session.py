@@ -2198,28 +2198,36 @@ class RestCameraSession:
         as a false-positive completion. To guard against exactly that,
         this method requires **observing `state == "Formatting"` at least
         once** before it will accept a later `"Mounted"` reading as genuine
-        completion — an unconfirmed heuristic, not a real-hardware-tested
-        one; `poll_interval_s`/`timeout` (both unconfirmed guesses) may
-        need adjusting once this is actually run against a real camera. If
-        `timeout` elapses without observing both a `"Formatting"` state and
-        a subsequent terminal state, raises `BMDVerificationError`. A
-        terminal state other than `"Mounted"` (e.g. `"Uninitialised"`) is
-        also accepted as completion — the spec does not promise a freshly
-        formatted device always lands in `"Mounted"`, and refusing to
-        recognize a real terminal state here would be its own kind of
-        wrong guess about the camera's behavior.
+        completion. If `timeout` elapses without observing both a
+        `"Formatting"` state and a subsequent terminal state, raises
+        `BMDVerificationError`. A terminal state other than `"Mounted"`
+        (e.g. `"Uninitialised"`) is also accepted as completion — the spec
+        does not promise a freshly formatted device always lands in
+        `"Mounted"`, and refusing to recognize a real terminal state here
+        would be its own kind of wrong guess about the camera's behavior.
 
-        **Two real-hardware runs, `POCKET_6K_G2 v8.6`, 2026-08-13** (via
-        `examples/rest_format_device.py`): both confirmed the capability
-        check, the typed-confirmation flow, and the `GET` key round trip all
-        work end to end, and both reached a real `PUT` — the first failing
-        on the `filesystem` defect above, the second (after that fix) failing
-        on the `volume` defect above. Neither request reached the camera's
-        format logic at all (a `400` before formatting starts, not a failure
-        partway through — nothing on the card was touched in either run).
-        The polling/completion path beyond a `PUT` the camera actually
-        accepts remains unconfirmed; a rerun with both fields now resolved
-        is the next real-hardware step. See CLAUDE.md's Phase 10 note.
+        **Three real-hardware runs, `POCKET_6K_G2 v8.6`, 2026-08-13** (via
+        `examples/rest_format_device.py`), the first two of which found and
+        fixed the `filesystem`/`volume` defects documented above (both
+        `400`s before the camera's format logic ever started — nothing on
+        the card touched in either run). **The third run succeeded end to
+        end**: `PUT` at `15:37:02.796`, `device_info("sd0").state` observed
+        moving `"Mounted"` -> `"Formatting"` -> `"Mounted"`, completion
+        logged at `15:37:07.871` — a real full-card format (1TB,
+        `filesystem="ExFAT"`, default `volume` resolved to the card's
+        existing `"A002"`) in **~5 seconds**, well inside the default
+        `timeout=120.0`/`poll_interval_s=1.0`. Confirmed by the resulting
+        `storage_state()`: `clip_count` `20` -> `0`, `remaining_space`
+        restored to within ~33MB of `total_space` (filesystem overhead).
+        This is the first real-hardware confirmation of the
+        `"Formatting"`-must-be-observed-first guard actually working as
+        designed, not just unit-tested — the guard did not need to reject
+        a stale read on this run (the first poll after the `PUT` already
+        found `"Formatting"`), so a false-positive scenario this guard
+        exists to prevent still has no real-hardware reproduction of its
+        own; the guard's *correctness* on the success path is confirmed,
+        its necessity is not yet independently demonstrated. See CLAUDE.md's
+        Phase 10 note.
         """
         if not confirm:
             raise ValueError(
