@@ -2981,17 +2981,30 @@ class TestFormatDevice:
         session = make_session(make_format_device_profile(), client=client)
 
         with pytest.raises(ValueError, match="confirm=True"):
-            await session.format_device(DEVICE_NAME, confirm=False)
+            await session.format_device(DEVICE_NAME, confirm=False, filesystem="ExFat")
 
         assert client.calls == []
         assert client.put_calls == []
+
+    @pytest.mark.asyncio
+    async def test_filesystem_is_a_required_keyword_argument(self):
+        """Real-hardware-confirmed, POCKET_6K_G2 v8.6, 2026-08-13: the first
+        version of this method treated `filesystem` as optional, matching
+        MediaControl.yaml's own schema — the camera rejected the omitted-
+        filesystem PUT with 400 {"error": "Field 'filesystem' missing from
+        request body."}. filesystem has no default now; omitting it
+        entirely is a TypeError before this method's own body ever runs."""
+        session = make_session(make_format_device_profile(), client=FakeRestClient({}))
+
+        with pytest.raises(TypeError):
+            await session.format_device(DEVICE_NAME, confirm=True)  # type: ignore[call-arg]
 
     @pytest.mark.asyncio
     async def test_raises_bmd_unsupported_when_endpoint_not_confirmed(self):
         session = make_session(make_profile(), client=FakeRestClient({}))
 
         with pytest.raises(BMDUnsupportedError, match="doformat"):
-            await session.format_device(DEVICE_NAME, confirm=True)
+            await session.format_device(DEVICE_NAME, confirm=True, filesystem="ExFat")
 
     @pytest.mark.asyncio
     async def test_raises_bmd_unsupported_when_filesystem_not_offered(self):
@@ -3006,11 +3019,16 @@ class TestFormatDevice:
 
     @pytest.mark.asyncio
     async def test_raises_bmd_verification_error_when_no_key_returned(self):
-        client = FakeRestClient({DOFORMAT_PATH: {"deviceName": DEVICE_NAME}})
+        client = FakeRestClient(
+            {
+                DOFORMAT_PATH: {"deviceName": DEVICE_NAME},
+                DOFORMAT_FILESYSTEMS_PATH: ["ExFat"],
+            }
+        )
         session = make_session(make_format_device_profile(), client=client)
 
         with pytest.raises(BMDVerificationError, match="no format key"):
-            await session.format_device(DEVICE_NAME, confirm=True)
+            await session.format_device(DEVICE_NAME, confirm=True, filesystem="ExFat")
 
         assert client.put_calls == []
 
@@ -3046,10 +3064,11 @@ class TestFormatDevice:
         ]
 
     @pytest.mark.asyncio
-    async def test_omits_filesystem_and_volume_when_not_given(self):
+    async def test_omits_volume_when_not_given(self):
         client = FakeRestClient(
             {
                 DOFORMAT_PATH: {"deviceName": DEVICE_NAME, "key": "abc123"},
+                DOFORMAT_FILESYSTEMS_PATH: ["ExFat"],
                 DEVICE_INFO_PATH: {"state": "Formatting"},
             }
         )
@@ -3060,15 +3079,18 @@ class TestFormatDevice:
             client.responses[DEVICE_INFO_PATH] = {"state": "Uninitialised"}
 
         asyncio.create_task(finish_formatting())
-        await session.format_device(DEVICE_NAME, confirm=True, timeout=1.0, poll_interval_s=0.01)
+        await session.format_device(
+            DEVICE_NAME, confirm=True, filesystem="ExFat", timeout=1.0, poll_interval_s=0.01
+        )
 
-        assert client.put_calls == [(DOFORMAT_PATH, {"key": "abc123"})]
+        assert client.put_calls == [(DOFORMAT_PATH, {"key": "abc123", "filesystem": "ExFat"})]
 
     @pytest.mark.asyncio
     async def test_raises_verification_error_on_timeout_without_formatting_observed(self):
         client = FakeRestClient(
             {
                 DOFORMAT_PATH: {"deviceName": DEVICE_NAME, "key": "abc123"},
+                DOFORMAT_FILESYSTEMS_PATH: ["ExFat"],
                 DEVICE_INFO_PATH: {"state": "Mounted"},
             }
         )
@@ -3076,5 +3098,9 @@ class TestFormatDevice:
 
         with pytest.raises(BMDVerificationError, match="format_device"):
             await session.format_device(
-                DEVICE_NAME, confirm=True, timeout=0.05, poll_interval_s=0.01
+                DEVICE_NAME,
+                confirm=True,
+                filesystem="ExFat",
+                timeout=0.05,
+                poll_interval_s=0.01,
             )

@@ -352,7 +352,7 @@ src/bmd_camera/
                               # playback_interrupted section for the full five-run trail.
                               # device_info(device_name)/doformat_supported_filesystems()
                               # (Phase 10 — read verbs, `DeviceInfo` dataclass) and
-                              # format_device(device_name, *, confirm, filesystem=None,
+                              # format_device(device_name, *, confirm, filesystem,
                               # volume=None, timeout=120.0, poll_interval_s=1.0) — the only
                               # media-erasure capability the official BMD REST spec (11
                               # OpenAPI/AsyncAPI YAML files supplied by the user) documents
@@ -379,9 +379,18 @@ src/bmd_camera/
                               # filesystem surface Phase 6 already uses for photo
                               # confirmation, outside the 11 spec files entirely) supports
                               # DELETE for individual clip/still files remains an open
-                              # question, explicitly deferred at the user's own request. Not
-                              # yet real-hardware-confirmed — see docs/rest/session.md's Phase
-                              # 10 section and examples/rest_format_device.py
+                              # question, explicitly deferred at the user's own request.
+                              # filesystem is a required argument, not the optional one
+                              # MediaControl.yaml itself describes it as — real-hardware-
+                              # confirmed, POCKET_6K_G2 v8.6, 2026-08-13: the first version
+                              # left it optional (per the spec) and the camera rejected the
+                              # omitted-filesystem PUT with 400 {"error": "Field 'filesystem'
+                              # missing from request body."}. That same run confirmed the
+                              # capability check, typed-confirmation flow, and GET-key round
+                              # trip all work end to end, but never reached the polling/
+                              # completion path — a rerun with the fix is the next
+                              # real-hardware step. See docs/rest/session.md's Phase 10
+                              # section and examples/rest_format_device.py
     mapping.py                 # Codec name derivation between the BLE profile's vocabulary
                               # and REST's own spelling — confirmed strings always win
                               # (design principle 1); this is a fallback seed only.
@@ -639,9 +648,17 @@ examples/
                             # deliberately departing from every other examples/ script's
                             # plain edit-and-run convention: prints storage_state() first, then
                             # requires typing the exact device name back at a prompt before
-                            # anything is sent to the camera. Not yet real-hardware-confirmed
-                            # — this script's first successful run against real hardware is
-                            # that confirmation. See docs/rest/session.md's Phase 10 section
+                            # anything is sent to the camera. First real-hardware run
+                            # (POCKET_6K_G2 v8.6, 2026-08-13) confirmed the capability check,
+                            # typed-confirmation flow, and GET-key round trip, then surfaced
+                            # the filesystem-required defect above via a real 400 before the
+                            # camera's format logic ever started — nothing on the card was
+                            # touched. Now prints doformat_supported_filesystems()'s live
+                            # result before prompting, and aborts with no request sent if
+                            # FILESYSTEM is still unset, so a rerun uses a real camera-offered
+                            # value rather than a guess. A successful full run (capability
+                            # check through the polling/completion path) is still outstanding
+                            # — see docs/rest/session.md's Phase 10 section
   playback.py               # (planned)
 
 tests/

@@ -1463,7 +1463,7 @@ will accept (spec example: `["ExFat", "HFS"]`). `format_device()` validates its 
 assumption discipline `set_camera_format()` already uses for codec/resolution/fps (design
 principle 7's REST sibling). **Not yet real-hardware-confirmed.**
 
-### `format_device(device_name, *, confirm, filesystem=None, volume=None, timeout=120.0, poll_interval_s=1.0)`
+### `format_device(device_name, *, confirm, filesystem, volume=None, timeout=120.0, poll_interval_s=1.0)`
 
 Formats a media device — `GET .../doformat` for a one-time `key`, then `PUT .../doformat`
 with `{key, filesystem, volume}` — per the official BMD REST spec (`MediaControl.yaml`), the
@@ -1499,10 +1499,21 @@ format key — the only sweep-confirmed signal this endpoint can ever carry. Rea
 capability rests on the official spec being accurate, not on a sweep probe, for this one
 endpoint only.
 
-`filesystem`, if given, is validated against a live `doformat_supported_filesystems()` call
-first, raising `BMDUnsupportedError` if the camera doesn't currently offer it. If omitted, the
-`filesystem` field is left out of the `PUT` body entirely (the spec documents it as optional)
-rather than guessing a default; same for `volume`.
+**`filesystem` is a required argument, not the optional one `MediaControl.yaml` itself
+describes it as.** Real-hardware-confirmed, `POCKET_6K_G2 v8.6`, 2026-08-13: the first
+version of this method took the spec at its word and left `filesystem` optional, omitting it
+from the `PUT` body when not given — the camera rejected that with `400 {"error": "Field
+'filesystem' missing from request body."}`. The spec's "optional" claim is simply wrong for
+this firmware; real hardware overrides documentation here (design principle 6). `volume` was
+*not* rejected in that same request, so it remains genuinely optional — nothing contradicts
+the spec for that field. `filesystem` is validated against a live `doformat_supported_filesystems()`
+call before any write is attempted, raising `BMDUnsupportedError` if the camera doesn't
+currently offer it — the same live-capability-over-hardcoded-assumption discipline
+`set_camera_format` uses for codec/resolution/fps (design principle 7's REST sibling). There
+is no way to read a device's *current* filesystem to default to it instead — `Workingset`'s
+schema has no such field — so requiring the caller to name one explicitly is the only safe
+option; `examples/rest_format_device.py` prints `doformat_supported_filesystems()`'s live
+result before prompting for exactly this reason.
 
 **Verification is structurally weaker than every other write in this codebase, stated
 plainly rather than overstated away.** `Notification.yaml`'s `deviceProperty` enum — the
@@ -1523,11 +1534,16 @@ about the camera's behavior. Raises `BMDVerificationError` if `timeout` elapses 
 observing both a `"Formatting"` state and a subsequent terminal one.
 
 **This entire guard shape — the settle-before-first-poll heuristic, `timeout=120.0`,
-`poll_interval_s=1.0` — is an unconfirmed design, not a real-hardware-tested one.** No format
-has been run against a real camera yet. `examples/rest_format_device.py`'s first successful
-run against real hardware is that confirmation, and `timeout`/`poll_interval_s` may need
-adjusting once real timing is observed — a full-card format is plausibly a multi-minute
-operation, unlike every other write this codebase verifies.
+`poll_interval_s=1.0` — remains an unconfirmed design, not a real-hardware-tested one, even
+after the run below.** `examples/rest_format_device.py`'s first real-hardware run
+(`POCKET_6K_G2 v8.6`, 2026-08-13) confirmed the capability check, the typed-confirmation
+flow, and the `GET` key round trip all work end to end, but the run's `PUT` failed on the
+missing-`filesystem` defect above before the camera's format logic ever started — a `400`
+up front, not a failure partway through, so nothing on the card was touched. The
+polling/completion path, and `timeout`/`poll_interval_s`'s real suitability (a full-card
+format is plausibly a multi-minute operation, unlike every other write this codebase
+verifies), remain unconfirmed. A rerun with `filesystem` now required is the next
+real-hardware step.
 
 ---
 
@@ -1676,17 +1692,19 @@ new media-device-formatting surface with the same fake-`RestClient` pattern, plu
 — deliberately never `put_supported`, mirroring the endpoint's real `NEVER_WRITE` status (see
 `format_device()`'s own section above). Coverage includes: `device_info()`'s parsed `state`
 and its default-to-`"None"` fallback when the field is missing; `doformat_supported_filesystems()`'s
-parsed tuple and its empty-tuple fallback for a non-list body; `format_device()`'s `ValueError`
-when `confirm=False` (asserting zero requests are sent); its capability-check
-`BMDUnsupportedError` when the endpoint isn't profile-confirmed and when a requested
-`filesystem` isn't in the camera's live `doformatSupportedFilesystems`; its
-`BMDVerificationError` when the key `GET` returns no `key` at all; the full success path
-(`FakeRestClient.responses` mutated from a background `asyncio.Task`, the same
-"deliver later" technique `TestRecordStop`'s polling tests use, to simulate `state` moving
-`"Mounted"` -> `"Formatting"` -> a terminal state) asserting the exact `PUT` body sent,
-both with and without `filesystem`/`volume`; and a timeout test where `state` never leaves
-`"Mounted"` at all, confirming the `"Formatting"`-must-be-observed-first guard actually gates
-completion rather than accepting the very first terminal-looking read.
+parsed tuple and its empty-tuple fallback for a non-list body; that omitting `filesystem`
+entirely raises `TypeError` before this method's own body ever runs (`filesystem` has no
+default — the real-hardware fix); `format_device()`'s `ValueError` when `confirm=False`
+(asserting zero requests are sent); its capability-check `BMDUnsupportedError` when the
+endpoint isn't profile-confirmed and when a requested `filesystem` isn't in the camera's live
+`doformatSupportedFilesystems`; its `BMDVerificationError` when the key `GET` returns no `key`
+at all; the full success path (`FakeRestClient.responses` mutated from a background
+`asyncio.Task`, the same "deliver later" technique `TestRecordStop`'s polling tests use, to
+simulate `state` moving `"Mounted"` -> `"Formatting"` -> a terminal state) asserting the exact
+`PUT` body sent, both with `volume` given and with it omitted (`filesystem` is always present
+now); and a timeout test where `state` never leaves `"Mounted"` at all, confirming the
+`"Formatting"`-must-be-observed-first guard actually gates completion rather than accepting
+the very first terminal-looking read.
 
 ---
 

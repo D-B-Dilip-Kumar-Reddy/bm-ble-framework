@@ -33,13 +33,25 @@ rather than `put_supported` (this endpoint is in
 `tools/rest/probe_endpoints.py`'s `NEVER_WRITE` list, so `put_supported`
 can never be sweep-confirmed).
 
-STATUS: not yet real-hardware-confirmed. This script's first successful
-run against real hardware *is* that confirmation — see
-docs/rest/session.md's `format_device()` section.
+STATUS: real-hardware-run once, `POCKET_6K_G2 v8.6`, 2026-08-13 — that run
+surfaced a real defect (see below) and never reached the polling/
+completion path. A rerun with the fix is the next real-hardware step.
 
-Edit HOST / MODEL_KEY / FIRMWARE / DEVICE_NAME below to target a
-different camera or device. FILESYSTEM / VOLUME are optional — leave
-them None to keep the device's current filesystem and volume name.
+**`FILESYSTEM` is required, not optional.** The first version of this
+script (and of `RestCameraSession.format_device()`) left it `None` by
+default, matching the official spec's own claim that `filesystem` is an
+optional `PUT` field — the camera rejected that with `400 {"error":
+"Field 'filesystem' missing from request body."}`. Real hardware
+overrides the spec here (design principle 6): `filesystem` is now a
+required argument on both this script and `format_device()` itself. This
+script prints the camera's live `doformat_supported_filesystems()` result
+before prompting, specifically so `FILESYSTEM` is set to a real value
+this exact camera offers rather than a guess — see
+`format_device()`'s own docstring for the full finding.
+
+Edit HOST / MODEL_KEY / FIRMWARE / DEVICE_NAME / FILESYSTEM below to
+target a different camera, device, or filesystem. VOLUME is genuinely
+optional — leave it `None` to keep the device's current volume name.
 
 Usage:
     python examples/rest_format_device.py
@@ -61,7 +73,11 @@ FIRMWARE = "v8.6"
 # StorageDevice.device_name (e.g. "sd0"), not a /mounts/ mount name — read
 # it off the storage_state() printout below before confirming.
 DEVICE_NAME = "sd0"
-FILESYSTEM: str | None = None  # e.g. "ExFat" — None keeps the current filesystem
+# Required — must be one of the values this script prints from a live
+# doformat_supported_filesystems() call below. Left None here on purpose,
+# so a caller who hasn't looked at that printout yet gets a clear abort
+# rather than an unverified guess sent to the camera.
+FILESYSTEM: str | None = None  # e.g. "ExFat" — see the live printout below
 VOLUME: str | None = None  # e.g. "My disk" — None keeps the current volume name
 
 FORMAT_TIMEOUT_S = 120.0
@@ -100,11 +116,22 @@ async def main() -> int:
         print("--- Media devices before formatting ---")
         await _print_storage(session)
 
+        supported_filesystems = await session.doformat_supported_filesystems()
+        print(f"\n--- Filesystems this camera currently offers: {supported_filesystems} ---")
+
+        if FILESYSTEM is None:
+            print(
+                "\nFILESYSTEM is not set. Edit this script and set FILESYSTEM to one of the "
+                f"values printed above ({supported_filesystems}), then run it again. Nothing "
+                "was sent to the camera."
+            )
+            return 1
+
         if not _confirm_by_typing_device_name():
             print("Aborted — device name did not match, nothing was sent to the camera.")
             return 1
 
-        print(f"\n=== Formatting {DEVICE_NAME!r} ===")
+        print(f"\n=== Formatting {DEVICE_NAME!r} (filesystem={FILESYSTEM!r}) ===")
         try:
             await session.format_device(
                 DEVICE_NAME,

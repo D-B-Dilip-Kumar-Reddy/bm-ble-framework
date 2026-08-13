@@ -2094,7 +2094,7 @@ class RestCameraSession:
         device_name: str,
         *,
         confirm: bool,
-        filesystem: str | None = None,
+        filesystem: str,
         volume: str | None = None,
         timeout: float = 120.0,
         poll_interval_s: float = 1.0,
@@ -2142,14 +2142,28 @@ class RestCameraSession:
         carry. Real PUT capability rests on the official spec being
         accurate, not on a sweep probe, for this one endpoint only.
 
-        `filesystem`, if given, is validated against a live call to
-        `doformat_supported_filesystems()` first, raising
-        `BMDUnsupportedError` if the camera doesn't currently offer it —
-        the same live-capability-over-hardcoded-assumption discipline
+        **`filesystem` is a required argument, not the optional one the spec's own
+        `MediaControl.yaml` describes it as.** Real-hardware-confirmed,
+        `POCKET_6K_G2 v8.6`, 2026-08-13: omitting it (the first version of
+        this method, matching the spec literally) got a `400
+        {"error": "Field 'filesystem' missing from request body."}` back
+        from the camera — the spec's "optional" claim is simply wrong for
+        this firmware, real hardware overrides documentation here (design
+        principle 6). `volume` was *not* rejected in that same request, so
+        it remains genuinely optional — no evidence contradicts the spec
+        for that field. `filesystem` is validated against a live call to
+        `doformat_supported_filesystems()` before any write is attempted,
+        raising `BMDUnsupportedError` if the camera doesn't currently offer
+        it — the same live-capability-over-hardcoded-assumption discipline
         `set_camera_format` uses for codec/resolution/fps (design
-        principle 7's REST sibling). If omitted, the `filesystem` field is
-        left out of the `PUT` body entirely rather than guessing a default
-        — per the spec, `filesystem`/`volume` are both optional.
+        principle 7's REST sibling). This codebase has no way to read a
+        device's *current* filesystem to default to it — `Workingset`'s
+        schema has no such field — so there is no safer default than
+        requiring the caller to name one explicitly;
+        `examples/rest_format_device.py` prints
+        `doformat_supported_filesystems()`'s live result before prompting,
+        specifically so the operator has real values to choose from rather
+        than guessing.
 
         **Verification is structurally weaker than every other write in
         this codebase, and this is stated here rather than overstated
@@ -2178,7 +2192,16 @@ class RestCameraSession:
         recognize a real terminal state here would be its own kind of
         wrong guess about the camera's behavior.
 
-        Not yet real-hardware-confirmed — see CLAUDE.md's Phase 10 note.
+        **Real-hardware run, `POCKET_6K_G2 v8.6`, 2026-08-13** (via
+        `examples/rest_format_device.py`): confirmed the capability check,
+        the typed-confirmation flow, and the `GET` key round trip all work
+        end to end — the run reached a real `PUT` before failing on the
+        `filesystem`-required defect above, which this codebase's own
+        request never reached the camera's format logic at all (a `400`
+        before formatting starts, not a failure partway through — nothing
+        on the card was touched). The polling/completion path beyond that
+        point remains unconfirmed; a rerun with `filesystem` now required
+        is the next real-hardware step. See CLAUDE.md's Phase 10 note.
         """
         if not confirm:
             raise ValueError(
@@ -2196,13 +2219,12 @@ class RestCameraSession:
                 "tools/rest/probe_endpoints.py against this camera first."
             )
 
-        if filesystem is not None:
-            supported_filesystems = await self.doformat_supported_filesystems()
-            if filesystem not in supported_filesystems:
-                raise BMDUnsupportedError(
-                    f"[{self.host}] {device_name}: filesystem {filesystem!r} is not in the "
-                    f"camera's live doformatSupportedFilesystems {supported_filesystems!r}"
-                )
+        supported_filesystems = await self.doformat_supported_filesystems()
+        if filesystem not in supported_filesystems:
+            raise BMDUnsupportedError(
+                f"[{self.host}] {device_name}: filesystem {filesystem!r} is not in the "
+                f"camera's live doformatSupportedFilesystems {supported_filesystems!r}"
+            )
 
         key_body = await self._rest_client.get(path)
         key = key_body.get("key") if isinstance(key_body, dict) else None
@@ -2212,9 +2234,7 @@ class RestCameraSession:
                 f"body was {key_body!r}"
             )
 
-        put_body: dict[str, Any] = {"key": key}
-        if filesystem is not None:
-            put_body["filesystem"] = filesystem
+        put_body: dict[str, Any] = {"key": key, "filesystem": filesystem}
         if volume is not None:
             put_body["volume"] = volume
 
