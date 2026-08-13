@@ -315,10 +315,9 @@ unlike a same-value `PUT`, can never be a no-op. Sequence:
 
 Neither flag adds a capability to `RestCameraSession` on its own — this tool only gathers
 evidence, matching the same sniffer-first discipline that governs every other capability in
-this codebase. `delete_clip()` (`docs/rest/session.md`'s Phase 11) is the method that got
-designed and built once a real `--delete-real-file` run answered the question for clips —
-see the confirmed result below. `delete_still()` remains unbuilt; stills have no equivalent
-confirmation yet.
+this codebase. `delete_clip()`/`delete_still()` (`docs/rest/session.md`'s Phase 11) are the
+methods that got designed and built once real Postman confirmations answered the question for
+each — see the confirmed results below.
 
 **Status: CONFIRMED — `DELETE` on `/mounts/...` really deletes a real clip.**
 `--probe-mounts-delete` ran first (`POCKET_6K_G2 v8.6`, 2026-08-13) and was inconclusive —
@@ -755,24 +754,29 @@ the tool's own status-code handling:
    have, not a BMD-authored response).
 3. `GET` the same URL again → **`404 Not Found`** — the file is genuinely gone.
 
-**This settles the question this whole investigation existed to answer: `DELETE` on
-`/mounts/...` is a real, working deletion capability on this camera and firmware, at least
-for clip files.** It does *not* by itself confirm still deletion specifically — the Stills
-directory's own `500` listing defect means no still's exact `/mounts/...` path has been
-independently confirmed yet the way this clip's path was (read off the `A002-sd1/` listing
-directly). The mechanism is very likely identical (same filesystem surface, same server),
-but design principle 6 says confirm before trusting, not extrapolate — a still-specific
-confirmation is the one remaining gap, and the next real step if it's wanted is finding a
-real still path (e.g. via `rest/media.py`'s existing mtime-based discovery, which never
-needed the broken listing to begin with) and running `--delete-real-file` against it
-directly.
+**This settles the first half of the question this whole investigation existed to answer:
+`DELETE` on `/mounts/...` is a real, working deletion capability on this camera and firmware,
+for clip files.** It did *not* by itself confirm still deletion — the Stills directory's own
+`500` listing defect means no still's exact `/mounts/...` path could be read off a listing
+the way this clip's path was — but that gap was closed the same day, by hand, the same way:
+the operator reconstructed a real still's path from the known `<reel>_<MMDDHHMM>_S<NNN><ext>`
+pattern (`rest/media.py`'s `guess_new_still_path()` logic, done manually) and ran the
+identical three-step sequence against it:
+
+```
+GET    /mounts/A002-sd1/Stills/A002_08120219_S001.braw  -> 200
+DELETE /mounts/A002-sd1/Stills/A002_08120219_S001.braw  -> 200 OK
+GET    /mounts/A002-sd1/Stills/A002_08120219_S001.braw  -> 404 Not Found
+```
+
+**`DELETE` on `/mounts/...` works identically for stills — both halves of the investigation
+are now confirmed**, on the same camera and firmware, both by hand in Postman.
 
 This confirmation was the investigation's own exit condition (design principle 6, "a real
-`--delete-real-file` run answers the question") — building the actual library capability on
-top of it was a deliberate next step, not an automatic consequence, and it has now been
-taken: `RestCameraSession.delete_clip()` (Phase 11, `docs/rest/session.md`) composes this
-exact confirmed sequence. `delete_still()` remains unbuilt — still deletion has no
-independent confirmation of its own yet, for the reason above.
+`--delete-real-file` run answers the question") for both media types — building the actual
+library capability on top of it was a deliberate next step, not an automatic consequence, and
+it has now been taken for both: `RestCameraSession.delete_clip()` and `delete_still()` (Phase
+11, `docs/rest/session.md`) compose these exact confirmed sequences.
 
 **`delete_clip()`'s own real-hardware runs, `POCKET_6K_G2 v8.6`, 2026-08-13, twice**
 (`examples/rest_delete_clip.py`, `clip_unique_id=23` then `24`): the file-level deletion
@@ -787,6 +791,13 @@ and reported `clips()`/`storage_state().clip_count` both correctly back to `1` �
 staleness is a same-session artifact that clears on reconnect, not a permanent index
 problem. See `docs/rest/session.md`'s Phase 11 section for the full write-up, the exact
 timestamps, and the best-effort `WARNING` this finding added.
+
+**`delete_still()` itself is not yet real-hardware-run** — its underlying `GET`/`DELETE`/
+`GET` sequence is confirmed (the Postman trail above), but `delete_still()` composed through
+`RestCameraSession`'s own machinery (`examples/rest_delete_still.py`, which triggers a real
+photo over BLE, confirms it over REST, guesses its path, then deletes it) has not itself been
+run against real hardware yet — that run is the next real-hardware step for stills, the same
+distinction `delete_clip()` carried before its own first run.
 
 ### `POCKET_6K_PRO v8.6`, over USB, plaintext HTTP — 2026-08-03
 

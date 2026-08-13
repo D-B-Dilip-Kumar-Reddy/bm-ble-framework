@@ -3368,3 +3368,65 @@ class TestDeleteClip:
         deleted = await session.delete_clip(1, confirm=True)  # must not raise
 
         assert deleted.clip_unique_id == 1
+
+
+DELETE_STILL_PATH = "/mounts/A002-sd1/Stills/A002_08120219_S001.braw"
+
+
+class TestDeleteStill:
+    """delete_still() — real-hardware-confirmed working via Postman,
+    POCKET_6K_G2 v8.6, 2026-08-13: GET 200 -> DELETE 200 OK -> GET 404 on
+    a real still. Unlike delete_clip(), the caller supplies the full
+    /mounts/... path directly — there is no still-id/listing system to
+    resolve one from."""
+
+    @pytest.mark.asyncio
+    async def test_raises_value_error_when_confirm_is_false(self):
+        client = FakeRestClient({})
+        session = make_session(make_profile(), client=client)
+
+        with pytest.raises(ValueError, match="confirm=True"):
+            await session.delete_still(DELETE_STILL_PATH, confirm=False)
+
+        assert client.calls == []
+        assert client.exists_calls == []
+        assert client.delete_calls == []
+
+    @pytest.mark.asyncio
+    async def test_raises_verification_error_when_path_not_found(self):
+        client = FakeRestClient({}, exists_responses={DELETE_STILL_PATH: False})
+        session = make_session(make_profile(), client=client)
+
+        with pytest.raises(BMDVerificationError, match="does not exist"):
+            await session.delete_still(DELETE_STILL_PATH, confirm=True)
+
+        assert client.delete_calls == []
+
+    @pytest.mark.asyncio
+    async def test_raises_verification_error_when_still_exists_after_delete(self):
+        client = FakeRestClient({}, exists_responses={DELETE_STILL_PATH: True})
+        session = make_session(make_profile(), client=client)
+
+        with pytest.raises(BMDVerificationError, match="still exists after DELETE"):
+            await session.delete_still(DELETE_STILL_PATH, confirm=True)
+
+        assert client.delete_calls == [DELETE_STILL_PATH]
+
+    @pytest.mark.asyncio
+    async def test_full_flow_success(self):
+        client = FakeRestClient({})
+        call_count = {"n": 0}
+
+        async def exists(path: str, *, api_prefixed: bool = True) -> bool:
+            client.exists_calls.append(path)
+            client.api_prefixed_calls[path] = api_prefixed
+            call_count["n"] += 1
+            return call_count["n"] == 1  # True before DELETE, False after
+
+        client.exists = exists
+        session = make_session(make_profile(), client=client)
+
+        await session.delete_still(DELETE_STILL_PATH, confirm=True)  # must not raise
+
+        assert client.delete_calls == [DELETE_STILL_PATH]
+        assert client.api_prefixed_calls[DELETE_STILL_PATH] is False

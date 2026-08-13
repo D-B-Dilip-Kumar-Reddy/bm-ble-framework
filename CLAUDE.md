@@ -437,10 +437,8 @@ src/bmd_camera/
                               # binary — exists() is built to never touch it, the exact
                               # crash class probe_endpoints.py's request() hit). No
                               # polling loop — the confirmed sequence completed
-                              # synchronously. Only clip deletion is confirmed; no
-                              # delete_still() exists (Stills' own 500 listing defect
-                              # means no still path has been independently confirmed
-                              # the way this clip's was). RestClient.delete() (client.py)
+                              # synchronously. delete_still() (below) closes the still
+                              # half of this same capability. RestClient.delete() (client.py)
                               # gained api_prefixed: bool = True for this, mirroring
                               # get()/exists() — it previously had no way to reach
                               # /mounts/... at all. Two real-hardware runs,
@@ -465,6 +463,25 @@ src/bmd_camera/
                               # post-check: logs a WARNING if clip_unique_id is still
                               # listed after confirmed deletion, purely informational
                               # (design principle 9). See docs/rest/session.md's
+                              # Phase 11 section.
+                              # delete_still(path, *, confirm) (Phase 11) — DELETEs one
+                              # still's real /mounts/.../Stills/... path. Unlike
+                              # delete_clip(), takes the full path directly rather than
+                              # resolving one internally — stills have no id/listing
+                              # system to resolve from (Stills dir 500s unconditionally
+                              # on listing), so the caller must supply path themselves
+                              # (via rest/media.py's guess_new_still_path(), itself
+                              # deliberately opt-in/best-effort, or manual investigation)
+                              # rather than this method guessing internally (design
+                              # principle 7). Same confirm=True gate, same
+                              # exists()-before/DELETE/exists()-after verification, no
+                              # polling loop, no /clips/list-equivalent staleness check
+                              # possible (nothing to list). Real-hardware-confirmed
+                              # working, POCKET_6K_G2 v8.6, 2026-08-13, via Postman —
+                              # GET 200 -> DELETE 200 OK -> GET 404 on
+                              # /mounts/A002-sd1/Stills/A002_08120219_S001.braw, closing
+                              # the still half of the same investigation delete_clip()'s
+                              # confirmation closed for clips. See docs/rest/session.md's
                               # Phase 11 section.
     mapping.py                 # Codec name derivation between the BLE profile's vocabulary
                               # and REST's own spelling — confirmed strings always win
@@ -806,6 +823,23 @@ examples/
                             # (rest_read_state.py, run separately ~48s after run 2)
                             # showed clears on a fresh reconnect. See
                             # docs/rest/session.md's Phase 11 section
+  rest_delete_still.py      # Phase 11 — RestCameraSession.delete_still(). Mirrors
+                            # capture_photo.py's BLE-trigger + REST-confirm composition
+                            # (there is no REST way to trigger a photo at all) rather
+                            # than rest_delete_clip.py's REST-only shape: trigger a real
+                            # photo over BLE, confirm it over REST
+                            # (wait_for_new_still()), guess its real filename
+                            # (guess_new_still_path() — load-bearing here, unlike its
+                            # purely-informational role in capture_photo.py; a None
+                            # guess means the script stops with nothing sent, never
+                            # inventing a path), then delete_still(confirm=True) it.
+                            # delete_still()'s underlying GET/DELETE/GET sequence is
+                            # real-hardware-confirmed (POCKET_6K_G2 v8.6, 2026-08-13, via
+                            # Postman); this script itself, composed through
+                            # RestCameraSession's own machinery end to end (trigger,
+                            # confirm, guess, delete), has not yet been run against real
+                            # hardware — its first successful run is that confirmation.
+                            # See docs/rest/session.md's Phase 11 section
   playback.py               # (planned)
 
 tests/

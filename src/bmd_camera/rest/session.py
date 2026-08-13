@@ -2480,3 +2480,81 @@ class RestCameraSession:
                 target,
             )
         return clip
+
+    async def delete_still(self, path: str, *, confirm: bool) -> None:
+        """Permanently delete one still from the active storage device via
+        `DELETE` on its real `/mounts/.../Stills/...` path.
+
+        **Real-hardware-confirmed working, `POCKET_6K_G2 v8.6`,
+        2026-08-13** — done by hand in Postman, the same investigation
+        method `delete_clip()`'s own confirmation was built on: `GET`
+        `200` -> `DELETE` `200 OK` -> `GET` `404 Not Found`, on a real
+        still (`/mounts/A002-sd1/Stills/A002_08120219_S001.braw`). This
+        method itself composes that confirmed sequence through
+        `RestClient.exists()`/`RestClient.delete()`, but has not itself
+        been run against real hardware yet — the next real run of this
+        method is what closes that specific gap, the same distinction
+        `delete_clip()`'s own docstring drew before its first real run.
+
+        **Unlike `delete_clip()`, this method takes the full `/mounts/...`
+        path directly and never tries to resolve or guess one itself.**
+        `delete_clip()` can resolve `clip_unique_id` against `clips()`
+        because clips have that identifier and a working listing; stills
+        have neither — the Stills directory itself `500`s unconditionally
+        on listing (`rest/media.py`'s module docstring), so there is no
+        `clips()`-equivalent to resolve against and no still-id to accept
+        in its place. The existing filename-reconstruction logic
+        (`rest/media.py`'s `guess_new_still_path()`) is deliberately
+        opt-in and best-effort by design — it was never meant to be a
+        source of truth for anything, let alone a destructive target
+        (design principle 7's "never guess" discipline, extended here to
+        the caller's own responsibility rather than something this method
+        could safely do internally). Obtain `path` from
+        `guess_new_still_path()` (after independently confirming a photo
+        was taken via `wait_for_new_still()`) or from manual
+        investigation — the same way the real-hardware confirmation above
+        was obtained.
+
+        **This permanently erases the still, irreversibly.** `confirm` has
+        no default, mirroring `delete_clip()`/`format_device()`'s exact
+        gate — an omitted/`False` value raises `ValueError` before a
+        single request is sent.
+
+        Verification: `RestClient.exists()` before and after the `DELETE`
+        — never a plain `get()`, since a still's body is binary (a real
+        `.dng`/`.braw` image) for the same reason `delete_clip()` avoids
+        `get()` for a clip's body. Raises `BMDVerificationError` before
+        sending `DELETE` at all if `path` doesn't exist yet, and again if
+        it still exists immediately after `DELETE`. No polling loop: the
+        confirmed real sequence completed synchronously, the same shape
+        `delete_clip()`'s own confirmation showed for a clip file.
+
+        There is no `/clips/list`-equivalent listing for stills to check
+        for the kind of same-session staleness `delete_clip()` found and
+        now warns about — Stills can't be listed at all, confirmed or
+        stale, so no analogous best-effort check is possible here.
+        """
+        if not confirm:
+            raise ValueError(
+                "delete_still() permanently erases this still from the card — pass "
+                "confirm=True only once you are certain that is what you want."
+            )
+
+        before = await self._rest_client.exists(path, api_prefixed=False)
+        if not before:
+            raise BMDVerificationError(
+                f"[{self.host}] delete_still({path!r}): resolved path does not exist — "
+                "cannot confirm this still's real location before attempting DELETE"
+            )
+
+        self._log.warning("[%s] Deleting still %s — irreversible", self.host, path)
+        await self._rest_client.delete(path, api_prefixed=False)
+
+        after = await self._rest_client.exists(path, api_prefixed=False)
+        if after:
+            raise BMDVerificationError(
+                f"[{self.host}] delete_still({path!r}): still exists after DELETE — "
+                "not confirmed deleted"
+            )
+
+        self._log.info("[%s] Still %s deleted and confirmed gone", self.host, path)
