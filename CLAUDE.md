@@ -548,6 +548,34 @@ src/bmd_camera/
                               # Fixed identically — see delete_clip()'s own entry above. The
                               # third run confirmed the fix: 3/3 clips deleted, 0 failed. See
                               # docs/rest/session.md's Phase 13 section.
+                              # reconnect() (Phase 14) — tears down and rebuilds the transport
+                              # on the *same* session object (await self.__aexit__() then
+                              # self.__aenter__(), reused verbatim), so a caller never has to
+                              # swap which RestCameraSession reference it holds. Built to answer
+                              # whether restarting the client session is a good way to force a
+                              # non-stale /clips/list read — confirmed reliable exactly once
+                              # (via a genuinely separate process, rest_read_state.py, ~48s
+                              # after the deleting run's own process exited), not twice; a
+                              # same-session self-clear finding is a separate, non-deterministic
+                              # mechanism, not a second reconnect confirmation. Resets every
+                              # notification-driven/bookkeeping field
+                              # (_reset_connection_state(), also shared by __init__ so the
+                              # literal initial-value list exists once) to its __init__ default
+                              # before reconnecting, per design principle 4 — a reconnect is a
+                              # gap where nothing was observed, so old values must not survive
+                              # it. playback_interrupted becomes a brand-new asyncio.Event
+                              # instance, not merely cleared. Leaves two things deliberately
+                              # untouched: the router's own buffered event state (every write's
+                              # dual-check arms fresh before its own request, so a stale
+                              # buffered value is never surfaced) and the resulting
+                              # 14-vs-7 redundant subscribe sends per reconnect (harmless,
+                              # bounded, not worth reaching into RestEventRouter's private
+                              # state for). No internal locking — concurrent use during a
+                              # reconnect is undefined, a genuinely new hazard flagged loudly
+                              # in the docstring. Not yet real-hardware-run —
+                              # examples/rest_reconnect_after_delete.py is its verification
+                              # script. See docs/rest/session.md's "Connection lifecycle"
+                              # section.
     mapping.py                 # Codec name derivation between the BLE profile's vocabulary
                               # and REST's own spelling — confirmed strings always win
                               # (design principle 1); this is a fallback seed only.
@@ -973,6 +1001,16 @@ examples/
                             # same day, confirmed the fix: 3/3 clips deleted, 0 failed —
                             # delete_clips() is now real-hardware-confirmed end to end. See
                             # docs/rest/session.md's Phase 13 section.
+  rest_reconnect_after_delete.py  # Phase 14 — RestCameraSession.reconnect().
+                            # Self-contained like rest_delete_clip.py: records and deletes one
+                            # disposable clip, then calls reconnect() on the same session
+                            # object and confirms id(session) is unchanged (the continuity
+                            # claim reconnect() exists to make) and clips()/storage_state()
+                            # are accurate afterward. Not yet real-hardware-run — this
+                            # script's first successful run is that confirmation, and the
+                            # first time this codebase will have exercised an in-process,
+                            # same-object reconnect at all. See docs/rest/session.md's
+                            # "Connection lifecycle" section.
   playback.py               # (planned)
 
 tests/

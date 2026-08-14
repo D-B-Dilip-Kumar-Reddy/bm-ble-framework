@@ -1814,6 +1814,12 @@ class FakeAiohttpSession:
     def __init__(self, *, ws_connect_raises: Exception | None = None):
         self.responses: dict[str, FakeResponse] = {}
         self.ws = FakeWebSocket()
+        # Every ws_connect() call gets its own FakeWebSocket, so a test that
+        # triggers a reconnect (RestCameraSession.reconnect(), Phase 14) can
+        # tell the pre- and post-reconnect sockets apart. `self.ws` always
+        # points at the latest — existing single-connect tests are
+        # unaffected, since they never look past that one attribute.
+        self.ws_connections: list[FakeWebSocket] = []
         self.requests: list[tuple[str, str]] = []
         self.closed = False
         self.ws_connect_raises = ws_connect_raises
@@ -1828,6 +1834,8 @@ class FakeAiohttpSession:
     async def ws_connect(self, url: str, timeout=None):
         if self.ws_connect_raises is not None:
             raise self.ws_connect_raises
+        self.ws = FakeWebSocket()
+        self.ws_connections.append(self.ws)
         return self.ws
 
     async def close(self) -> None:
@@ -1974,6 +1982,124 @@ class TestConnectionLifecycle:
             )
             await asyncio.sleep(0.05)
             assert session.is_recording is True
+
+    @pytest.mark.asyncio
+    async def test_reconnect_rebuilds_transport_on_same_object(self):
+        """reconnect() (Phase 14) tears down and rebuilds the transport on
+        the *same* RestCameraSession object — the whole point being that a
+        caller never has to swap which object it holds."""
+        fake_session = FakeAiohttpSession()
+        session = RestCameraSession("cam.local", MODEL_KEY, FIRMWARE, session=fake_session)
+
+        async with session:
+            first_ws = fake_session.ws
+            first_client = session._client
+
+            await session.reconnect()
+
+            assert len(fake_session.ws_connections) == 2
+            assert fake_session.ws_connections[0] is first_ws
+            assert fake_session.ws_connections[1] is not first_ws
+            assert first_ws.closed is True
+            assert fake_session.ws.closed is False
+            assert session._client is not first_client
+
+    @pytest.mark.asyncio
+    async def test_reconnect_reuses_injected_session_without_closing_it(self):
+        fake_session = FakeAiohttpSession()
+        session = RestCameraSession("cam.local", MODEL_KEY, FIRMWARE, session=fake_session)
+
+        async with session:
+            await session.reconnect()
+
+            assert session._session is fake_session
+            assert fake_session.closed is False
+
+    @pytest.mark.asyncio
+    async def test_reconnect_replaces_owned_session(self, monkeypatch):
+        """No `session=` injected, so RestCameraSession owns a real
+        aiohttp.ClientSession — reconnect() must close the old one and
+        open a fresh one, mirroring
+        test_owned_session_closed_when_connect_fails's monkeypatch
+        pattern (router network calls stubbed out; only session
+        ownership is under test here)."""
+        session = RestCameraSession("cam.local", MODEL_KEY, FIRMWARE)
+
+        async def noop(*args, **kwargs):
+            return None
+
+        monkeypatch.setattr(session._router, "connect", noop)
+        monkeypatch.setattr(session._router, "disconnect", noop)
+        monkeypatch.setattr(session._router, "subscribe", noop)
+
+        async with session:
+            first_owned_session = session._session
+            assert first_owned_session is not None
+
+            await session.reconnect()
+
+            assert first_owned_session.closed is True
+            assert session._session is not None
+            assert session._session is not first_owned_session
+
+    @pytest.mark.asyncio
+    async def test_reconnect_resets_camera_state_and_bookkeeping(self):
+        fake_session = FakeAiohttpSession()
+        session = RestCameraSession("cam.local", MODEL_KEY, FIRMWARE, session=fake_session)
+
+        async with session:
+            old_playback_event = session.playback_interrupted
+
+            session.is_recording = True
+            session.last_known_storage = StorageState(devices=(), active_device=None)
+            session._in_playback = True
+            session.last_known_play = True
+            session.last_known_stop = True
+            old_playback_event.set()
+            session._recording_stopped.set()
+            session._low_storage_min_record_time_s = 10.0
+            session._low_storage_min_space_bytes = 1000
+            session._low_storage_event.set()
+            session._playback_write_in_flight = True
+            session._transport_mode_write_in_flight = True
+            session._expected_speed = 2.0
+
+            await session.reconnect()
+
+            assert session.is_recording is None
+            assert session.last_known_storage is None
+            assert session._in_playback is False
+            assert session.last_known_play is None
+            assert session.last_known_stop is None
+            assert session.playback_interrupted is not old_playback_event
+            assert session.playback_interrupted.is_set() is False
+            assert session._recording_stopped.is_set() is False
+            assert session._low_storage_min_record_time_s is None
+            assert session._low_storage_min_space_bytes is None
+            assert session._low_storage_event.is_set() is False
+            assert session._playback_write_in_flight is False
+            assert session._transport_mode_write_in_flight is False
+            assert session._expected_speed is None
+
+    @pytest.mark.asyncio
+    async def test_reconnect_resubscribes_every_property(self):
+        fake_session = FakeAiohttpSession()
+        session = RestCameraSession("cam.local", MODEL_KEY, FIRMWARE, session=fake_session)
+
+        async with session:
+            await session.reconnect()
+
+            new_ws = fake_session.ws_connections[-1]
+            subscribed = {prop for message in new_ws.sent for prop in message["data"]["properties"]}
+            assert subscribed == {
+                RECORD_PROPERTY,
+                FORMAT_PROPERTY,
+                TRANSPORT_MODE_PROPERTY,
+                PLAYBACK_PROPERTY,
+                WORKINGSET_PROPERTY,
+                PLAY_PROPERTY,
+                STOP_PROPERTY,
+            }
 
 
 class TestEnterExitPlayback:

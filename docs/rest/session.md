@@ -233,6 +233,67 @@ they only `arm()`/`wait_for()` on a property this method already subscribed. See
 `set_camera_format`'s "Write verbs" entry below for the real-hardware defect that exposed
 `/system/format` never being subscribed at all in the first version of this method.
 
+### `reconnect()` — force a fresh connection without losing the session object (Phase 14)
+
+`GET /clips/list` (and `storage_state().active_device.clip_count`) can go stale within
+the same session immediately after `delete_clip()`/`delete_clips()` — real-hardware-
+confirmed, `POCKET_6K_G2 v8.6`, 2026-08-13/14 (`delete_clip()`'s own docstring/section
+has the full trail). The only mechanism confirmed to *reliably* clear it is a fresh
+reconnect — **confirmed exactly once**, via a genuinely separate process
+(`examples/rest_read_state.py`, run standalone roughly 48s after the deleting run's own
+process had already exited). A later run separately found the staleness can sometimes
+self-clear within the same session, unreconnected, in well under two seconds — one stale
+entry out of three, a different and non-deterministic mechanism, not a second
+confirmation of reconnecting itself. Until this method existed, "reconnect" meant
+discarding the whole `RestCameraSession` object and starting a new script/process —
+nothing in this repo had ever constructed a second session or re-entered one within a
+single process. `reconnect()` tears down and rebuilds the transport on the *same*
+object instead, so a caller never has to swap which reference it holds.
+
+**Not `/clips/list`-specific.** Any field this session tracks only from notifications
+reflects only what arrived on the connection about to be replaced. Design principle 4
+requires state to be updated only from a real observed notification, never assumed — a
+reconnect is, definitionally, a gap where this session observed nothing. `reconnect()`
+resets every field `_reset_connection_state()` owns to its `__init__` default *before*
+the new connection opens: `is_recording`, `last_known_storage`, `_in_playback`,
+`last_known_play`, `last_known_stop`, and a **brand-new** `playback_interrupted`
+`asyncio.Event` instance (not merely cleared) on `CameraState`, plus
+`_recording_stopped`, the low-storage arming trio, and the playback/transport-mode
+write-in-flight trio. Plain config (`host`/`scheme`/`port`/`profile`/the four timeouts)
+is untouched — none of it lives in `_reset_connection_state()`.
+
+**Mechanics**: `await self.__aexit__()` then `await self.__aenter__()` — reused
+verbatim, not duplicated. An injected (non-owned) session is preserved and reused
+exactly as the existing `_owns_session` contract above already dictates; only an owned
+session is closed and replaced. `RestEventRouter.connect()` already auto-resubscribes
+every property in its own `_subscribed` set on top of `__aenter__`'s own 7 explicit
+`subscribe()` calls — 14 WS subscribe sends per `reconnect()` instead of 7. Left as-is:
+harmless (a duplicate subscribe is a camera-side no-op) and bounded (`_subscribed` is a
+`set`, so it doesn't compound across repeated reconnects) — fixing it would mean
+reaching into the router's private `_subscribed` from `session.py`, a boundary this file
+has never crossed. `RestEventRouter`'s own buffered event state (`_latest`/`_seq`/
+`_armed_baseline`/`_armed_snapshot_value`) is also left untouched for the same
+reason it's harmless: every write method's dual-check calls `arm()` fresh, immediately
+before its own request, so a leftover pre-reconnect buffered value is only ever a
+discarded baseline, never surfaced to a caller directly.
+
+**Caveats**: a coroutine already blocked on the *old* `playback_interrupted` Event
+object (fetched before `reconnect()` was called) is never woken — re-fetch the property
+afterward rather than holding a reference across the call. `reconnect()` takes no lock
+and does not check `_playback_write_in_flight`/`_transport_mode_write_in_flight` before
+tearing down the transport — calling it concurrently with any other in-flight write/wait
+on the same session is undefined, the same caller-owns-sequencing discipline every write
+method here already relies on, but a genuinely new hazard: previously, reconnecting
+always meant a separate process, so nothing could ever race one.
+
+**Status: not yet real-hardware-run.** Unit-tested against a fake transport
+(`TestConnectionLifecycle` in `tests/unit/rest/test_rest_session.py`) — transport
+rebuild, injected-session reuse, owned-session replacement, full state reset, and
+resubscription all covered. `examples/rest_reconnect_after_delete.py` is the
+verification script: records and deletes one disposable clip, calls `reconnect()` on
+the same object, and confirms `id(session)` is unchanged and `clips()` is accurate
+afterward.
+
 ---
 
 ## Read verbs

@@ -466,46 +466,14 @@ class RestCameraSession:
         self._client: RestClient | None = None
         self._router = RestEventRouter(on_event=self._on_event)
 
-        # `CameraState` (Phase 9) — every notification-driven field this
-        # session tracks continuously rather than fetching on demand,
-        # updated only from a real WS propertyValueChanged event (design
-        # principle 4), never inferred from a request this session itself
-        # made. See state.py's own module docstring for the full rationale;
-        # the properties immediately below expose each field under its
-        # original attribute name, so nothing outside this class needs to
-        # know `self.state` exists at all.
-        self.state = CameraState()
-        self._recording_stopped = asyncio.Event()
-
-        # wait_for_low_storage() arms _low_storage_min_* and waits on
-        # _low_storage_event, which _on_event() sets when a pushed
-        # last_known_storage value crosses the currently armed threshold.
-        # Ephemeral per-call arming, not camera state — stays here, not on
-        # CameraState.
-        self._low_storage_min_record_time_s: float | None = None
-        self._low_storage_min_space_bytes: int | None = None
-        self._low_storage_event = asyncio.Event()
-
-        # `_playback_write_in_flight`/`_transport_mode_write_in_flight` are
-        # the arm-adjacent guards _put_playback()/_set_transport_mode() hold
-        # True for the duration of their own dual-check — and,
-        # real-hardware-confirmed (POCKET_6K_G2 v8.6, 2026-08-05), _on_event
-        # checks *both* flags in *both* interrupt branches, not just the one
-        # matching a write's own property, since leaving "Output" mode was
-        # found to also push a side-effect PLAYBACK_PROPERTY speed=0 event a
-        # single-flag guard missed. See _on_event's own docstring for the
-        # full finding. `_expected_speed` is the speed value this session's
-        # own last confirmed enter_playback()/shuttle()/play()/pause() call
-        # actually set — _on_event flags any pushed speed that differs from
-        # it (not only a drop to 0), so a camera-initiated speed change that
-        # lands somewhere other than 0 is caught too. Set to 0.0 by
-        # enter_playback() (the camera opens paused) and updated by
-        # _put_playback() after each confirmed speed-changing write. All
-        # three are this session's own write-tracking bookkeeping, not
-        # camera-reported state — stay here, not on CameraState.
-        self._playback_write_in_flight = False
-        self._transport_mode_write_in_flight = False
-        self._expected_speed: float | None = None
+        # Every notification-driven/bookkeeping field this session tracks
+        # only from what's been observed on the current connection — never
+        # touched by connect()/disconnect() themselves, and never plain
+        # config. Initial values (and the full per-field rationale) live in
+        # _reset_connection_state(), shared by __init__ (this call) and
+        # reconnect() (Phase 14 — every connection after the first), so the
+        # literal initial-value list exists in exactly one place.
+        self._reset_connection_state()
 
     @property
     def base_url(self) -> str:
@@ -564,6 +532,56 @@ class RestCameraSession:
         `default_factory=asyncio.Event` gives every session its own Event
         instance; `enter_playback()` clears it, `_on_event` sets it."""
         return self.state.playback_interrupted
+
+    def _reset_connection_state(self) -> None:
+        """Every field `__init__` and `reconnect()` (Phase 14) share the
+        exact same initial value for — connection-scoped observation and
+        bookkeeping, never plain config (`host`/`profile`/the four
+        timeouts, none of which live here). Moved here unchanged from
+        `__init__` so `reconnect()` can reuse the identical literals
+        without duplicating this comment block.
+
+        `CameraState` — every notification-driven field this session
+        tracks continuously rather than fetching on demand, updated only
+        from a real WS `propertyValueChanged` event (design principle 4),
+        never inferred from a request this session itself made. See
+        `state.py`'s own module docstring for the full rationale; the
+        properties above expose each field under its original attribute
+        name, so nothing outside this class needs to know `self.state`
+        exists at all.
+        """
+        self.state = CameraState()
+        self._recording_stopped = asyncio.Event()
+
+        # wait_for_low_storage() arms _low_storage_min_* and waits on
+        # _low_storage_event, which _on_event() sets when a pushed
+        # last_known_storage value crosses the currently armed threshold.
+        # Ephemeral per-call arming, not camera state — stays here, not on
+        # CameraState.
+        self._low_storage_min_record_time_s: float | None = None
+        self._low_storage_min_space_bytes: int | None = None
+        self._low_storage_event = asyncio.Event()
+
+        # `_playback_write_in_flight`/`_transport_mode_write_in_flight` are
+        # the arm-adjacent guards _put_playback()/_set_transport_mode() hold
+        # True for the duration of their own dual-check — and,
+        # real-hardware-confirmed (POCKET_6K_G2 v8.6, 2026-08-05), _on_event
+        # checks *both* flags in *both* interrupt branches, not just the one
+        # matching a write's own property, since leaving "Output" mode was
+        # found to also push a side-effect PLAYBACK_PROPERTY speed=0 event a
+        # single-flag guard missed. See _on_event's own docstring for the
+        # full finding. `_expected_speed` is the speed value this session's
+        # own last confirmed enter_playback()/shuttle()/play()/pause() call
+        # actually set — _on_event flags any pushed speed that differs from
+        # it (not only a drop to 0), so a camera-initiated speed change that
+        # lands somewhere other than 0 is caught too. Set to 0.0 by
+        # enter_playback() (the camera opens paused) and updated by
+        # _put_playback() after each confirmed speed-changing write. All
+        # three are this session's own write-tracking bookkeeping, not
+        # camera-reported state — stay here, not on CameraState.
+        self._playback_write_in_flight = False
+        self._transport_mode_write_in_flight = False
+        self._expected_speed: float | None = None
 
     async def __aenter__(self) -> RestCameraSession:
         """Real-hardware-confirmed failure mode this guards against
@@ -654,6 +672,106 @@ class RestCameraSession:
             self._session = None
         self._client = None
         self._log.info("[%s] Disconnected", self.host)
+
+    async def reconnect(self) -> None:
+        """Force a fresh REST/WS connection on this same `RestCameraSession`
+        object (Phase 14) — tear down the current transport and rebuild
+        it, without a caller ever constructing or swapping to a second
+        session.
+
+        WHY THIS EXISTS: `GET /clips/list` (and
+        `storage_state().active_device.clip_count`) can go stale within
+        the same session immediately after `delete_clip()`/
+        `delete_clips()` — real-hardware-confirmed, `POCKET_6K_G2 v8.6`,
+        2026-08-13/14 (see `delete_clip()`'s own docstring for the full
+        trail). The only mechanism confirmed to *reliably* clear it is a
+        fresh reconnect — confirmed exactly **once**, via a genuinely
+        separate process (`examples/rest_read_state.py`, run standalone
+        roughly 48s after the deleting run's own process had already
+        exited — not twice, and not via this method). A later run also
+        found the staleness can sometimes self-clear within the same
+        session, unreconnected, in well under two seconds — one stale
+        entry out of three, a different and non-deterministic mechanism,
+        not something a caller can wait on with any confidence. Until
+        this method existed, "reconnect" meant discarding the whole
+        `RestCameraSession` object and starting a new script/process —
+        never exercised any other way anywhere in this repo.
+
+        NOT `/clips/list`-specific: any field this session tracks only
+        from notifications reflects only what arrived on the connection
+        that is about to be replaced. Design principle 4 requires state
+        to be updated only from a real observed notification, never
+        assumed — a reconnect is, definitionally, a gap where this
+        session observed nothing. Carrying pre-gap values across that gap
+        would silently break the same discipline that built them, so
+        every field `_reset_connection_state()` owns — `is_recording`,
+        `last_known_storage`, `_in_playback`, `last_known_play`,
+        `last_known_stop`, `playback_interrupted` (all on `CameraState`),
+        plus `_recording_stopped`, the low-storage arming trio, and the
+        playback/transport-mode write-in-flight trio — resets to its
+        `__init__` default *before* the new connection opens, so a
+        concurrent reader sees "unknown," never a stale value dressed up
+        as current. Plain config (`host`/`scheme`/`port`/`profile`/
+        `timeout_s`/`ws_timeout_s`/`verify_timeout_s`/
+        `stop_verify_timeout_s`) is untouched — none of it lives in
+        `_reset_connection_state()`.
+
+        MECHANICS: `await self.__aexit__()` then `await self.__aenter__()`
+        — reused verbatim, not duplicated. An injected (non-owned)
+        `aiohttp.ClientSession` is preserved and reused exactly as
+        `__aenter__`'s/`__aexit__`'s existing `_owns_session` contract
+        already dictates; only an owned session is closed and replaced.
+        `RestEventRouter.connect()` already auto-resubscribes every
+        property in its own `_subscribed` set on top of `__aenter__`'s
+        own 7 explicit `subscribe()` calls — 14 WS subscribe sends per
+        `reconnect()` instead of 7. Harmless (a duplicate subscribe is a
+        camera-side no-op) and bounded (does not compound across repeated
+        reconnects — `_subscribed` is a `set`) — left as-is rather than
+        reaching into the router's private `_subscribed` from here.
+        `RestEventRouter`'s own buffered event state (`_latest`/`_seq`/
+        `_armed_baseline`/`_armed_snapshot_value`) is also left untouched
+        for the same reason it's harmless: every write method's dual-check
+        calls `arm()` fresh, immediately before its own request, so a
+        leftover pre-reconnect buffered value is only ever a discarded
+        baseline, never surfaced to a caller directly.
+
+        CAVEATS:
+        - `playback_interrupted` becomes a brand-new `asyncio.Event`
+          instance (`CameraState()`'s own `default_factory`), not merely
+          cleared — a coroutine already blocked on the *old* Event object
+          (fetched from `session.playback_interrupted` before this call)
+          is not woken and never will be. Re-fetch the property after
+          `reconnect()` returns rather than holding a reference across it.
+        - This method takes no lock and does not check
+          `_playback_write_in_flight`/`_transport_mode_write_in_flight`
+          before tearing down the transport. Calling it concurrently with
+          any other in-flight write/wait on this same session is
+          undefined — the caller must serialize its own use of the
+          session around a `reconnect()` call, the same "no internal
+          locking, caller owns sequencing" discipline every write method
+          here already relies on. This is a genuinely new hazard:
+          previously, reconnecting always meant a separate process, so
+          nothing could ever race one.
+        - Safe to call before the first `__aenter__` — behaves like a
+          plain first connect.
+
+        STATUS: not yet real-hardware-run. Nothing in this repo has ever
+        constructed a second `RestCameraSession` or re-entered one within
+        a single process before this method — every existing example
+        script performs exactly one `async with RestCameraSession(...) as
+        session:` block. This method's mechanics were traced by hand
+        against `__aenter__`'s/`__aexit__`'s/`RestEventRouter.connect()`'s
+        actual behavior and covered by unit tests against a fake
+        transport, but the "reconnect clears `/clips/list` staleness"
+        claim itself remains only as strong as the separate-process
+        evidence above — confirming it through this exact method, in
+        process, on real hardware, is this method's own first
+        confirmation to close. See
+        `examples/rest_reconnect_after_delete.py`.
+        """
+        await self.__aexit__()
+        self._reset_connection_state()
+        await self.__aenter__()
 
     def _on_event(self, prop: str, value: Any) -> None:
         """Updates `is_recording`, `last_known_storage`,
