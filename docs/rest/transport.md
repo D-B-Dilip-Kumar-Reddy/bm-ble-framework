@@ -1464,6 +1464,31 @@ runs 3-5 read as a plain stop (`last_known_stop=True` at readback in runs 4-5) �
 has no real-hardware run of its own; see `docs/rest/session.md`'s `playback_interrupted`
 section for the full five-run trail.
 
+### `tools/rest/verify_confirm_new_clip_edge_cases.py`
+
+Real-hardware verification for four of the five defensive branches in `confirm_new_clip()`
+(Phase 9, `docs/rest/session.md`'s `confirm_new_clip()` section) that PR #17 named as
+deferred — all already covered by `TestConfirmNewClip` against a fake client, never against
+a real camera. Four tests, each deliberately engineering the edge case rather than waiting
+for it to happen by accident: (1) zero new clips — no recording, calls `confirm_new_clip()`
+against a snapshot with nothing recorded since; (2) `bytes_written=None` when `storage_before`
+is omitted; (3) `bytes_written=None` when a hand-built `StorageState(devices=(),
+active_device=None)` is passed as `storage_before` — legitimate since `confirm_new_clip()`
+only inspects the shape of whatever it's given, never re-validates it was freshly fetched;
+(4) more than one new clip — two real recordings sharing a single before-snapshot taken
+before either one, on purpose. Self-contained, no typed-confirmation prompt, the same
+`rest_delete_clip.py`/`rest_delete_clips_bulk.py` reasoning: every clip this tool touches is
+one it recorded itself in this exact run, cleaned up via `delete_clip()`/`delete_clips()`
+afterward.
+
+**Deliberately not attempted**: the fifth branch — `bytes_written` staying `None` because the
+*live* second `storage_state()` call `confirm_new_clip()` makes internally finds no active
+device. Forcing this would need the SD card to genuinely report no active device at the exact
+moment right after a clip was written; pulling the card to simulate it would very likely make
+the *first* `clips()` call (which runs before this branch is ever reached) fail with a 404 ->
+`BMDStorageError` instead, never reaching this branch at all. Left accepted and documented as
+real-hardware-unexercised rather than chased. Not yet run.
+
 ---
 
 ## Security note

@@ -728,7 +728,28 @@ tools/
                             # still's exact path has been read off a listing the way this
                             # clip's was) — plausibly the same mechanism, not yet proven. See
                             # docs/rest/transport.md's "Mounts DELETE investigation —
-                            # CONFIRMED" section for the full write-up
+                            # CONFIRMED" section for the full write-up. verify_confirm_new_clip_edge_cases.py
+                            # (real-hardware verification for 4 of the 5 defensive branches in
+                            # confirm_new_clip() (Phase 9) that PR #17 named as deferred — all
+                            # already unit-tested against a fake client, never against a real
+                            # camera. Deliberately engineers each edge case rather than waiting
+                            # for it by accident: zero new clips (no recording — a snapshot with
+                            # nothing recorded since), bytes_written=None with storage_before
+                            # omitted, bytes_written=None with a hand-built
+                            # StorageState(active_device=None) passed as storage_before
+                            # (legitimate — confirm_new_clip() only inspects the shape of what
+                            # it's given, never re-validates it was freshly fetched), and more
+                            # than one new clip (two real recordings sharing one before-snapshot,
+                            # on purpose). Self-contained, no confirmation prompt — every clip
+                            # touched is one recorded in this exact run, cleaned up via
+                            # delete_clip()/delete_clips() afterward. Deliberately does not
+                            # attempt the fifth branch (bytes_written=None because the live
+                            # second storage_state() call finds no active device) — forcing it
+                            # would need the SD card to report no active device at the exact
+                            # moment right after a clip was written, and pulling the card would
+                            # very likely fail the first clips() call instead of ever reaching
+                            # this branch; left accepted and documented rather than chased. Not
+                            # yet run. See docs/rest/transport.md.
   captures/                 # Runtime output of sniffers/, control/, and rest/ scripts (gitignored)
 
 Tools are grouped by folder according to what kind of thing they do — read-only
