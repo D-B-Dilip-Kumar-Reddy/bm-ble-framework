@@ -1775,10 +1775,17 @@ The mirror-image capability of Phase 11's deletion: copy a real clip or still of
 already use, so it inherits their single-confirmed-sample caveat about the real path shape
 unchanged (see `delete_clip()`'s docstring).
 
-**Status: brand new this session, unit-tested against a fake client only — not yet run against
-real hardware.** `examples/rest_download_clip.py` and `examples/rest_download_still.py` are the
-real-hardware verification scripts; their first successful runs are what closes this gap, the
-same status every capability in this codebase carries before its first real-hardware pass.
+**Status: `download_still()` real-hardware-confirmed, `POCKET_6K_G2 v8.6`, 2026-08-14 —
+`download_clip()` not yet run.** `examples/rest_download_still.py`'s first run
+(`examples/capture_photo.py`'s BLE-trigger + REST-confirm composition, then
+`guess_new_still_path()`, then the actual download) succeeded end to end: capture confirmed,
+guess matched (`A002_08141103_S010.braw`, trigger at PC wall-clock `11:04:17` — the guess's
+`minute_offsets` window found it on the first try, unlike the clock-skew failure `rest_delete_still.py`
+hit on 2026-08-13; the camera's clock now agrees with the operator's PC, closing that finding's
+practical impact for this session), and `download_still()` wrote `951400` bytes to
+`examples/downloads/A002_08141103_S010.braw` in well under a second (~106 MB/s over USB) with no
+`Content-Length` mismatch. `examples/rest_download_clip.py` is still outstanding — see its own
+entry below.
 
 ### `RestClient.download(path, dest, *, api_prefixed=False, chunk_size=1MiB, stall_timeout_s=30.0)` → `int`
 
@@ -1833,6 +1840,13 @@ directly rather than resolving one, for the identical reason `delete_still()` do
 directory `500`s unconditionally on listing, so there is no `clips()`-equivalent to resolve
 against. Obtain `path` the same way `delete_still()`'s callers do — `guess_new_still_path()` or
 manual investigation. Same `dest_dir`/`overwrite` contract as `download_clip()`.
+
+**Real-hardware-confirmed, `POCKET_6K_G2 v8.6`, 2026-08-14**, via `examples/rest_download_still.py`:
+a real photo triggered over BLE, confirmed over REST, its path resolved by
+`guess_new_still_path()`, then downloaded — `951400` bytes written to a fresh local file, no
+`Content-Length` mismatch, `overwrite=True` path exercised (the example always passes it, so the
+`FileExistsError` branch specifically remains real-hardware-unexercised, though it's
+straightforward and unit-tested).
 
 ---
 

@@ -498,10 +498,13 @@ src/bmd_camera/
                               # RestClient.download()'s own Content-Length integrity check, not
                               # a camera-state dual-check (this is a read + local write, not a
                               # camera write). dest_dir must already exist; FileExistsError
-                              # without overwrite=True, checked before any network request. Not
-                              # yet real-hardware-run — examples/rest_download_clip.py and
-                              # rest_download_still.py are the verification scripts. See
-                              # docs/rest/session.md's Phase 12 section.
+                              # without overwrite=True, checked before any network request.
+                              # download_still() real-hardware-confirmed, POCKET_6K_G2 v8.6,
+                              # 2026-08-14, via rest_download_still.py: a real photo triggered,
+                              # confirmed, path guessed, then downloaded — 951400 bytes, no
+                              # Content-Length mismatch. download_clip() still not yet
+                              # real-hardware-run — examples/rest_download_clip.py is its
+                              # verification script. See docs/rest/session.md's Phase 12 section.
     mapping.py                 # Codec name derivation between the BLE profile's vocabulary
                               # and REST's own spelling — confirmed strings always win
                               # (design principle 1); this is a fallback seed only.
@@ -904,8 +907,13 @@ examples/
                             # skew failure mode for guess_new_still_path() (rest/media.py's
                             # module docstring); if the guess returns None, the fix is the same
                             # — obtain the real filename by another means and call
-                            # download_still() directly. Not yet real-hardware-run. See
-                            # docs/rest/session.md's Phase 12 section.
+                            # download_still() directly. Real-hardware-confirmed, POCKET_6K_G2
+                            # v8.6, 2026-08-14: full sequence succeeded first try — capture
+                            # confirmed, guess matched immediately (the camera's clock now
+                            # agrees with the operator's PC, so the clock-skew failure mode
+                            # above did not recur this run), 951400 bytes downloaded with no
+                            # Content-Length mismatch. See docs/rest/session.md's Phase 12
+                            # section.
   playback.py               # (planned)
 
 tests/
