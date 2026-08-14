@@ -502,9 +502,10 @@ src/bmd_camera/
                               # download_still() real-hardware-confirmed, POCKET_6K_G2 v8.6,
                               # 2026-08-14, via rest_download_still.py: a real photo triggered,
                               # confirmed, path guessed, then downloaded — 951400 bytes, no
-                              # Content-Length mismatch. download_clip() still not yet
-                              # real-hardware-run — examples/rest_download_clip.py is its
-                              # verification script. See docs/rest/session.md's Phase 12 section.
+                              # Content-Length mismatch. download_clip() also real-hardware-
+                              # confirmed, POCKET_6K_G2 v8.6, 2026-08-14, via
+                              # rest_download_clip.py: worked with no defects found. See
+                              # docs/rest/session.md's Phase 12 section.
     mapping.py                 # Codec name derivation between the BLE profile's vocabulary
                               # and REST's own spelling — confirmed strings always win
                               # (design principle 1); this is a fallback seed only.
@@ -894,10 +895,9 @@ examples/
                             # directory rather than recording and deleting a disposable one —
                             # there is nothing to protect against here the way
                             # rest_delete_clip.py's self-recorded-clip design protects against
-                            # deleting real footage. Not yet real-hardware-run — this script's
-                            # first successful run is that confirmation, the same status every
-                            # capability in this codebase carries before its first real-hardware
-                            # pass. See docs/rest/session.md's Phase 12 section.
+                            # deleting real footage. Real-hardware-confirmed, POCKET_6K_G2
+                            # v8.6, 2026-08-14: worked with no defects found. See
+                            # docs/rest/session.md's Phase 12 section.
   rest_download_still.py    # Phase 12 — RestCameraSession.download_still(). Mirrors
                             # rest_delete_still.py's BLE-trigger + REST-confirm + guess
                             # composition exactly, swapping the final destructive

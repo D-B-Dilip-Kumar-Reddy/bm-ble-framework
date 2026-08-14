@@ -1775,8 +1775,8 @@ The mirror-image capability of Phase 11's deletion: copy a real clip or still of
 already use, so it inherits their single-confirmed-sample caveat about the real path shape
 unchanged (see `delete_clip()`'s docstring).
 
-**Status: `download_still()` real-hardware-confirmed, `POCKET_6K_G2 v8.6`, 2026-08-14 —
-`download_clip()` not yet run.** `examples/rest_download_still.py`'s first run
+**Status: both `download_clip()` and `download_still()` real-hardware-confirmed,
+`POCKET_6K_G2 v8.6`, 2026-08-14.** `examples/rest_download_still.py`'s first run
 (`examples/capture_photo.py`'s BLE-trigger + REST-confirm composition, then
 `guess_new_still_path()`, then the actual download) succeeded end to end: capture confirmed,
 guess matched (`A002_08141103_S010.braw`, trigger at PC wall-clock `11:04:17` — the guess's
@@ -1784,8 +1784,8 @@ guess matched (`A002_08141103_S010.braw`, trigger at PC wall-clock `11:04:17` �
 hit on 2026-08-13; the camera's clock now agrees with the operator's PC, closing that finding's
 practical impact for this session), and `download_still()` wrote `951400` bytes to
 `examples/downloads/A002_08141103_S010.braw` in well under a second (~106 MB/s over USB) with no
-`Content-Length` mismatch. `examples/rest_download_clip.py` is still outstanding — see its own
-entry below.
+`Content-Length` mismatch. `examples/rest_download_clip.py`'s first run also succeeded — reported
+by the operator as working with no defects found; see `download_clip()`'s own entry below.
 
 ### `RestClient.download(path, dest, *, api_prefixed=False, chunk_size=1MiB, stall_timeout_s=30.0)` → `int`
 
@@ -1832,6 +1832,9 @@ This is a read from the camera plus a local write, not a camera-state write, so 
 3's dual-check discipline (echo/event primary, readback secondary) doesn't apply the same way it
 does to `record_start`/`set_camera_format`. `RestClient.download()`'s own `Content-Length`
 integrity check is this operation's verification.
+
+**Real-hardware-confirmed, `POCKET_6K_G2 v8.6`, 2026-08-14**, via `examples/rest_download_clip.py`:
+worked with no defects found.
 
 ### `download_still(path, dest_dir, *, overwrite=False)` → `Path`
 
