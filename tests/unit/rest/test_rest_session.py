@@ -36,6 +36,7 @@ from bmd_camera.rest.session import (
     TIMELINE_PATH,
     TRANSPORT_MODE_PROPERTY,
     WORKINGSET_PROPERTY,
+    BulkDeleteResult,
     Clip,
     Format,
     RestCameraSession,
@@ -3633,3 +3634,143 @@ class TestDownloadStill:
         assert dest.read_bytes() == DOWNLOAD_STILL_CONTENT
         assert client.download_calls == [(DOWNLOAD_STILL_PATH, str(dest))]
         assert client.api_prefixed_calls[DOWNLOAD_STILL_PATH] is False
+
+
+BULK_DELETE_MOUNT_NAME = "A001-sd1"
+
+
+def _bulk_delete_client(*clip_unique_ids: int, exists_before: dict[int, bool] | None = None):
+    """Everything delete_clips() needs for a multi-clip batch — clips()
+    reporting every requested id, storage_state()/mount_names() so
+    resolve_active_mount() resolves unambiguously, and a per-path
+    exists() that toggles True (before DELETE) -> False (after), the same
+    "confirmed deleted" shape TestDeleteClip's own full-flow tests use,
+    applied independently per clip's target path. `exists_before[cid] =
+    False` simulates that clip's file never having existed at all (stays
+    False on every call), for testing a single clip's pre-check failure
+    without affecting the others in the same batch."""
+    exists_before = exists_before or {}
+    call_counts: dict[str, int] = {}
+
+    async def exists(path: str, *, api_prefixed: bool = True) -> bool:
+        call_counts[path] = call_counts.get(path, 0) + 1
+        cid = int(path.rsplit("_", 1)[-1].removesuffix(".braw"))
+        if not exists_before.get(cid, True):
+            return False
+        return call_counts[path] == 1  # True before DELETE, False after
+
+    client = FakeRestClient(
+        {
+            "/clips/list": _clip_list_body(*clip_unique_ids),
+            "/media/workingset": {
+                "size": 1,
+                "workingset": [
+                    {
+                        "activeDisk": True,
+                        "clipCount": len(clip_unique_ids),
+                        "deviceName": "sd0",
+                        "index": 0,
+                        "remainingRecordTime": 100,
+                        "remainingSpace": 123,
+                        "totalSpace": 456,
+                        "volume": "A001",
+                    }
+                ],
+            },
+            "/media/active": {"deviceName": "sd0", "workingsetIndex": 0},
+            "/mounts/": [{"name": BULK_DELETE_MOUNT_NAME, "type": "directory"}],
+        },
+    )
+    client.exists = exists
+    return client
+
+
+class TestDeleteClips:
+    """delete_clips() — built entirely on delete_clip(), called once per
+    id. Not yet real-hardware-run; unit-tested against a fake client only."""
+
+    @pytest.mark.asyncio
+    async def test_raises_value_error_when_confirm_is_false(self):
+        client = _bulk_delete_client(1, 2)
+        session = make_session(make_profile(), client=client)
+
+        with pytest.raises(ValueError, match="confirm=True"):
+            await session.delete_clips([1, 2], confirm=False)
+
+        assert client.calls == []
+        assert client.delete_calls == []
+
+    @pytest.mark.asyncio
+    async def test_raises_value_error_when_no_ids(self):
+        client = _bulk_delete_client(1, 2)
+        session = make_session(make_profile(), client=client)
+
+        with pytest.raises(ValueError, match="no clip_unique_ids"):
+            await session.delete_clips([], confirm=True)
+
+        assert client.delete_calls == []
+
+    @pytest.mark.asyncio
+    async def test_deduplicates_ids(self):
+        client = _bulk_delete_client(1, 2)
+        session = make_session(make_profile(), client=client)
+
+        result = await session.delete_clips([1, 1, 2], confirm=True)
+
+        assert len(result.deleted) == 2
+        assert {c.clip_unique_id for c in result.deleted} == {1, 2}
+        assert client.delete_calls == [
+            f"/mounts/{BULK_DELETE_MOUNT_NAME}/clip_1.braw",
+            f"/mounts/{BULK_DELETE_MOUNT_NAME}/clip_2.braw",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_raises_value_error_and_deletes_nothing_when_an_id_is_missing(self):
+        client = _bulk_delete_client(1)  # only clip_unique_id=1 exists
+        session = make_session(make_profile(), client=client)
+
+        with pytest.raises(ValueError, match=r"\[2\]"):
+            await session.delete_clips([1, 2], confirm=True)
+
+        assert client.delete_calls == []
+
+    @pytest.mark.asyncio
+    async def test_full_flow_success_all_deleted(self):
+        client = _bulk_delete_client(1, 2, 3)
+        session = make_session(make_profile(), client=client)
+
+        result = await session.delete_clips([1, 2, 3], confirm=True)
+
+        assert isinstance(result, BulkDeleteResult)
+        assert [c.clip_unique_id for c in result.deleted] == [1, 2, 3]
+        assert result.failed == ()
+        assert len(client.delete_calls) == 3
+
+    @pytest.mark.asyncio
+    async def test_partial_failure_continues_and_is_reported(self):
+        client = _bulk_delete_client(1, 2, 3, exists_before={2: False})
+        session = make_session(make_profile(), client=client)
+
+        result = await session.delete_clips([1, 2, 3], confirm=True)
+
+        assert [c.clip_unique_id for c in result.deleted] == [1, 3]
+        assert len(result.failed) == 1
+        failed_id, failed_exc = result.failed[0]
+        assert failed_id == 2
+        assert isinstance(failed_exc, BMDVerificationError)
+        # clip 3 must still be attempted even though clip 2 failed first.
+        assert client.delete_calls == [
+            f"/mounts/{BULK_DELETE_MOUNT_NAME}/clip_1.braw",
+            f"/mounts/{BULK_DELETE_MOUNT_NAME}/clip_3.braw",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_logs_error_for_each_failed_clip(self, caplog):
+        client = _bulk_delete_client(1, 2, exists_before={2: False})
+        session = make_session(make_profile(), client=client)
+
+        with caplog.at_level(logging.ERROR):
+            await session.delete_clips([1, 2], confirm=True)
+
+        messages = [record.message for record in caplog.records]
+        assert any("clip_unique_id=2" in m and "failed" in m for m in messages)

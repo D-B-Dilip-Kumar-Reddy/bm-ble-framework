@@ -506,6 +506,22 @@ src/bmd_camera/
                               # confirmed, POCKET_6K_G2 v8.6, 2026-08-14, via
                               # rest_download_clip.py: worked with no defects found. See
                               # docs/rest/session.md's Phase 12 section.
+                              # delete_clips(clip_unique_ids, *, confirm) -> BulkDeleteResult
+                              # (Phase 13) — bulk clip deletion, built entirely on delete_clip()
+                              # called once per id; adds no new HTTP surface. Validated against
+                              # a single fresh clips() call before any DELETE is sent — a bad id
+                              # anywhere in the batch raises ValueError and deletes nothing, the
+                              # same "resolve first, then act" discipline delete_clip() itself
+                              # uses. After validation, one clip's failure does not stop the
+                              # batch — unlike every single-target write in this codebase,
+                              # partial success is a real, expected outcome here, not
+                              # exceptional: each failure is caught, logged at ERROR, and
+                              # recorded in BulkDeleteResult.failed rather than raised.
+                              # clip_unique_ids is de-duplicated (order-preserving) first. No
+                              # bulk delete_still() — stills have no clips()-equivalent listing
+                              # to validate a batch against. Not yet real-hardware-run —
+                              # examples/rest_delete_clips_bulk.py is its verification script.
+                              # See docs/rest/session.md's Phase 13 section.
     mapping.py                 # Codec name derivation between the BLE profile's vocabulary
                               # and REST's own spelling — confirmed strings always win
                               # (design principle 1); this is a fallback seed only.
@@ -914,6 +930,15 @@ examples/
                             # above did not recur this run), 951400 bytes downloaded with no
                             # Content-Length mismatch. See docs/rest/session.md's Phase 12
                             # section.
+  rest_delete_clips_bulk.py # Phase 13 — RestCameraSession.delete_clips(). Self-contained,
+                            # like rest_delete_clip.py: records CLIP_COUNT (default 3) real
+                            # disposable throwaway clips one at a time (record_start/
+                            # wait_while_recording/record_stop/confirm_new_clip, per clip),
+                            # then bulk-deletes all of them in a single delete_clips() call —
+                            # no typed-confirmation prompt needed, since whatever it deletes is
+                            # guaranteed to be clips it just recorded itself in this exact run.
+                            # Not yet real-hardware-run — this script's first successful run is
+                            # that confirmation. See docs/rest/session.md's Phase 13 section.
   playback.py               # (planned)
 
 tests/

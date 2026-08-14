@@ -68,6 +68,7 @@ import asyncio
 import logging
 import re
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -184,6 +185,23 @@ class RecordingResult:
 
     clip: Clip
     bytes_written: int | None
+
+
+@dataclass(frozen=True)
+class BulkDeleteResult:
+    """`delete_clips()`'s return value (Phase 13). A bulk operation's
+    partial-success outcome is a real, expected state, not exceptional —
+    unlike a single `delete_clip()`/`delete_still()` call, which is
+    binary (confirmed or raised), some clips in a batch can legitimately
+    fail (already gone, a transient network hiccup) while others succeed.
+    `delete_clips()` itself never raises once its up-front validation
+    passes; a caller that wants "raise if anything failed" checks
+    `.failed` and raises itself. `failed` entries are `(clip_unique_id,
+    exception)` pairs — the raw exception, not just its message, so a
+    caller with reason to care can inspect the real failure type."""
+
+    deleted: tuple[Clip, ...]
+    failed: tuple[tuple[int, Exception], ...]
 
 
 @dataclass(frozen=True)
@@ -2685,3 +2703,95 @@ class RestCameraSession:
         written = await self._rest_client.download(path, dest, api_prefixed=False)
         self._log.info("[%s] Still %s downloaded: %d bytes -> %s", self.host, path, written, dest)
         return dest
+
+    async def delete_clips(
+        self, clip_unique_ids: Sequence[int], *, confirm: bool
+    ) -> BulkDeleteResult:
+        """Permanently delete multiple clips (Phase 13) — built entirely
+        on top of `delete_clip()`, called once per id; adds no new HTTP
+        surface of its own.
+
+        `clip_unique_ids` is de-duplicated (order-preserving) before
+        anything else, so passing the same id twice can never attempt a
+        second `DELETE` against an already-gone file.
+
+        **Validated against a single fresh `clips()` call before any
+        `DELETE` is sent** — every id must be found, or this raises
+        `ValueError` naming every missing one and deletes nothing at all.
+        This is deliberately stricter than looping `delete_clip()`
+        yourself: a bad id at position 50 of a 50-clip batch must not be
+        discovered only after the first 49 are already, irreversibly,
+        gone. This is the same "resolve first, then act" discipline
+        `delete_clip()` itself uses, just applied to the whole batch
+        atomically instead of one id.
+
+        **After validation, one clip's failure does not stop the
+        batch.** Each id is deleted via `delete_clip(clip_unique_id,
+        confirm=True)` in turn; a `BMDVerificationError` or `ValueError`
+        from any single one is caught, logged at `ERROR`, and recorded in
+        the returned `BulkDeleteResult.failed` rather than raised —
+        deliberately, so one already-gone or transiently-unreachable clip
+        never silently prevents every clip after it in the same batch
+        from being attempted. This method itself never raises once past
+        the up-front validation; inspect `.failed` if you need to know
+        whether everything succeeded.
+
+        `confirm` has no default, mirroring `delete_clip()`'s exact
+        gate — checked before the validating `clips()` call, so an
+        omitted/`False` value costs nothing.
+
+        Inherits `delete_clip()`'s own caveats unchanged: the single-
+        confirmed-sample real-path construction, and the known
+        same-session `/clips/list` staleness (each `delete_clip()` call
+        still performs its own best-effort, non-raising staleness check
+        and `WARNING`).
+
+        **Not yet real-hardware-run.** Unit-tested against a fake client
+        only. `examples/rest_delete_clips_bulk.py` is the verification
+        script — records several disposable throwaway clips first, the
+        same self-contained safety pattern `rest_delete_clip.py` uses, so
+        nothing this script bulk-deletes is ever irreplaceable footage.
+        """
+        if not confirm:
+            raise ValueError(
+                "delete_clips() permanently erases these clips from the card — pass "
+                "confirm=True only once you are certain that is what you want."
+            )
+        deduped_ids = list(dict.fromkeys(clip_unique_ids))
+        if not deduped_ids:
+            raise ValueError("delete_clips() called with no clip_unique_ids")
+
+        all_clips = await self.clips()
+        by_id = {clip.clip_unique_id: clip for clip in all_clips}
+        missing = [cid for cid in deduped_ids if cid not in by_id]
+        if missing:
+            raise ValueError(
+                f"[{self.host}] No clip(s) with clip_unique_id in {missing} — found in "
+                f"GET /clips/list on {self.profile.model_key} {self.profile.firmware}. "
+                "Nothing was deleted."
+            )
+
+        deleted: list[Clip] = []
+        failed: list[tuple[int, Exception]] = []
+        for clip_unique_id in deduped_ids:
+            try:
+                deleted_clip = await self.delete_clip(clip_unique_id, confirm=True)
+            except (BMDVerificationError, ValueError) as exc:
+                self._log.error(
+                    "[%s] delete_clips(): clip_unique_id=%s failed: %s",
+                    self.host,
+                    clip_unique_id,
+                    exc,
+                )
+                failed.append((clip_unique_id, exc))
+            else:
+                deleted.append(deleted_clip)
+
+        self._log.info(
+            "[%s] delete_clips(): %d/%d deleted, %d failed",
+            self.host,
+            len(deleted),
+            len(deduped_ids),
+            len(failed),
+        )
+        return BulkDeleteResult(deleted=tuple(deleted), failed=tuple(failed))

@@ -1853,6 +1853,46 @@ straightforward and unit-tested).
 
 ---
 
+## Bulk clip deletion (Phase 13)
+
+### `delete_clips(clip_unique_ids, *, confirm)` → `BulkDeleteResult`
+
+Deletes multiple clips in one call. Adds no new HTTP surface — it's built entirely on top of
+`delete_clip()`, called once per id, so it inherits every one of that method's real-hardware-
+confirmed properties (the `GET`/`DELETE`/`GET` sequence, the single-confirmed-sample real-path
+construction, the known same-session `/clips/list` staleness and its best-effort `WARNING`)
+unchanged.
+
+**Status: brand new this session, unit-tested against a fake client only — not yet run against
+real hardware.** `examples/rest_delete_clips_bulk.py` is the verification script — records
+several disposable throwaway clips first (the same self-contained safety pattern
+`rest_delete_clip.py` uses for one clip), so nothing it bulk-deletes is ever irreplaceable
+footage.
+
+`clip_unique_ids` is de-duplicated (order-preserving) before anything else — passing the same id
+twice can never attempt a second `DELETE` against an already-gone file.
+
+**Validated against a single fresh `clips()` call before any `DELETE` is sent.** Every id must be
+found, or `delete_clips()` raises `ValueError` naming every missing one and deletes nothing at
+all — deliberately stricter than looping `delete_clip()` yourself, where a bad id near the end of
+a large batch would only be discovered after everything before it was already, irreversibly,
+gone. This is `delete_clip()`'s own "resolve first, then act" discipline, applied to the whole
+batch atomically instead of one id.
+
+**After validation, one clip's failure does not stop the batch.** This is the one place this
+method's behavior diverges from every single-target write in this codebase: `delete_clip()`
+itself is binary (confirmed or raises), but a bulk operation's partial success is a real, expected
+outcome, not exceptional. Each id is deleted via `delete_clip(clip_unique_id, confirm=True)` in
+turn; a `BMDVerificationError`/`ValueError` from any one is caught, logged at `ERROR`, and
+recorded in `BulkDeleteResult.failed` (a `(clip_unique_id, exception)` pair) rather than raised.
+`delete_clips()` itself never raises once past the up-front validation — a caller that wants
+"raise if anything failed" checks `.failed` and raises itself.
+
+`confirm` has no default, mirroring `delete_clip()`'s exact gate, checked before the validating
+`clips()` call so an omitted/`False` value costs nothing.
+
+---
+
 ## Codec name mapping (`rest/mapping.py`)
 
 `RestCameraSession`'s write path (`set_camera_format`) takes profile *names* — the
@@ -2050,6 +2090,19 @@ asserting the `DELETE` target and its `api_prefixed=False`. No `clip_unique_id`-
 case (there's no id to look up) and no `/clips/list`-staleness case (there's no equivalent
 listing to check).
 
+`TestDeleteClips` (Phase 13) covers `delete_clips()` with a `_bulk_delete_client()` helper —
+`clips()` reporting every requested id, `storage_state()`/`mount_names()` for unambiguous mount
+resolution, and a stateful per-path `exists()` that toggles `True` -> `False` independently for
+each clip's own target path (so one clip's DELETE confirmation doesn't affect another's).
+Coverage: `ValueError` when `confirm=False`; `ValueError` when the id list is empty;
+de-duplication (`[1, 1, 2]` deletes each id exactly once); `ValueError` naming every missing id
+and sending zero `DELETE`s when any requested id isn't found; the full-success path (all
+requested clips returned in `.deleted`, `.failed` empty); a partial-failure path (one clip's
+`exists()` never returns `True`, so its `delete_clip()` call raises — confirming the batch still
+continues and deletes the clips after it, and that the failure is recorded in `.failed` as an
+exact `(clip_unique_id, exception)` pair rather than raised); and a `caplog`-based test
+confirming the `ERROR` log line for a failed clip.
+
 ---
 
 ## What's deliberately out of scope
@@ -2111,7 +2164,9 @@ listing to check).
   `set_timeline(clip_unique_ids)` because there's nothing on this camera for it to mean;
   the playable set is always every clip sharing the current format, one format group at a
   time.
-- **No batch/bulk deletion.** `delete_clip()`/`delete_still()` (Phase 11, above) each take
-  exactly one target and require their own `confirm=True` — there is no "delete all clips
-  older than X" or similar convenience wrapper, deliberately: every deletion this codebase
-  performs is a single, individually-confirmed, irreversible act.
+- **No bulk still deletion, and no "delete by criteria."** `delete_clips()` (Phase 13, above)
+  covers explicit-list bulk deletion for clips only — `delete_still()` remains single-target
+  (stills have no `clips()`-equivalent listing to validate a batch against in the first place).
+  Neither takes a filter or predicate: there is no "delete all clips older than X" or similar
+  convenience wrapper, deliberately — every clip a caller wants deleted must be named by its own
+  `clip_unique_id`, explicitly, never inferred.
