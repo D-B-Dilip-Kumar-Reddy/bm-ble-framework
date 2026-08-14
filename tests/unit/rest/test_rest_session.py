@@ -3271,9 +3271,10 @@ class TestDeleteClip:
         format_device()'s "confirm via a fresh read" discipline."""
         client = _delete_clip_client(exists_before=True)  # exists() never flips to False
         session = make_session(make_profile(), client=client)
+        session.verify_timeout_s = 0.05
 
         with pytest.raises(BMDVerificationError, match="still exists after DELETE"):
-            await session.delete_clip(1, confirm=True)
+            await session.delete_clip(1, confirm=True, poll_interval_s=0.01)
 
         assert client.delete_calls == [DELETE_CLIP_TARGET]
 
@@ -3296,6 +3297,31 @@ class TestDeleteClip:
         assert deleted.clip_unique_id == 1
         assert client.delete_calls == [DELETE_CLIP_TARGET]
         assert client.api_prefixed_calls[DELETE_CLIP_TARGET] is False
+
+    @pytest.mark.asyncio
+    async def test_after_check_polls_past_a_transient_stale_exists(self):
+        """Real-hardware finding, POCKET_6K_G2 v8.6, 2026-08-14
+        (examples/rest_delete_clips_bulk.py, both real runs): calling
+        delete_clip() back-to-back in a loop hit a false "still exists"
+        far more often than an isolated call ever had — the identical
+        propagation-delay race delete_still() was already fixed for. The
+        after-check must retry rather than fail on the first stale read."""
+        client = _delete_clip_client()
+        call_count = {"n": 0}
+
+        async def exists(path: str, *, api_prefixed: bool = True) -> bool:
+            call_count["n"] += 1
+            # True before DELETE, then one stale True, then finally False.
+            return call_count["n"] in (1, 2)
+
+        client.exists = exists
+        session = make_session(make_profile(), client=client)
+
+        deleted = await session.delete_clip(1, confirm=True, poll_interval_s=0.01)
+
+        assert deleted.clip_unique_id == 1
+        assert call_count["n"] == 3
+        assert client.delete_calls == [DELETE_CLIP_TARGET]
 
     @pytest.mark.asyncio
     async def test_logs_warning_when_clip_still_listed_after_deletion(self, caplog):

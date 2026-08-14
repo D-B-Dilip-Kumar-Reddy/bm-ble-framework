@@ -809,13 +809,27 @@ verification's timing, not a failed deletion.** The single immediate `exists()` 
 after `DELETE` raced a brief camera-side propagation delay, the same shape `record_stop` hit and
 was fixed for. Fixed the same way: the after-`DELETE` check now polls
 (`poll_interval_s`/`verify_timeout_s`) instead of checking once — see `docs/rest/session.md`'s
-`delete_still()` section for the full write-up. `delete_clip()` was deliberately left unchanged,
-since both its real-hardware runs confirmed correctly on the first immediate check.
+`delete_still()` section for the full write-up. `delete_clip()` was deliberately left unchanged
+at the time, since both its real-hardware runs confirmed correctly on the first immediate check.
 
 **Third run, same day, confirms the fix**: the same standalone script, rerun against the
 polling fix, deleted the still successfully with no error. `delete_still()` composed through
 `RestCameraSession`'s own machinery is now real-hardware-confirmed end to end, the same status
 `delete_clip()` already carried.
+
+**That "`delete_clip()` deliberately left unchanged" call was retracted the next day,
+`POCKET_6K_G2 v8.6`, 2026-08-14**, via `examples/rest_delete_clips_bulk.py` (Phase 13's bulk
+clip deletion — see `docs/rest/session.md`'s `delete_clips()` section). Both real runs of that
+script hit the identical false-negative race in `delete_clip()` itself: the first clip deleted
+in each batch succeeded on the first immediate check (matching `delete_clip()`'s two earlier
+isolated runs), but every clip after it — deleted back-to-back with no natural gap between
+calls — hit `BMDVerificationError: still exists after DELETE` far more often than an isolated
+call ever had (1 of 3 failed in run 1, 2 of 3 in run 2). A tight loop exercises the same
+camera-side propagation delay `delete_still()` had already been fixed for, just far more
+reliably than a single standalone call does — which is exactly why neither of `delete_clip()`'s
+own isolated real-hardware runs had ever surfaced it. Fixed identically: `delete_clip()`'s
+after-`DELETE` check now polls instead of checking once. The evidence, not the earlier
+reasoning, was wrong — retracted and corrected in the same doc it was made in.
 
 ### `POCKET_6K_PRO v8.6`, over USB, plaintext HTTP — 2026-08-03
 

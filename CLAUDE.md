@@ -469,7 +469,20 @@ src/bmd_camera/
                               # post-check: logs a WARNING if clip_unique_id is still
                               # listed after confirmed deletion, purely informational
                               # (design principle 9). See docs/rest/session.md's
-                              # Phase 11 section.
+                              # Phase 11 section. "No polling loop" above was RETRACTED,
+                              # POCKET_6K_G2 v8.6, 2026-08-14: delete_clips()'s (Phase 13)
+                              # first two real-hardware runs called delete_clip() back-to-
+                              # back in a loop and hit BMDVerificationError: still exists
+                              # after DELETE repeatedly (1/3 clips failed run 1, 2/3 run 2
+                              # — always the clips after the first in the batch, never the
+                              # first). The identical false-negative propagation-delay race
+                              # delete_still() was already fixed for, just never exposed by
+                              # delete_clip()'s own two earlier ISOLATED single-clip runs,
+                              # which had a natural gap around each call a tight loop
+                              # doesn't. Fixed the same way: the after-DELETE check now
+                              # polls (poll_interval_s/verify_timeout_s) instead of
+                              # checking once. See docs/rest/session.md's delete_clip()
+                              # section for the full write-up.
                               # delete_still(path, *, confirm) (Phase 11) — DELETEs one
                               # still's real /mounts/.../Stills/... path. Unlike
                               # delete_clip(), takes the full path directly rather than
@@ -519,9 +532,17 @@ src/bmd_camera/
                               # recorded in BulkDeleteResult.failed rather than raised.
                               # clip_unique_ids is de-duplicated (order-preserving) first. No
                               # bulk delete_still() — stills have no clips()-equivalent listing
-                              # to validate a batch against. Not yet real-hardware-run —
-                              # examples/rest_delete_clips_bulk.py is its verification script.
-                              # See docs/rest/session.md's Phase 13 section.
+                              # to validate a batch against. Two real-hardware runs,
+                              # POCKET_6K_G2 v8.6, 2026-08-14 (rest_delete_clips_bulk.py):
+                              # delete_clips()'s own batching/validation/partial-failure logic
+                              # worked exactly as designed both times, but both runs surfaced a
+                              # real defect in delete_clip() itself — calling it back-to-back in
+                              # a loop (never exercised by delete_clip()'s own two earlier
+                              # isolated runs) hit the same false-negative propagation-delay
+                              # race delete_still() was already fixed for. Fixed identically —
+                              # see delete_clip()'s own entry above. A third delete_clips() run
+                              # against that fix remains outstanding. See docs/rest/session.md's
+                              # Phase 13 section.
     mapping.py                 # Codec name derivation between the BLE profile's vocabulary
                               # and REST's own spelling — confirmed strings always win
                               # (design principle 1); this is a fallback seed only.
@@ -896,8 +917,10 @@ examples/
                             # shape record_stop hit and was fixed for), not a failed
                             # deletion. Fixed: the after-check now polls
                             # (poll_interval_s/verify_timeout_s) instead of checking once.
-                            # delete_clip() was deliberately left unchanged — both its real
-                            # runs confirmed correctly on the first immediate check. A third
+                            # delete_clip() was deliberately left unchanged at the time — both
+                            # its real runs confirmed correctly on the first immediate check
+                            # (retracted the next day — see rest_delete_clips_bulk.py's entry
+                            # below and docs/rest/session.md's delete_clip() section). A third
                             # run, same day, confirmed the fix: the same standalone script
                             # deleted the still successfully with no error. delete_still()
                             # composed through RestCameraSession's own machinery is now
@@ -937,8 +960,13 @@ examples/
                             # then bulk-deletes all of them in a single delete_clips() call —
                             # no typed-confirmation prompt needed, since whatever it deletes is
                             # guaranteed to be clips it just recorded itself in this exact run.
-                            # Not yet real-hardware-run — this script's first successful run is
-                            # that confirmation. See docs/rest/session.md's Phase 13 section.
+                            # Two real-hardware runs, POCKET_6K_G2 v8.6, 2026-08-14: both
+                            # surfaced the same real delete_clip() defect (see that method's
+                            # CLAUDE.md/docs/rest/session.md entries) — 1/3 clips failed run 1,
+                            # 2/3 failed run 2, always the ones after the first in the batch.
+                            # Fixed by polling delete_clip()'s after-DELETE check; a third run
+                            # against the fix is the next real-hardware step. See
+                            # docs/rest/session.md's Phase 13 section.
   playback.py               # (planned)
 
 tests/

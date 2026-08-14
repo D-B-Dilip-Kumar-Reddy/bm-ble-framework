@@ -2323,7 +2323,9 @@ class RestCameraSession:
 
     # ── Clip deletion (Phase 11) ────────────────────────────────────────────
 
-    async def delete_clip(self, clip_unique_id: int, *, confirm: bool) -> Clip:
+    async def delete_clip(
+        self, clip_unique_id: int, *, confirm: bool, poll_interval_s: float = 0.5
+    ) -> Clip:
         """Permanently delete one clip from the active storage device via
         `DELETE` on its real `/mounts/...` path — the capability
         `tools/rest/probe_endpoints.py`'s `--probe-mounts-delete`/
@@ -2380,20 +2382,34 @@ class RestCameraSession:
         (same honesty `resolve_mount_path()`'s own docstring already
         carries for the mount-selection side of this same problem).
 
-        Verification: `RestClient.exists()` before and after the `DELETE`
-        — never a plain `get()`, since a clip's body is binary
+        Verification: `RestClient.exists()` before, and polled after, the
+        `DELETE` — never a plain `get()`, since a clip's body is binary
         (`application/octet-stream`) and `exists()` is specifically built
         to never attempt to parse or decode it (see its docstring — the
         exact class of crash `probe_endpoints.py`'s `request()` hit on
         this same kind of file before being fixed). Raises
         `BMDVerificationError` before sending `DELETE` at all if the
         resolved path doesn't exist yet — the path assumption above was
-        wrong, or the clip is already gone — and raises
-        `BMDVerificationError` again if the path still exists immediately
-        after `DELETE`. No polling loop: the confirmed real sequence
-        completed synchronously (no observed "still processing"
-        intermediate state), unlike `format_device()`'s multi-second
-        full-card format.
+        wrong, or the clip is already gone.
+
+        **The after-check polls (`poll_interval_s`, default `0.5`s, up to
+        `verify_timeout_s`) rather than checking once — a real-hardware
+        finding, `POCKET_6K_G2 v8.6`, 2026-08-14** (`examples/
+        rest_delete_clips_bulk.py`, both of its real runs): this method's
+        own two earlier isolated real-hardware runs (below) never hit a
+        false "still exists" — but calling it back-to-back inside a bulk
+        loop did, repeatedly (1 of 3 clips in the first run, 2 of 3 in the
+        second, always the ones *not* first in the batch). This is the
+        exact same one-off camera-side propagation delay `delete_still()`
+        hit and was fixed for — an immediate single-shot check right
+        after `DELETE` can race it, and a tight loop with no natural gap
+        between calls hits that race far more often than a single
+        isolated call ever did. Fixed the same way: poll instead of check
+        once. This also **retracts this method's earlier claim that
+        widening `delete_clip()` to match `delete_still()`'s polling fix
+        would be "speculative rather than evidence-driven"** — the
+        evidence arrived, from `delete_clips()`'s own first real-hardware
+        exercise of this method in a loop.
 
         **Real-hardware-confirmed end to end, `POCKET_6K_G2 v8.6`,
         2026-08-13, twice** (`examples/rest_delete_clip.py`, `clip_unique_id`
@@ -2465,11 +2481,16 @@ class RestCameraSession:
         )
         await self._rest_client.delete(target, api_prefixed=False)
 
+        deadline = time.monotonic() + self.verify_timeout_s
         after = await self._rest_client.exists(target, api_prefixed=False)
+        while after and time.monotonic() < deadline:
+            await asyncio.sleep(poll_interval_s)
+            after = await self._rest_client.exists(target, api_prefixed=False)
         if after:
             raise BMDVerificationError(
                 f"[{self.host}] delete_clip(clip_unique_id={clip_unique_id}): {target!r} "
-                "still exists after DELETE — not confirmed deleted"
+                f"still exists after DELETE — not confirmed deleted within "
+                f"{self.verify_timeout_s}s"
             )
 
         self._log.info(
