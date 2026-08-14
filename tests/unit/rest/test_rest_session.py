@@ -3427,7 +3427,7 @@ class TestDeleteStill:
         assert client.delete_calls == [DELETE_STILL_PATH]
 
     @pytest.mark.asyncio
-    async def test_full_flow_success(self):
+    async def test_full_flow_success(self, caplog):
         client = FakeRestClient({})
         call_count = {"n": 0}
 
@@ -3440,10 +3440,17 @@ class TestDeleteStill:
         client.exists = exists
         session = make_session(make_profile(), client=client)
 
-        await session.delete_still(DELETE_STILL_PATH, confirm=True)  # must not raise
+        with caplog.at_level(logging.INFO):
+            await session.delete_still(DELETE_STILL_PATH, confirm=True)  # must not raise
 
         assert client.delete_calls == [DELETE_STILL_PATH]
         assert client.api_prefixed_calls[DELETE_STILL_PATH] is False
+        # Regression test: an earlier edit inserting download_clip()/download_still()
+        # right after delete_still() accidentally orphaned this success log line
+        # past a `return`, so delete_still() silently stopped logging its own
+        # confirmation. Guards against that specific class of copy-paste defect.
+        messages = [record.message for record in caplog.records]
+        assert any("deleted and confirmed gone" in m for m in messages)
 
     @pytest.mark.asyncio
     async def test_after_check_polls_past_a_transient_stale_exists(self):

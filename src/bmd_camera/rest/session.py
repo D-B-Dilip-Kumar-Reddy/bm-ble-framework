@@ -2575,6 +2575,8 @@ class RestCameraSession:
                 f"not confirmed deleted within {self.verify_timeout_s}s"
             )
 
+        self._log.info("[%s] Still %s deleted and confirmed gone", self.host, path)
+
     async def download_clip(
         self, clip_unique_id: int, dest_dir: str | Path, *, overwrite: bool = False
     ) -> Path:
@@ -2683,5 +2685,3 @@ class RestCameraSession:
         written = await self._rest_client.download(path, dest, api_prefixed=False)
         self._log.info("[%s] Still %s downloaded: %d bytes -> %s", self.host, path, written, dest)
         return dest
-
-        self._log.info("[%s] Still %s deleted and confirmed gone", self.host, path)
