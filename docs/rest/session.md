@@ -1697,9 +1697,29 @@ caught it. **Fixed the same way**: the after-`DELETE` check now polls (`poll_int
 default `0.5`s, bounded by `verify_timeout_s`) instead of checking once — the asymmetry this doc
 drew against `delete_still()`'s fix (`delete_clip()` "deliberately not changed... both
 real-hardware runs confirmed correctly on the first immediate check") no longer holds; that was
-correct given the evidence available at the time, and the new evidence changed it. A third
-real-hardware run of `delete_clips()` against the polling fix, to directly confirm every clip in
-a loop now succeeds, remains outstanding.
+correct given the evidence available at the time, and the new evidence changed it.
+
+**Third run, `POCKET_6K_G2 v8.6`, 2026-08-14 — the polling fix confirmed on real hardware.**
+`examples/rest_delete_clips_bulk.py`, rerun against the fix: all 3 clips (`clip_unique_id`
+`9`/`10`/`11`) deleted successfully — `delete_clips(): 3/3 deleted, 0 failed`, closing the gap
+the first two runs opened. The polling fix works in exactly the back-to-back-loop scenario that
+exposed the original race.
+
+**Bonus finding from the same run, closing a previously-open question**: the `/clips/list`
+same-session-staleness section above says clearing "within the same session without
+reconnecting... remains untested." This run tested it, incidentally. `clips()` immediately after
+deleting `clip_unique_id=9` still listed it (staleness, as expected); the equivalent check after
+`clip_unique_id=10` did *not* list it (no staleness that time); the check after `clip_unique_id=11`
+listed it again (staleness). The final "AFTER bulk deletion" inventory, printed under two seconds
+after the first `DELETE`, reported `3` clips — not `5` (all three stale, the pattern every earlier
+run showed) and not `2` (the true count). One stale entry had already cleared **within the same
+session, without reconnecting, in well under two seconds** — faster than the ~48-second
+reconnect-driven clearing observed earlier, and without a reconnect at all. This refines rather
+than contradicts the earlier finding: same-session staleness is real, but not fixed at "clears
+only via reconnect after ~48s" — it can also self-resolve within the same session, apparently on
+its own schedule, sometimes for one clip in a batch and not (yet) for another. Still purely
+informational; `delete_clip()`'s own file-level verification was and remains the authoritative
+signal throughout.
 
 ### `delete_still(path, *, confirm)` → `None`
 
@@ -1883,19 +1903,21 @@ confirmed properties (the `GET`/`DELETE`/`GET` sequence, the single-confirmed-sa
 construction, the known same-session `/clips/list` staleness and its best-effort `WARNING`)
 unchanged.
 
-**Status: real-hardware-run twice, `POCKET_6K_G2 v8.6`, 2026-08-14, via
+**Status: real-hardware-confirmed end to end, `POCKET_6K_G2 v8.6`, 2026-08-14, three runs of
 `examples/rest_delete_clips_bulk.py`** — records several disposable throwaway clips first (the
 same self-contained safety pattern `rest_delete_clip.py` uses for one clip), so nothing it
 bulk-deletes is ever irreplaceable footage. `delete_clips()`'s own batching/validation/partial-
-failure logic worked exactly as designed both runs (bad-id-free batches, correct
+failure logic worked exactly as designed across all three runs (bad-id-free batches, correct
 deduplication, every clip attempted regardless of an earlier one's outcome, an accurate
-`BulkDeleteResult` both times) — but both runs also surfaced a real defect **in `delete_clip()`
-itself**, not in `delete_clips()`: see `delete_clip()`'s own section above for the full
-write-up. In short, calling `delete_clip()` back-to-back in a loop (something no earlier
-real-hardware run of `delete_clip()` alone had ever done) exposed a false-negative verification
-race that a single isolated call had never hit, now fixed by polling the after-`DELETE` check
-the same way `delete_still()` already was. A third run of `delete_clips()` against that fix
-remains outstanding.
+`BulkDeleteResult` every time) — but the first two runs also surfaced a real defect **in
+`delete_clip()` itself**, not in `delete_clips()`: see `delete_clip()`'s own section above for
+the full write-up. In short, calling `delete_clip()` back-to-back in a loop (something no
+earlier real-hardware run of `delete_clip()` alone had ever done) exposed a false-negative
+verification race that a single isolated call had never hit, fixed by polling the after-`DELETE`
+check the same way `delete_still()` already was. **The third run confirmed the fix**: all 3
+clips deleted, `0` failed — see `delete_clip()`'s own section above for the full write-up,
+including a bonus finding about `/clips/list` staleness clearing faster than previously observed
+within that same run.
 
 `clip_unique_ids` is de-duplicated (order-preserving) before anything else — passing the same id
 twice can never attempt a second `DELETE` against an already-gone file.

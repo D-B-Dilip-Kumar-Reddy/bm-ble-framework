@@ -831,6 +831,13 @@ own isolated real-hardware runs had ever surfaced it. Fixed identically: `delete
 after-`DELETE` check now polls instead of checking once. The evidence, not the earlier
 reasoning, was wrong — retracted and corrected in the same doc it was made in.
 
+**Third run, same day, confirms the fix**: the same script, rerun, deleted all 3 clips with `0`
+failures. Bonus finding from that run: the same-session `/clips/list` staleness above isn't
+fixed at "clears only via reconnect after ~48s" — this run's final clip inventory showed one
+stale entry had already cleared on its own within under two seconds, no reconnect involved,
+answering the "remains untested" question `docs/rest/session.md`'s original staleness write-up
+left open. See `delete_clip()`'s own section there for the full account.
+
 ### `POCKET_6K_PRO v8.6`, over USB, plaintext HTTP — 2026-08-03
 
 Swept with the same tool, same transport, same `--scheme http` default — deliberately not

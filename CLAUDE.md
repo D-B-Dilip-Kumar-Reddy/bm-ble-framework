@@ -481,7 +481,12 @@ src/bmd_camera/
                               # which had a natural gap around each call a tight loop
                               # doesn't. Fixed the same way: the after-DELETE check now
                               # polls (poll_interval_s/verify_timeout_s) instead of
-                              # checking once. See docs/rest/session.md's delete_clip()
+                              # checking once. THIRD RUN CONFIRMED THE FIX, same day: all 3
+                              # clips deleted, 0 failed — also incidentally answered the
+                              # open "does /clips/list staleness clear within the same
+                              # session without reconnecting" question: yes, at least one
+                              # stale entry cleared on its own in well under two seconds,
+                              # no reconnect. See docs/rest/session.md's delete_clip()
                               # section for the full write-up.
                               # delete_still(path, *, confirm) (Phase 11) — DELETEs one
                               # still's real /mounts/.../Stills/... path. Unlike
@@ -532,17 +537,17 @@ src/bmd_camera/
                               # recorded in BulkDeleteResult.failed rather than raised.
                               # clip_unique_ids is de-duplicated (order-preserving) first. No
                               # bulk delete_still() — stills have no clips()-equivalent listing
-                              # to validate a batch against. Two real-hardware runs,
+                              # to validate a batch against. Three real-hardware runs,
                               # POCKET_6K_G2 v8.6, 2026-08-14 (rest_delete_clips_bulk.py):
                               # delete_clips()'s own batching/validation/partial-failure logic
-                              # worked exactly as designed both times, but both runs surfaced a
-                              # real defect in delete_clip() itself — calling it back-to-back in
-                              # a loop (never exercised by delete_clip()'s own two earlier
-                              # isolated runs) hit the same false-negative propagation-delay
-                              # race delete_still() was already fixed for. Fixed identically —
-                              # see delete_clip()'s own entry above. A third delete_clips() run
-                              # against that fix remains outstanding. See docs/rest/session.md's
-                              # Phase 13 section.
+                              # worked exactly as designed all three times, but the first two
+                              # runs surfaced a real defect in delete_clip() itself — calling it
+                              # back-to-back in a loop (never exercised by delete_clip()'s own
+                              # two earlier isolated runs) hit the same false-negative
+                              # propagation-delay race delete_still() was already fixed for.
+                              # Fixed identically — see delete_clip()'s own entry above. The
+                              # third run confirmed the fix: 3/3 clips deleted, 0 failed. See
+                              # docs/rest/session.md's Phase 13 section.
     mapping.py                 # Codec name derivation between the BLE profile's vocabulary
                               # and REST's own spelling — confirmed strings always win
                               # (design principle 1); this is a fallback seed only.
@@ -964,8 +969,9 @@ examples/
                             # surfaced the same real delete_clip() defect (see that method's
                             # CLAUDE.md/docs/rest/session.md entries) — 1/3 clips failed run 1,
                             # 2/3 failed run 2, always the ones after the first in the batch.
-                            # Fixed by polling delete_clip()'s after-DELETE check; a third run
-                            # against the fix is the next real-hardware step. See
+                            # Fixed by polling delete_clip()'s after-DELETE check. Third run,
+                            # same day, confirmed the fix: 3/3 clips deleted, 0 failed —
+                            # delete_clips() is now real-hardware-confirmed end to end. See
                             # docs/rest/session.md's Phase 13 section.
   playback.py               # (planned)
 
