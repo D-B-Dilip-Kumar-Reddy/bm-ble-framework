@@ -239,16 +239,19 @@ they only `arm()`/`wait_for()` on a property this method already subscribed. See
 the same session immediately after `delete_clip()`/`delete_clips()` — real-hardware-
 confirmed, `POCKET_6K_G2 v8.6`, 2026-08-13/14 (`delete_clip()`'s own docstring/section
 has the full trail). The only mechanism confirmed to *reliably* clear it is a fresh
-reconnect — **confirmed exactly once**, via a genuinely separate process
-(`examples/rest_read_state.py`, run standalone roughly 48s after the deleting run's own
-process had already exited). A later run separately found the staleness can sometimes
-self-clear within the same session, unreconnected, in well under two seconds — one stale
-entry out of three, a different and non-deterministic mechanism, not a second
-confirmation of reconnecting itself. Until this method existed, "reconnect" meant
-discarding the whole `RestCameraSession` object and starting a new script/process —
+reconnect — at the time this method was designed, confirmed exactly once, via a genuinely
+separate process (`examples/rest_read_state.py`, run standalone roughly 48s after the
+deleting run's own process had already exited). A later run separately found the
+staleness can sometimes self-clear within the same session, unreconnected, in well under
+two seconds — one stale entry out of three, a different and non-deterministic mechanism,
+not a second confirmation of reconnecting itself. Until this method existed, "reconnect"
+meant discarding the whole `RestCameraSession` object and starting a new script/process —
 nothing in this repo had ever constructed a second session or re-entered one within a
 single process. `reconnect()` tears down and rebuilds the transport on the *same*
-object instead, so a caller never has to swap which reference it holds.
+object instead, so a caller never has to swap which reference it holds. **Now confirmed a
+second time**, via `reconnect()` itself — see the real-hardware run below, which also
+sharpened the finding: the reconnect only took ~1.16s, not anywhere near 48s, and
+staleness was already gone immediately afterward.
 
 **Not `/clips/list`-specific.** Any field this session tracks only from notifications
 reflects only what arrived on the connection about to be replaced. Design principle 4
@@ -286,13 +289,24 @@ on the same session is undefined, the same caller-owns-sequencing discipline eve
 method here already relies on, but a genuinely new hazard: previously, reconnecting
 always meant a separate process, so nothing could ever race one.
 
-**Status: not yet real-hardware-run.** Unit-tested against a fake transport
-(`TestConnectionLifecycle` in `tests/unit/rest/test_rest_session.py`) — transport
-rebuild, injected-session reuse, owned-session replacement, full state reset, and
-resubscription all covered. `examples/rest_reconnect_after_delete.py` is the
-verification script: records and deletes one disposable clip, calls `reconnect()` on
-the same object, and confirms `id(session)` is unchanged and `clips()` is accurate
-afterward.
+**Status: real-hardware-confirmed, `POCKET_6K_G2 v8.6`, 2026-08-14, first run.** Unit-tested
+against a fake transport (`TestConnectionLifecycle` in `tests/unit/rest/test_rest_session.py`) —
+transport rebuild, injected-session reuse, owned-session replacement, full state reset, and
+resubscription all covered — then `examples/rest_reconnect_after_delete.py` succeeded end to
+end on its very first real-hardware attempt, no defects found: recorded and deleted a real
+clip (`clip_unique_id=12`) — `clips()` immediately after deletion reported `3` (the known
+same-session staleness, expected), `id(session)` was identical before and after `reconnect()`
+(continuity confirmed), and `clips()`/`storage_state().clip_count` both read `2` immediately
+after — `clip_unique_id=12` genuinely gone, no longer counted.
+
+**New finding, sharpening the original staleness-clearing evidence**: the reconnect itself
+(`Disconnected` → `Connected` in the log) took **~1.16s**, not anywhere near the ~48s gap between
+processes that the original separate-process confirmation happened to have. Staleness was
+already gone on the very first `clips()` call after that ~1.16s reconnect completed — no
+additional wait beyond the reconnect itself. This answers a question the original finding left
+open: it's the *act* of reconnecting that clears the staleness, not elapsed time — a fast,
+sub-two-second `reconnect()` is exactly as effective as a 48-second gap between separate
+processes.
 
 ---
 

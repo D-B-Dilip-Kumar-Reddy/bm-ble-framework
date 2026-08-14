@@ -553,11 +553,12 @@ src/bmd_camera/
                               # self.__aenter__(), reused verbatim), so a caller never has to
                               # swap which RestCameraSession reference it holds. Built to answer
                               # whether restarting the client session is a good way to force a
-                              # non-stale /clips/list read — confirmed reliable exactly once
-                              # (via a genuinely separate process, rest_read_state.py, ~48s
-                              # after the deleting run's own process exited), not twice; a
+                              # non-stale /clips/list read — confirmed reliable once via a
+                              # genuinely separate process (rest_read_state.py, ~48s after the
+                              # deleting run's own process exited), now confirmed a second time
+                              # via reconnect() itself (see real-hardware status below); a
                               # same-session self-clear finding is a separate, non-deterministic
-                              # mechanism, not a second reconnect confirmation. Resets every
+                              # mechanism, not a reconnect confirmation. Resets every
                               # notification-driven/bookkeeping field
                               # (_reset_connection_state(), also shared by __init__ so the
                               # literal initial-value list exists once) to its __init__ default
@@ -572,10 +573,17 @@ src/bmd_camera/
                               # bounded, not worth reaching into RestEventRouter's private
                               # state for). No internal locking — concurrent use during a
                               # reconnect is undefined, a genuinely new hazard flagged loudly
-                              # in the docstring. Not yet real-hardware-run —
-                              # examples/rest_reconnect_after_delete.py is its verification
-                              # script. See docs/rest/session.md's "Connection lifecycle"
-                              # section.
+                              # in the docstring. Real-hardware-confirmed, POCKET_6K_G2 v8.6,
+                              # 2026-08-14, first run of examples/rest_reconnect_after_delete.py:
+                              # succeeded end to end, no defects found — id(session) unchanged
+                              # across reconnect() (continuity confirmed), clips()/
+                              # storage_state() went from stale (3, matching the known
+                              # same-session staleness) to accurate (2, clip gone) immediately
+                              # after. New finding: the reconnect itself took only ~1.16s, far
+                              # under the ~48s gap the original separate-process confirmation
+                              # happened to have — it's the act of reconnecting that clears the
+                              # staleness, not elapsed time. See docs/rest/session.md's
+                              # "Connection lifecycle" section.
     mapping.py                 # Codec name derivation between the BLE profile's vocabulary
                               # and REST's own spelling — confirmed strings always win
                               # (design principle 1); this is a fallback seed only.
@@ -1006,9 +1014,9 @@ examples/
                             # disposable clip, then calls reconnect() on the same session
                             # object and confirms id(session) is unchanged (the continuity
                             # claim reconnect() exists to make) and clips()/storage_state()
-                            # are accurate afterward. Not yet real-hardware-run — this
-                            # script's first successful run is that confirmation, and the
-                            # first time this codebase will have exercised an in-process,
+                            # are accurate afterward. Real-hardware-confirmed, POCKET_6K_G2
+                            # v8.6, 2026-08-14: first run succeeded end to end with no defects
+                            # — the first time this codebase exercised an in-process,
                             # same-object reconnect at all. See docs/rest/session.md's
                             # "Connection lifecycle" section.
   playback.py               # (planned)
