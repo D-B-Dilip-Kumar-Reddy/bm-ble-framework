@@ -1114,9 +1114,7 @@ examples/
   capture_multiple_stills.py  # The first multi-still workflow in this codebase, and
                             # guess_new_still_path()'s exclude parameter's real-hardware
                             # exercise (2026-08-24) — takes STILL_COUNT (default 3) real
-                            # photos in one session, and for each one: trigger over BLE
-                            # (fresh CameraSession per still, matching every earlier
-                            # single-still script's connect/disconnect-per-trigger pattern),
+                            # photos in one session, and for each one: trigger over BLE,
                             # confirm over REST, guess the filename with
                             # exclude=guessed_paths (the accumulated list from every earlier
                             # still this run), download it, then delete it. exclude exists
@@ -1131,7 +1129,29 @@ examples/
                             # already established — each still's outcome is tracked in a
                             # StillOutcome and printed in a final summary, which also flags a
                             # WARNING if two stills ever guessed the same path (exclude
-                            # failing to do its job). Not yet real-hardware-run.
+                            # failing to do its job). FIRST REAL-HARDWARE RUN (STILL_COUNT=10)
+                            # surfaced two real defects in the original design, both fixed
+                            # same day: (1) a fresh CameraSession was opened/closed per still
+                            # (matching every single-still script's own pattern) — the
+                            # operator flagged the repeated-reconnect overhead as unwanted;
+                            # now one CameraSession is held open for the whole run, sending
+                            # capture_photo() repeatedly over it, the same way
+                            # send_settings_command.py --repeat already sends other commands
+                            # repeatedly over one connection. (2) 0/10 stills guessed
+                            # successfully, every one failing at the guess step — traced to
+                            # guess_new_still_path()'s own default index_candidates=range(1,
+                            # 11) being far too narrow for this development session's card,
+                            # which already held well more than 10 stills from many earlier
+                            # real-hardware runs. Fixed with an adaptive search: the first
+                            # still now probes a wide, still-bounded INITIAL_INDEX_CANDIDATES
+                            # (range(1, 51)) to bootstrap a real starting index, and every
+                            # later still reuses a narrow HINTED_INDEX_WINDOW (5) band just
+                            # above the last confirmed index — guess_new_still_path()'s own
+                            # docstring already recommends exactly this "narrow range around
+                            # a real hint" pattern, just not yet applied by any caller until
+                            # now — falling back to the wide range once if the narrow one
+                            # comes up empty. Not yet re-run against real hardware with
+                            # these fixes.
   playback.py               # (planned)
 
 tests/

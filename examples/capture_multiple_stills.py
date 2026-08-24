@@ -18,7 +18,41 @@ still's search window and get matched first, silently returning a stale,
 already-processed path instead of the new one. This script accumulates
 every path it has already guessed into `guessed_paths` and passes it as
 `exclude` on each subsequent guess, so a stale match is skipped rather
-than returned — this run is `exclude`'s first real-hardware exercise.
+than returned.
+
+ONE BLE CONNECTION FOR THE WHOLE RUN (2026-08-24, first real-hardware run's
+finding) — the original version opened and closed a fresh `CameraSession`
+per still, matching every single-still script's own pattern. The operator
+correctly flagged that as unwanted overhead for a multi-still run — each
+reconnect costs several real seconds, and there is no reason to pay it
+STILL_COUNT times when nothing about a BLE connection is still-specific.
+`capture_photo()` is a stateless trigger send; sending it repeatedly over
+one held-open `CameraSession`, the same way `send_settings_command.py
+--repeat` already sends other commands repeatedly over one connection, is
+not expected to behave any differently — but this is the first time this
+exact codebase has tried it, so it's flagged here rather than assumed
+silently confirmed.
+
+INDEX SEARCH IS NOW ADAPTIVE (2026-08-24, second real-hardware finding) —
+that same first run guessed 0/10 stills, every single one failing at the
+`guess` step. The far more likely explanation than the BLE-reconnect
+concern above: `guess_new_still_path()`'s own default `index_candidates`
+(`range(1, 11)`) is a deliberate "shot in the dark" for a card whose still
+count is unknown (its own docstring says so) — and this exact card, across
+this whole development session's many earlier real-hardware photo
+captures, almost certainly already holds well more than 10 stills, putting
+every *new* index outside that default window on every single attempt.
+This script no longer trusts that narrow default blindly: the *first*
+still in a run searches a much wider `INITIAL_INDEX_CANDIDATES` (`range(1,
+51)`) to bootstrap a real starting index — a one-time, bounded cost, not
+the unbounded search the library's own docstring warns against — and every
+*later* still in the same run reuses `HINTED_INDEX_CANDIDATES` (a narrow
+band just above the last confirmed index, since the counter only
+increments), exactly the "pass a narrow range around a real hint" pattern
+`guess_new_still_path()`'s own docstring already recommends. Falls back to
+the wide range if the narrow one ever comes up empty (e.g. another
+capture, from another app or the body itself, landed between this
+session's own stills).
 
 WHAT THIS SCRIPT CHANGES ON THE CAMERA: takes `STILL_COUNT` real photos,
 downloads each to `DEST_DIR`, then deletes each from the card. Net effect
@@ -26,12 +60,12 @@ on the card is nothing once a still's round trip succeeds (matching
 `rest_delete_still.py`'s own framing) — a local copy of each still is kept.
 
 PER-STILL SEQUENCE (mirrors `rest_delete_still.py` and
-`rest_download_still.py`'s guess-then-act shape, run once per still):
-snapshot the Stills `mtime` baseline -> trigger over BLE (fresh
-`CameraSession`, matching every earlier photo-capture script's connect/
-disconnect-per-trigger pattern) -> confirm over REST
-(`wait_for_new_still()`) -> guess the filename (`guess_new_still_path()`,
-`exclude=guessed_paths`) -> download it -> delete it.
+`rest_download_still.py`'s guess-then-act shape, run once per still, over
+the one BLE connection and one REST session held open for the whole run):
+snapshot the Stills `mtime` baseline -> trigger over BLE -> confirm over
+REST (`wait_for_new_still()`) -> guess the filename
+(`guess_new_still_path()`, `exclude=guessed_paths`, an adaptive
+`index_candidates`) -> download it -> delete it.
 
 PARTIAL FAILURE IS EXPECTED, NOT FATAL — one still's failure at any step
 does not stop the batch, the same partial-success philosophy
@@ -41,10 +75,9 @@ guessed, downloaded, deleted, or where it stopped and why) is tracked and
 printed in a final summary — this is why the script is not just three
 single-still scripts pasted in a loop.
 
-STATUS: `exclude` is new this session, unit-tested against a fake client
-only — not yet run against real hardware. This script's first successful
-run is that confirmation, alongside the whole guess+download+delete
-composition it exercises for the first time as a repeated sequence.
+STATUS: `exclude`, the held-open BLE connection, and the adaptive index
+search are all new — not yet confirmed together on real hardware. This
+script's first fully successful run is that confirmation.
 
 Usage:
     python examples/capture_multiple_stills.py
@@ -82,10 +115,38 @@ STILL_COUNT = 3
 CONFIRM_TIMEOUT_S = 15.0
 DEST_DIR = Path(__file__).parent / "downloads"
 
+# The first still's index is unknown — a card from this development
+# session's many earlier photo captures may already hold well more than
+# guess_new_still_path()'s own default range(1, 11) covers. Wider, but
+# still bounded, one-time cost to bootstrap a real hint.
+INITIAL_INDEX_CANDIDATES = range(1, 51)
+# Once a real index is known, the counter only increments — a narrow band
+# just above it is both faster and more targeted than guessing blind again.
+HINTED_INDEX_WINDOW = 5
+
 
 def _format_bytes(num_bytes: int) -> str:
     gb = num_bytes / 1_000_000_000
     return f"{num_bytes} bytes ({gb:.2f} GB)"
+
+
+def _index_candidates_for(last_confirmed_index: int | None) -> range:
+    if last_confirmed_index is None:
+        return INITIAL_INDEX_CANDIDATES
+    return range(last_confirmed_index + 1, last_confirmed_index + 1 + HINTED_INDEX_WINDOW)
+
+
+def _index_from_path(path: str) -> int | None:
+    """Best-effort extraction of the `_S<NNN>` counter from a guessed path,
+    to seed the next still's hinted search. Returns `None` on any shape
+    this doesn't recognize rather than raising — losing the hint just
+    means the next still falls back to a wider search, not a crash."""
+    stem = path.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+    marker = stem.rfind("_S")
+    if marker == -1:
+        return None
+    digits = stem[marker + 2 :]
+    return int(digits) if digits.isdigit() else None
 
 
 @dataclass
@@ -106,23 +167,24 @@ class StillOutcome:
 
 
 async def capture_one_still(
+    ble_session: CameraSession,
     rest_session: RestCameraSession,
     mount_path: str,
     index: int,
     guessed_paths: list[str],
+    last_confirmed_index: int | None,
 ) -> StillOutcome:
     outcome = StillOutcome(index=index)
 
     baseline = await stills_marker(rest_session, mount_path)
 
-    async with CameraSession(BLE_MODEL_KEY, BLE_FIRMWARE) as ble_session:
-        trigger_time = datetime.now()
-        try:
-            await ble_session.capture_photo()
-        except BMDUnsupportedError as exc:
-            outcome.stopped_at = "trigger"
-            outcome.error = str(exc)
-            return outcome
+    trigger_time = datetime.now()
+    try:
+        await ble_session.capture_photo()
+    except BMDUnsupportedError as exc:
+        outcome.stopped_at = "trigger"
+        outcome.error = str(exc)
+        return outcome
     print(f"  [{index}] Trigger sent over BLE — confirming over REST …")
 
     confirmed = await wait_for_new_still(
@@ -135,12 +197,30 @@ async def capture_one_still(
     outcome.captured = True
     print(f"  [{index}] Confirmed ✓")
 
+    index_candidates = _index_candidates_for(last_confirmed_index)
     guessed_path = await guess_new_still_path(
-        rest_session, mount_path, around=trigger_time, exclude=guessed_paths
+        rest_session,
+        mount_path,
+        around=trigger_time,
+        index_candidates=index_candidates,
+        exclude=guessed_paths,
     )
+    if guessed_path is None and last_confirmed_index is not None:
+        # The hinted narrow band came up empty — fall back to the wide
+        # search once rather than giving up (see module docstring).
+        guessed_path = await guess_new_still_path(
+            rest_session,
+            mount_path,
+            around=trigger_time,
+            index_candidates=INITIAL_INDEX_CANDIDATES,
+            exclude=guessed_paths,
+        )
     if guessed_path is None:
         outcome.stopped_at = "guess"
-        outcome.error = "guess_new_still_path() found nothing new in its default search window"
+        outcome.error = (
+            f"guess_new_still_path() found nothing new (searched index_candidates="
+            f"{list(index_candidates)!r}, then the wide fallback)"
+        )
         return outcome
     outcome.guessed_path = guessed_path
     guessed_paths.append(guessed_path)
@@ -171,7 +251,10 @@ async def capture_one_still(
 async def main() -> int:
     DEST_DIR.mkdir(parents=True, exist_ok=True)
 
-    async with RestCameraSession(HOST, REST_MODEL_KEY, REST_FIRMWARE) as rest_session:
+    async with (
+        RestCameraSession(HOST, REST_MODEL_KEY, REST_FIRMWARE) as rest_session,
+        CameraSession(BLE_MODEL_KEY, BLE_FIRMWARE) as ble_session,
+    ):
         storage = await rest_session.storage_state()
         if storage.active_device is None:
             raise BMDStorageError(f"[{HOST}] No active storage device — cannot capture a photo")
@@ -182,12 +265,19 @@ async def main() -> int:
 
         guessed_paths: list[str] = []
         outcomes: list[StillOutcome] = []
+        last_confirmed_index: int | None = None
         start = time.monotonic()
 
         for index in range(1, STILL_COUNT + 1):
             print(f"\n=== Still {index}/{STILL_COUNT} ===")
-            outcome = await capture_one_still(rest_session, mount_path, index, guessed_paths)
+            outcome = await capture_one_still(
+                ble_session, rest_session, mount_path, index, guessed_paths, last_confirmed_index
+            )
             outcomes.append(outcome)
+            if outcome.guessed_path is not None:
+                found_index = _index_from_path(outcome.guessed_path)
+                if found_index is not None:
+                    last_confirmed_index = found_index
             if not outcome.deleted:
                 print(f"  [{index}] Stopped at {outcome.stopped_at}: {outcome.error}")
 

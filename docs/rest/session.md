@@ -1885,8 +1885,34 @@ one, guesses its filename with `exclude=guessed_paths` (the accumulated list fro
 still that run) before downloading and deleting it. One still's failure at any step does not
 stop the batch — `delete_clips()`/`download_clips()`'s own partial-success philosophy, applied
 here per-still with a `StillOutcome` tracked and printed in a final summary, which also flags a
-`WARNING` if two stills ever guessed the same path (i.e. `exclude` failed to do its job). Not
-yet real-hardware-run.
+`WARNING` if two stills ever guessed the same path (i.e. `exclude` failed to do its job).
+
+**First real-hardware run (`STILL_COUNT=10`) found two real defects, both fixed the same day —
+not in `exclude` itself, which was never actually exercised because every guess failed one step
+earlier.**
+
+1. The script originally opened and closed a fresh `CameraSession` per still, matching every
+   single-still script's own connect/disconnect-per-trigger pattern. The operator flagged the
+   repeated-reconnect overhead as unwanted for a multi-still run — each reconnect costs several
+   real seconds, and nothing about a BLE connection is still-specific. Fixed: one `CameraSession`
+   is now held open for the whole run, sending `capture_photo()` repeatedly over it — the same
+   way `send_settings_command.py --repeat` already sends other commands repeatedly over one
+   connection. Not independently confirmed on this exact camera before this script, since no
+   earlier script in this codebase held a BLE connection open across repeated photo triggers.
+2. **0/10 stills guessed successfully — every one failed at the `guess` step**, before `exclude`
+   ever got a chance to matter. Root cause: `guess_new_still_path()`'s own default
+   `index_candidates=range(1, 11)` is a deliberate "shot in the dark" for a card whose still
+   count is unknown (its own docstring says so) — and this development session's card, after many
+   earlier real-hardware photo captures across earlier phases, almost certainly already held well
+   more than 10 stills, putting every *new* index outside that default window on every single
+   attempt. Fixed with an adaptive search, following `guess_new_still_path()`'s own documented
+   recommendation ("callers who have an actual hint... should pass a narrow range built around
+   it") — just not yet applied by any caller until now: the first still probes a wider, still-
+   bounded `INITIAL_INDEX_CANDIDATES` (`range(1, 51)`) to bootstrap a real starting index, and
+   every later still reuses a narrow `HINTED_INDEX_WINDOW` (5) band just above the last confirmed
+   index, falling back to the wide range once if the narrow one comes up empty.
+
+Not yet re-run against real hardware with these two fixes.
 
 **Second run, same camera/firmware/day, closes the gap — with a real defect found and fixed.**
 A small standalone script (bypassing `guess_new_still_path()` entirely, calling `delete_still()`
