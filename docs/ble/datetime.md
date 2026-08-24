@@ -1,16 +1,18 @@
 # BLE Date/Time (Category 7 — Real Time Clock)
 
-**Status: UNCONFIRMED, and now 0-for-6 on real hardware — every avenue this
-investigation identified has been tried.** Six real-hardware runs (§4-§6,
-§8-§9): three passive (committed changes, a full connect-time state burst
-covering 7 categories and 16 Lens parameters) and three active (`ASSIGN`
-with default coordinates, `ASSIGN` with an alternate reserved byte,
-`OFFSET`). None produced any Category 7 signal in either direction — no
-report, ever, and no write ever visibly changed the camera. Nothing in this
-document beyond §1 is anything more than [spec] transcription. See §9 for
-why "this camera/firmware does not implement Category 7 over BLE at all" is
-now the best-supported reading, and what's left (increasingly
-unprincipled brute-forcing, not further reasoned discovery).
+**Status: CLOSED, unconfirmed — investigation concluded 2026-08-24 after
+0-for-6 on real hardware.** Six real-hardware runs (§4-§6, §8-§9): three
+passive (committed changes, a full connect-time state burst covering 7
+categories and 16 Lens parameters) and three active (`ASSIGN` with default
+coordinates, `ASSIGN` with an alternate reserved byte, `OFFSET`). None
+produced any Category 7 signal in either direction — no report, ever, and no
+write ever visibly changed the camera. Nothing in this document beyond §1 is
+anything more than [spec] transcription. Working conclusion: **this
+camera/firmware does not implement Category 7 over BLE at all** — see the
+"Conclusion" section (after §9) for the full reasoning and what this means
+for the original motivation (fixing `guess_new_still_path()`'s clock-skew
+problem, closed by a different route — a widened `minute_offsets` default,
+see `rest/media.py`).
 
 ## 1. Why this category, and why now
 
@@ -347,11 +349,41 @@ reason to expect any of them over the two already tried. Continuing further
 would mean brute-forcing rather than reasoned discovery, a different kind of
 effort than everything tried so far.
 
-## 10. Planned shape once confirmed
+## Conclusion — investigation closed, 2026-08-24
 
-Not yet built — recorded here so the plan is visible before any code exists,
-per this project's practice of documenting design intent honestly rather than
-only after the fact (see e.g. `CLAUDE.md`'s `*(planned)*` tags elsewhere).
+**BLE Category 7 (Real Time Clock / language / timezone) does not appear to
+be implemented over BLE at all on `POCKET_6K_G2 v8.6`, in either direction.**
+Closed after six real-hardware attempts (three passive, three active) found
+zero signal on every avenue this investigation could identify — see §9 for
+the full reasoning. This is being recorded as the working conclusion, not
+pursued further; §10 below stays as a record of what *would* have been built
+had a real capture ever confirmed anything, per this project's practice of
+documenting design intent honestly rather than deleting a plan once it's no
+longer being pursued.
+
+**The original motivation — fixing `guess_new_still_path()`'s camera-clock-
+skew problem — is closed too, by a different route.** No BLE-read camera
+clock is possible, so the "feed the camera's real clock into `around`"
+design in §1/§10 cannot be built. Instead, this investigation surfaced a
+different, directly actionable camera fact along the way: the SETUP >
+Date/Time screen has no Seconds field, meaning even an operator who *does*
+set the camera's clock manually right before shooting faces a bounded, up-
+to-a-couple-of-minutes imprecision (manual entry lag plus an unknowable
+committed-seconds value). `guess_new_still_path()`'s default `minute_offsets`
+was widened from `(0, 1, -1)` to `(0, -1, 1, -2, 2, -3, 3)` to cover exactly
+this — see `rest/media.py`'s module docstring ("SETUP SCREEN HAS NO SECONDS
+FIELD") and `docs/rest/session.md`'s `guess_new_still_path()` section for
+the full write-up. This remains distinct from, and does not attempt to
+cover, the separate unbounded case of a camera whose clock was never set at
+all (the original ~37h-skew finding) — that case has no default-window fix
+and never will.
+
+## 10. Planned shape once confirmed (not pursued — see Conclusion above)
+
+Not yet built, and no longer expected to be — recorded here so the plan
+that was considered stays visible, per this project's practice of
+documenting design intent honestly rather than only after the fact (see
+e.g. `CLAUDE.md`'s `*(planned)*` tags elsewhere).
 
 - `protocol/categories/datetime.py` — decode (and, if §1's writability
   question resolves yes, encode) for Category 7. Whether this earns its own

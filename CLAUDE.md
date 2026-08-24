@@ -651,7 +651,18 @@ src/bmd_camera/
                               # guess_new_still_path() is a separate, opt-in, informational-
                               # only best-effort filename lookup that never gates
                               # confirmation. No BLE channel (echo/CAMERA_STATUS) moves on a
-                              # photo trigger, on either camera. Playback controls (planned)
+                              # photo trigger, on either camera. minute_offsets' default widened
+                              # 2026-08-24 from (0, 1, -1) to (0, -1, 1, -2, 2, -3, 3), closest-
+                              # first with lag (negative) before lead (positive) at each
+                              # distance -- confirmed camera fact motivating this: the SETUP >
+                              # Date/Time screen has no Seconds field, so even a just-set clock
+                              # can lag real time by up to a couple of minutes (manual entry lag
+                              # + unset-seconds snap), distinct from the separate, unbounded
+                              # clock-never-set-at-all skew case no default window can cover.
+                              # See docs/ble/datetime.md, whose BLE Category 7 investigation
+                              # (0-for-6 real-hardware, no way to read or write the camera's
+                              # clock over BLE at all) is what surfaced this camera fact.
+                              # Playback controls (planned)
 
 tools/
   common/                   # Shared BLE capture/decode engine (tools/common/capture.py)
@@ -1133,7 +1144,7 @@ added, a new `docs/<feature>.md` must be created alongside the code change.
 | `docs/ble/timecode.md` | `TIMECODE` wire format, BCD decode, clip-duration math |
 | `docs/ble/settings.md` | Settings families (codec/quality, video format, recording format) — byte layouts, verification runbook |
 | `docs/ble/photo_capture.md` | Photo-capture reverse engineering — trigger confirmed on both cameras, no BLE-observable confirmation signal found; Sensor Area BLE investigation (closed, unwritable); Phase 6 — `capture_photo()` built, confirmation moved to REST (`rest/media.py`) |
-| `docs/ble/datetime.md` | BLE Category 7 (Real Time Clock/language/timezone) investigation — UNCONFIRMED, 0-for-6 on real hardware: three passive runs (`tools/sniffers/sniffer_datetime.py`'s `--actions` and `--burst-seconds` modes, including a full connect-time state burst) plus three active writes (`tools/control/send_datetime_command.py` — default `ASSIGN`, `ASSIGN` with an alternate reserved byte, and `OFFSET`) all found zero Category 7 signal in either direction; every identified discovery axis is now exhausted, pointing toward a permanent BLE limitation on this camera/firmware rather than a wrong wire coordinate; the planned tie-in to fixing `guess_new_still_path()`'s camera-clock-skew failure mode |
+| `docs/ble/datetime.md` | BLE Category 7 (Real Time Clock/language/timezone) investigation — CLOSED 2026-08-24, unconfirmed, 0-for-6 on real hardware across three passive and three active attempts (`tools/sniffers/sniffer_datetime.py`, `tools/control/send_datetime_command.py`), every identified discovery axis exhausted; working conclusion is this camera/firmware does not implement Category 7 over BLE at all. Surfaced the confirmed camera fact (no Seconds field on the SETUP screen) that closed the original motivation by a different route — see `rest/media.py`'s widened `guess_new_still_path()` default |
 | `docs/ble/reverse_engineering.md` | Tool-by-tool procedure for bringing up a new `(MODEL_KEY, FIRMWARE)` pair, and for adding a single new command |
 | `docs/ble/camera_registry.md` | Full evidentiary notes behind the Camera Registry table above |
 | `docs/rest/transport.md` | REST/WebSocket transport (8.6) — addressing the camera over USB, scheme discovery, `tools/rest/probe_endpoints.py`, sweep results for both cameras, the `RestClient`/`RestEventRouter` library surface |

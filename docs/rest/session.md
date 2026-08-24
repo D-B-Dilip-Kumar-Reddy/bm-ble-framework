@@ -1854,6 +1854,20 @@ now-documented limitation of the guessing approach — see `rest/media.py`'s mod
 for a caller working against a camera with a known-wrong clock. `delete_still()` itself was not
 exercised by this run — the script correctly stopped one step before it, at the guess.
 
+**`minute_offsets`'s default widened, 2026-08-24, after a separate confirmed camera fact: the
+SETUP > Date/Time screen has no Seconds field.** Distinct from the unbounded clock-skew case
+above (a camera whose clock was never set at all) — this is a smaller, bounded imprecision that
+affects even a camera whose clock *was just* set correctly: manually stepping through
+Year/Month/Day/Hour/Minute via on-screen `<`/`>` arrows takes real time, and whatever second the
+RTC lands on when "Update" commits is unknowable, so the camera's clock can lag real time by up
+to a couple of minutes even right after being set. The default `minute_offsets` widened from
+`(0, 1, -1)` to `(0, -1, 1, -2, 2, -3, 3)` — still bounded and still checked closest-first
+(negative/lag direction before positive/lead at each distance), not an attempt to cover the
+unbounded clock-skew case. See `rest/media.py`'s module docstring ("SETUP SCREEN HAS NO SECONDS
+FIELD") for the full reasoning and `docs/ble/datetime.md` for the confirming evidence (found
+during the BLE Category 7 investigation, which independently also confirmed there is no way to
+read or write the camera's clock over BLE at all — see that doc for the full write-up).
+
 **Second run, same camera/firmware/day, closes the gap — with a real defect found and fixed.**
 A small standalone script (bypassing `guess_new_still_path()` entirely, calling `delete_still()`
 directly against the real path the operator had obtained by other means,
