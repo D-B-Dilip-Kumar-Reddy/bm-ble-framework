@@ -1111,6 +1111,27 @@ examples/
                             # downloaded both clips on the card (clip_unique_id 4 and 3, 2/2, 0
                             # failed), 115959860 bytes total in 0.5s (248.5 MB/s aggregate) — no
                             # defects found. See docs/rest/session.md's Phase 15 section.
+  capture_multiple_stills.py  # The first multi-still workflow in this codebase, and
+                            # guess_new_still_path()'s exclude parameter's real-hardware
+                            # exercise (2026-08-24) — takes STILL_COUNT (default 3) real
+                            # photos in one session, and for each one: trigger over BLE
+                            # (fresh CameraSession per still, matching every earlier
+                            # single-still script's connect/disconnect-per-trigger pattern),
+                            # confirm over REST, guess the filename with
+                            # exclude=guessed_paths (the accumulated list from every earlier
+                            # still this run), download it, then delete it. exclude exists
+                            # because the wider minute_offsets default (0, -1, 1, -2, 2, -3,
+                            # 3) creates a real risk unique to repeated captures: an earlier
+                            # still's real, still-existing filename can sit within a later
+                            # still's ±3-minute search radius and get matched first instead
+                            # of the new one — exclude skips already-returned paths so the
+                            # search keeps going. One still's failure at any step (trigger/
+                            # confirm/guess/download/delete) does not stop the batch — the
+                            # same partial-success philosophy delete_clips()/download_clips()
+                            # already established — each still's outcome is tracked in a
+                            # StillOutcome and printed in a final summary, which also flags a
+                            # WARNING if two stills ever guessed the same path (exclude
+                            # failing to do its job). Not yet real-hardware-run.
   playback.py               # (planned)
 
 tests/

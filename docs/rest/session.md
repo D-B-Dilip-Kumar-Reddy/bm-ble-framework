@@ -1879,6 +1879,15 @@ until it finds a name it hasn't already given out (or exhausts the window and re
 Default `()` — every pre-existing call site (`examples/capture_photo.py`,
 `rest_delete_still.py`, `rest_download_still.py`, all single-still scripts) is unaffected.
 
+**`examples/capture_multiple_stills.py`** is `exclude`'s first real caller and real-hardware
+verification script: takes `STILL_COUNT` (default 3) real photos in one session, and for each
+one, guesses its filename with `exclude=guessed_paths` (the accumulated list from every earlier
+still that run) before downloading and deleting it. One still's failure at any step does not
+stop the batch — `delete_clips()`/`download_clips()`'s own partial-success philosophy, applied
+here per-still with a `StillOutcome` tracked and printed in a final summary, which also flags a
+`WARNING` if two stills ever guessed the same path (i.e. `exclude` failed to do its job). Not
+yet real-hardware-run.
+
 **Second run, same camera/firmware/day, closes the gap — with a real defect found and fixed.**
 A small standalone script (bypassing `guess_new_still_path()` entirely, calling `delete_still()`
 directly against the real path the operator had obtained by other means,
