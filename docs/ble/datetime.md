@@ -1,18 +1,21 @@
 # BLE Date/Time (Category 7 — Real Time Clock)
 
-**Status: CLOSED, unconfirmed — investigation concluded 2026-08-24 after
-0-for-6 on real hardware.** Six real-hardware runs (§4-§6, §8-§9): three
-passive (committed changes, a full connect-time state burst covering 7
-categories and 16 Lens parameters) and three active (`ASSIGN` with default
-coordinates, `ASSIGN` with an alternate reserved byte, `OFFSET`). None
-produced any Category 7 signal in either direction — no report, ever, and no
-write ever visibly changed the camera. Nothing in this document beyond §1 is
-anything more than [spec] transcription. Working conclusion: **this
-camera/firmware does not implement Category 7 over BLE at all** — see the
-"Conclusion" section (after §9) for the full reasoning and what this means
-for the original motivation (fixing `guess_new_still_path()`'s clock-skew
-problem, closed by a different route — a widened `minute_offsets` default,
-see `rest/media.py`).
+**Status: CLOSED on both transports — investigation concluded 2026-08-24
+after 0-for-6 on real BLE hardware and a definitive negative on the REST
+spec.** Six real-hardware BLE runs (§4-§6, §8-§9): three passive (committed
+changes, a full connect-time state burst covering 7 categories and 16 Lens
+parameters) and three active (`ASSIGN` with default coordinates, `ASSIGN`
+with an alternate reserved byte, `OFFSET`). None produced any Category 7
+signal in either direction — no report, ever, and no write ever visibly
+changed the camera. A direct check of all 11 official REST OpenAPI/AsyncAPI
+spec files found zero date/time/clock/NTP-related endpoint anywhere either.
+Nothing in this document beyond §1 is anything more than [spec] transcription.
+Working conclusion: **neither BLE nor REST exposes this camera's date/time
+to a controller at all, on this camera/firmware** — see the "Conclusion"
+section (after §9) for the full reasoning and what this means for the
+original motivation (fixing `guess_new_still_path()`'s clock-skew problem,
+closed by a different route — a widened `minute_offsets` default, see
+`rest/media.py`).
 
 ## 1. Why this category, and why now
 
@@ -377,6 +380,29 @@ the full write-up. This remains distinct from, and does not attempt to
 cover, the separate unbounded case of a camera whose clock was never set at
 all (the original ~37h-skew finding) — that case has no default-window fix
 and never will.
+
+**The REST side was also checked, and confirmed closed too, 2026-08-24.**
+The 8.6 firmware's REST API is documented across 11 official OpenAPI/AsyncAPI
+spec files supplied for this project (`EventControl`, `SystemControl`,
+`VideoControl`, `TransportControl`, `MediaControl`, `TimelineControl`,
+`LensControl`, `AudioControl`, `ColorCorrectionControl`, `PresetControl`,
+`Notification`). A direct grep of all 11 for `date`, `clock`, `ntp`,
+`dateTime`/`date-time`, `rtc`, `timestamp`, `timezone`, `utcOffset`,
+`wallClock`, `localTime`, and `epoch` found **zero matches in any file**.
+`SystemControl.yaml`'s complete path list is `/system`, `/system/format`,
+`/system/codecFormat`, `/system/videoFormat`, and their three `supported*`
+read-only counterparts — nothing date/time-related at all. This isn't a gap
+in what `tools/rest/probe_endpoints.py` happened to discover
+(`payloads/models/POCKET_6K_G2/rest/v8.6.json`'s own endpoint list already
+showed nothing date-related, consistent with this) — it's confirmation the
+capability isn't documented anywhere in the official spec, on either
+transport. Combined with the camera's own screenshot showing NTP-based
+auto-sync as the offered alternative to manual entry (§1), the most likely
+explanation is that this camera's date/time is local UI/OS state (synced via
+NTP or set through the SETUP menu directly) rather than a value either
+control protocol exposes to a companion app or controller at all — a genuine
+camera-design choice, not a software gap in this codebase. No further avenue
+on either transport is known; this investigation is closed on both fronts.
 
 ## 10. Planned shape once confirmed (not pursued — see Conclusion above)
 
