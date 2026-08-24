@@ -118,12 +118,24 @@ guessed, downloaded, deleted, or where it stopped and why) is tracked and
 printed in a final summary — this is why the script is not just three
 single-still scripts pasted in a loop.
 
-STATUS: `exclude`, the held-open BLE connection, the adaptive index search,
-and `INTER_STILL_DELAY_S` are all real-hardware-confirmed working as
-designed (second and third runs above). The download-size retry
-(`MIN_STILL_BYTES`/`DOWNLOAD_MAX_ATTEMPTS`/`DOWNLOAD_RETRY_DELAY_S`) is new
-and unconfirmed — this script's first run downloading every still at a
-real, full size (not just 4096 bytes) is that confirmation.
+FOURTH REAL-HARDWARE RUN (2026-08-24, `STILL_COUNT=10`, with the download
+retry above) CONFIRMED the fix: 10/10 stills succeeded, and every single
+download landed at the same real size (`943208` bytes) the third run's one
+success also reported. The retry logs show the placeholder-then-real-file
+theory holding exactly as predicted: 8 of the 10 stills needed exactly one
+retry (4096 bytes on attempt 1, the real size ~0.4-0.8s later on attempt 2),
+while the other 2 (stills 6 and 9) happened to get the real file on the
+very first attempt — consistent with the write-completion timing being
+real but variable, not a fixed delay, which is exactly why a size-based
+retry loop was chosen over a fixed sleep. Total run time was also far
+faster than the second/third runs (40.7s for all 10 stills) since at most
+one extra `DOWNLOAD_RETRY_DELAY_S` was ever spent per still.
+
+STATUS: every mechanism in this script — `exclude`, the held-open BLE
+connection, the adaptive index search, `INTER_STILL_DELAY_S`, and the
+download-size retry (`MIN_STILL_BYTES`/`DOWNLOAD_MAX_ATTEMPTS`/
+`DOWNLOAD_RETRY_DELAY_S`) — is now real-hardware-confirmed working as
+designed, end to end, 10/10, real file sizes throughout (fourth run above).
 
 Usage:
     python examples/capture_multiple_stills.py
@@ -198,6 +210,12 @@ INTER_STILL_DELAY_S = 3.0
 # smaller real still (a resolution/codec this session hasn't seen) for a
 # placeholder — but this is a threshold chosen from limited evidence
 # (`.braw` stills at one resolution/codec only), not a confirmed rule.
+# Fourth real-hardware run (2026-08-24, STILL_COUNT=10) confirmed the whole
+# retry mechanism: 10/10 downloads landed at the real 943208-byte size, 8 of
+# them needing exactly one retry (4096 bytes -> real size ~0.4-0.8s later)
+# and 2 (stills 6 and 9) getting the real file on the first attempt — real
+# but variable write-completion timing, exactly why a size-based retry was
+# chosen over a fixed sleep. See module docstring.
 MIN_STILL_BYTES = 100_000
 DOWNLOAD_MAX_ATTEMPTS = 5
 DOWNLOAD_RETRY_DELAY_S = 1.0

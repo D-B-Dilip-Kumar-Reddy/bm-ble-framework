@@ -1946,7 +1946,20 @@ first. Fixed by retrying the download itself — `MIN_STILL_BYTES` (`100_000`),
 `DOWNLOAD_MAX_ATTEMPTS` (`5`), `DOWNLOAD_RETRY_DELAY_S` (`1.0`) — whenever the result is smaller
 than the threshold, chosen with an order-of-magnitude margin above the one observed placeholder
 size and below every observed real one, but from limited evidence (one resolution/codec only).
-Not yet confirmed itself.
+
+**Fourth run (`STILL_COUNT=10`, with the download-size retry in place) CONFIRMED the fix.**
+10/10 stills succeeded end to end, and every single download landed at the same real
+`943208`-byte size the third run's one success also reported — no more `4096`-byte placeholders
+in the final result for any still. The per-attempt log lines confirm the placeholder-then-real
+theory directly: 8 of the 10 stills needed exactly one retry (`4096` bytes on attempt 1, the real
+`943208`-byte file `~0.4-0.8s` later on attempt 2), while the other 2 (stills 6 and 9) happened to
+get the real file on the very first attempt — consistent with the write-completion delay being
+real but genuinely variable rather than a fixed interval, which is exactly why a size-based retry
+loop was chosen over a fixed sleep in the first place. Total run time was also far faster than the
+second/third runs (`40.7s` for all 10 stills) since at most one extra `DOWNLOAD_RETRY_DELAY_S` was
+ever spent per still. Every mechanism this script introduced — `exclude`, the held-open BLE
+connection, the adaptive index search, `INTER_STILL_DELAY_S`, and the download-size retry — is now
+real-hardware-confirmed working as designed, end to end, with real file sizes throughout.
 
 **Second run, same camera/firmware/day, closes the gap — with a real defect found and fixed.**
 A small standalone script (bypassing `guess_new_still_path()` entirely, calling `delete_still()`

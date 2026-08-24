@@ -1183,7 +1183,17 @@ examples/
                             # result is suspiciously small, an order of magnitude of margin
                             # above the one observed placeholder size and below every observed
                             # real one -- but from limited evidence (one resolution/codec
-                            # only). Not yet confirmed itself.
+                            # only). FOURTH RUN (STILL_COUNT=10) CONFIRMED the fix: 10/10
+                            # succeeded, every download landed at the real 943208-byte size --
+                            # 8 of 10 needed exactly one retry (4096 bytes on attempt 1, real
+                            # size ~0.4-0.8s later on attempt 2), the other 2 (stills 6 and 9)
+                            # got the real file on the first attempt -- confirming the
+                            # write-completion delay is real but variable, exactly why a
+                            # size-based retry was chosen over a fixed sleep. Every mechanism
+                            # in this script (exclude, the held-open connection, the adaptive
+                            # index search, INTER_STILL_DELAY_S, and the download-size retry)
+                            # is now real-hardware-confirmed end to end. See
+                            # docs/rest/session.md's capture_multiple_stills.py section.
   playback.py               # (planned)
 
 tests/
