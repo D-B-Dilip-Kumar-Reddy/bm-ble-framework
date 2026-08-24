@@ -1,13 +1,14 @@
 # BLE Date/Time (Category 7 — Real Time Clock)
 
-**Status: UNCONFIRMED.** Three real-hardware runs so far (§4-§6) — committed
-date/time/timezone changes (run 2) and a full connect-time state burst (run
-3, 48 notifications across 7 categories, 16 Lens parameters alone) — and
-none observed any Category 7 activity on `INCOMING_CONTROL` at all. Nothing
-in this document beyond §1 is anything more than [spec] transcription. Every
-passive avenue is exhausted; `tools/control/send_datetime_command.py` (§7)
-is the active write probe built as the next step — not yet run against real
-hardware.
+**Status: UNCONFIRMED, and now 0-for-4 on real hardware.** Four real-hardware
+runs so far (§4-§6, §8) — committed date/time/timezone changes, a full
+connect-time state burst (48 notifications across 7 categories, 16 Lens
+parameters alone), and a correctly-formed active write — and none produced
+any Category 7 signal, in either direction: no report ever observed, and a
+plausibly-correct write had no visible effect on the camera. Nothing in this
+document beyond §1 is anything more than [spec] transcription. See §8 for
+the two remaining unresolved readings (permanent BLE limitation vs. an
+untested wire-coordinate) and what's next.
 
 ## 1. Why this category, and why now
 
@@ -254,9 +255,53 @@ echo at all — the same shape as the photo-capture trigger
 (`docs/ble/photo_capture.md`): a real, working write with no way to confirm
 it over the wire.
 
-**Status: not yet run against real hardware.**
+**Status: real-hardware-run, `POCKET_6K_G2 v8.6`, 2026-08-24 — failed.**
 
-## 8. Planned shape once confirmed
+## 8. Run 4 — active write probe: correctly-formed, camera did not visibly change, `POCKET_6K_G2 v8.6`, 2026-08-24
+
+First real-hardware run of the active write probe: `--parameter timezone
+--minutes 345` (targeting `UTC+05:45` from the camera's starting `UTC+05:30`
+— a deliberately distinguishable target, per the pre-run discussion). TX
+confirmed correctly formed against the [spec] table: `FF 08 00 00 07 02 03
+00 59 01 00 00` decodes to category `0x07`, parameter `0x02`, data type
+`0x03` (`INT32`), operation `0x00` (`ASSIGN`), payload `0x00000159` = `345`
+little-endian — exactly what `build_command()` was supposed to produce, and
+it was.
+
+**The operator reported the camera's SETUP > Date/Time screen did not
+change** — no visible effect from the write at all. The capture shows the
+same signature as every prior run: only ambient `0x09`/`0x00` telemetry, no
+`0x07` traffic of any kind (echo or otherwise).
+
+This is a stronger result than a passive null: a plausibly-correct write was
+actively sent and the camera did not act on it. Two readings, not yet
+distinguished:
+
+1. **This category genuinely does not accept BLE writes on this
+   camera/firmware either** — consistent with, and a plausible explanation
+   for, why it's never been seen reported: if nothing on this camera/
+   firmware implements Category 7 over BLE at all (neither direction), no
+   report and no accepted write are both exactly what's expected.
+2. **One of the untested coordinates is wrong** — the header's `reserved`
+   byte (`0x00` here; `docs/ble/settings.md` documents a real precedent on
+   this exact camera where the recording family silently required a
+   specific reserved byte a report never revealed, since a camera's own
+   REPORT need not carry the value a write requires), the category/parameter
+   pair itself (Category 7 could be numbered differently on this firmware
+   than the spec table — never checked against anything but the spec), or
+   the `ASSIGN` vs `OFFSET` operation choice (`docs/ble/protocol.md` §4 —
+   `OFFSET` has never been confirmed accepted for *any* family on this
+   camera, and a plain `minutes`-offset semantic parameter is exactly the
+   shape `OFFSET`'s documented "add to current value" meaning would suit,
+   arguably more than `timezone` alone: a **delta** from the camera's
+   current `330` rather than an absolute target).
+
+Both are real possibilities; neither is preferred by the evidence so far.
+`--reserved`/`--operation` override flags (mirroring
+`send_settings_command.py`'s own discovery axes) are the next concrete
+tooling step if this investigation continues — not yet built.
+
+## 9. Planned shape once confirmed
 
 Not yet built — recorded here so the plan is visible before any code exists,
 per this project's practice of documenting design intent honestly rather than
