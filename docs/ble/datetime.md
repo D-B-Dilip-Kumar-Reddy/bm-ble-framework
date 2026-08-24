@@ -1,12 +1,14 @@
 # BLE Date/Time (Category 7 — Real Time Clock)
 
-**Status: UNCONFIRMED.** One real-hardware capture taken (§4) but inconclusive
-by construction — no value was actually committed on the camera during that
-run, so it produced no Category 7 signal either way. Nothing in this document
-beyond §1 is anything more than [spec] transcription. Design principle 6
-forbids trusting a category/parameter/payload encoding until a real sniffer
-capture confirms it on the specific camera and firmware, with an actual
-committed change on the wire — that capture is the next concrete step.
+**Status: UNCONFIRMED, and now a real open question rather than just an
+untaken capture.** Two real-hardware runs so far (§4, §5) — the second with
+genuine committed date/time/timezone changes on the camera — and neither
+observed any Category 7 activity on `INCOMING_CONTROL` at all. Nothing in
+this document beyond §1 is anything more than [spec] transcription. Whether
+this category simply isn't reported over BLE on this camera/firmware, or
+whether passive sniffing is the wrong technique for it, is not yet
+distinguished — see §5's two readings and the next-step options recorded
+there.
 
 ## 1. Why this category, and why now
 
@@ -135,7 +137,47 @@ adjusting a field, e.g. bump the minute by one) so a genuine `ASSIGN`
 actually lands on the camera — reversible, non-destructive, only affects the
 camera's own clock display and future media timestamps.
 
-## 5. Planned shape once confirmed
+## 5. Run 2 — real committed changes, still zero Category 7 signal, `POCKET_6K_G2 v8.6`, 2026-08-24
+
+Second real-hardware run, same four windows, operator confirmed pressing
+"Update" after each of `change_date`/`change_time`/`change_timezone` this
+time — genuine `ASSIGN`s (from the camera's own menu, not this codebase)
+landed on the camera in every one of those three windows. Result: **still
+zero Category 7 activity, in any window.** Every window again shows only
+category `0x09`/parameter `0x00` — the same already-documented ambient
+telemetry from Run 1 — plus one incidental single-byte `CAMERA_STATUS`
+notification (`03`, too short to decode as a command packet; likely an
+unrelated status-bit flip, not investigated further here).
+
+Unlike Run 1, this is a **real negative data point**, not an inconclusive
+one — three genuine committed changes (date, time, and timezone, each
+independently) produced no `INCOMING_CONTROL` traffic on category `0x07` at
+all. Two readings, not yet distinguished:
+
+1. **The camera never `CAMERA_REPORT`s Category 7 over BLE at all** — plausible
+   given the screenshot in this investigation shows the camera also offers
+   NTP-based automatic sync (`time.cloudflare.com`) as an alternative to
+   manual entry; date/time may simply not be a value BMD's own protocol
+   broadcasts to companion apps the way codec/resolution/recording state is,
+   since there's comparatively little reason for an external monitor to need
+   to know it live.
+2. **A capture-timing gap**: `run_capture_windows`' window model only listens
+   between the two Enter presses per label — if the camera reports on some
+   delay after the `Update` press (e.g. only once the menu itself closes, or
+   only via a mechanism outside `INCOMING_CONTROL`/`CAMERA_STATUS`), the
+   report could have landed just outside a window's capture range. Not
+   directly evidence for this reading — nothing so far suggests any other
+   settings family in this codebase reports on a meaningful delay — but not
+   ruled out either.
+
+Neither reading has been distinguished yet; both are consistent with what's
+been captured so far. See the parent conversation for the options considered
+for how to proceed (an active `ASSIGN` write probe with visual confirmation
+on the camera's own screen, a passive reconnect-burst check, or accepting
+this as a permanent BLE limitation and closing the investigation) — the path
+chosen from those options will be recorded here once decided.
+
+## 6. Planned shape once confirmed
 
 Not yet built — recorded here so the plan is visible before any code exists,
 per this project's practice of documenting design intent honestly rather than
