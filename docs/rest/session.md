@@ -1914,6 +1914,24 @@ earlier.**
 
 Not yet re-run against real hardware with these two fixes.
 
+**Second run (`STILL_COUNT=10`) confirmed both fixes working as designed** — one BLE
+connection held throughout, every guess that got the chance to run succeeded (no `guess`
+failures at all, unlike the first run's 10/10), and `exclude` never had to intervene since no
+collision ever occurred — but surfaced a third, distinct defect: a strict alternating pattern,
+every **even**-numbered still (2/4/6/8/10) failing to confirm within 15s while every **odd** one
+(1/3/5/7/9) succeeded cleanly, across all ten stills. Working hypothesis: this camera needs a
+real minimum recovery interval between physical photo captures, and the original zero-delay loop
+(the next trigger fired within ~0.3-0.6s of the previous still's `delete_still()` completing)
+landed inside that window often enough to be dropped outright — while each failure's own 15s
+timeout followed immediately by the next trigger always cleared it, matching the exact ">1s
+(back-to-back fails), <15s (always recovers on retry)" split the data shows without pinning the
+true interval down more precisely. Fixed with `INTER_STILL_DELAY_S` (default `3.0`) between the
+end of one still's cycle and the next trigger — not yet confirmed itself. A separate, unexplained
+anomaly from the same run: still 1's download was only `4096` bytes, against every other
+successful still's consistent `~1MB` (matching `rest_download_still.py`'s own earlier confirmed
+real-still size) — not addressed by this fix, and not understood; recorded rather than silently
+dropped.
+
 **Second run, same camera/firmware/day, closes the gap — with a real defect found and fixed.**
 A small standalone script (bypassing `guess_new_still_path()` entirely, calling `delete_still()`
 directly against the real path the operator had obtained by other means,

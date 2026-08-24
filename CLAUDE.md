@@ -1151,7 +1151,23 @@ examples/
                             # a real hint" pattern, just not yet applied by any caller until
                             # now — falling back to the wide range once if the narrow one
                             # comes up empty. Not yet re-run against real hardware with
-                            # these fixes.
+                            # these fixes. SECOND RUN (STILL_COUNT=10) confirmed both fixes
+                            # working -- one connection held throughout, every guess that got
+                            # the chance to run succeeded, exclude never had to intervene --
+                            # but surfaced a third defect: a strict alternating pattern, every
+                            # even-numbered still failing to confirm within 15s while every
+                            # odd one succeeded, all ten stills. Working hypothesis: a real
+                            # camera-side cooldown between physical captures that the
+                            # zero-delay loop (~0.3-0.6s between one still's delete and the
+                            # next trigger) lands inside often enough to matter, while each
+                            # failure's own 15s timeout-then-retry always clears it -- the
+                            # exact ">1s, <15s" split the data shows. Fixed with
+                            # INTER_STILL_DELAY_S (default 3.0s) between stills, unconfirmed
+                            # itself. A separate, unexplained anomaly from the same run: still
+                            # 1's download was only 4096 bytes against every other successful
+                            # still's consistent ~1MB (matching rest_download_still.py's own
+                            # earlier confirmed size) -- not addressed by this fix, noted
+                            # rather than silently dropped.
   playback.py               # (planned)
 
 tests/

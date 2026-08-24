@@ -54,6 +54,29 @@ the wide range if the narrow one ever comes up empty (e.g. another
 capture, from another app or the body itself, landed between this
 session's own stills).
 
+SECOND REAL-HARDWARE RUN — both fixes above worked (one connection held the
+whole time, every guess that got the chance to run succeeded, `exclude`
+never had to intervene since no collision ever occurred) — but surfaced a
+third, distinct problem: a strict alternating pattern, stills 1/3/5/7/9
+confirmed and completed cleanly while every even-numbered still (2/4/6/8/10)
+failed at `confirm` — "Stills directory did not change within 15.0s" —
+every single time, all ten stills. Working hypothesis: this camera needs a
+real minimum recovery interval between physical photo captures, and this
+script's zero-delay loop (the next trigger fired within ~0.3-0.6s of the
+previous still's delete completing) lands inside that window often enough
+to be dropped outright — while the *retry* implicit in each failure's own
+15s timeout-then-immediately-trigger-again always lands well past it,
+which is exactly the ~15s-vs-under-1s split the data shows. `INTER_STILL_
+DELAY_S` (default `3.0`) adds an explicit pause between the end of one
+still's cycle and the next trigger, long enough to clear a supposed
+cooldown window that the evidence brackets as ">1s, <15s" without pinning
+down more precisely than that — not yet confirmed itself. A secondary,
+separate, unexplained anomaly from the same run: still 1's download was
+only 4096 bytes (every other successful still downloaded a consistent
+~1MB, matching `rest_download_still.py`'s own earlier confirmed real-still
+size) — not addressed by this fix, and not understood; noted rather than
+silently dropped.
+
 WHAT THIS SCRIPT CHANGES ON THE CAMERA: takes `STILL_COUNT` real photos,
 downloads each to `DEST_DIR`, then deletes each from the card. Net effect
 on the card is nothing once a still's round trip succeeds (matching
@@ -76,8 +99,9 @@ printed in a final summary — this is why the script is not just three
 single-still scripts pasted in a loop.
 
 STATUS: `exclude`, the held-open BLE connection, and the adaptive index
-search are all new — not yet confirmed together on real hardware. This
-script's first fully successful run is that confirmation.
+search are real-hardware-confirmed working as designed (second run above).
+`INTER_STILL_DELAY_S` is new and unconfirmed — this script's first fully
+successful run (all `STILL_COUNT` stills completing) is that confirmation.
 
 Usage:
     python examples/capture_multiple_stills.py
@@ -123,6 +147,15 @@ INITIAL_INDEX_CANDIDATES = range(1, 51)
 # Once a real index is known, the counter only increments — a narrow band
 # just above it is both faster and more targeted than guessing blind again.
 HINTED_INDEX_WINDOW = 5
+
+# Second real-hardware run (2026-08-24, STILL_COUNT=10, no delay at all):
+# every even-numbered still failed to confirm within 15s, every odd one
+# succeeded cleanly — a strict alternating pattern pointing at a real
+# camera-side cooldown between physical captures that a zero-delay loop
+# lands inside often enough to matter. Bracketed by the evidence itself as
+# ">1s (back-to-back failed), <15s (always recovers by the retry)" — not
+# pinned down more precisely than that. See module docstring.
+INTER_STILL_DELAY_S = 3.0
 
 
 def _format_bytes(num_bytes: int) -> str:
@@ -269,6 +302,9 @@ async def main() -> int:
         start = time.monotonic()
 
         for index in range(1, STILL_COUNT + 1):
+            if index > 1:
+                print(f"\nWaiting {INTER_STILL_DELAY_S}s for the camera to settle …")
+                await asyncio.sleep(INTER_STILL_DELAY_S)
             print(f"\n=== Still {index}/{STILL_COUNT} ===")
             outcome = await capture_one_still(
                 ble_session, rest_session, mount_path, index, guessed_paths, last_confirmed_index
