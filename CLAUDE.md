@@ -1215,7 +1215,18 @@ examples/
                             # needed 3 attempts landing on a different real size (939112
                             # bytes) -- a genuine photo-to-photo content difference, not a
                             # defect: the check correctly waited for two IDENTICAL reads
-                            # rather than assuming any particular target size. See
+                            # rather than assuming any particular target size. INITIAL_
+                            # INDEX_CANDIDATES=range(1,51) later found to have itself gone
+                            # stale (found via capture_stills_across_resolutions.py's first
+                            # run, which copied this script's index-search code verbatim) --
+                            # the fifth run above alone left the real index at 59, past this
+                            # window's own ceiling, and the old "wide fallback" never actually
+                            # widened anything on a run's first still (last_confirmed_index is
+                            # None exactly then, so it used the identical range). Fixed with a
+                            # three-tier _guess_with_fallbacks() helper -- hinted band, then
+                            # initial bootstrap, then a genuinely wider
+                            # WIDE_FALLBACK_INDEX_CANDIDATES=range(51,251) -- each tried only
+                            # once the one before it comes up empty. Not yet re-run. See
                             # docs/rest/session.md's capture_multiple_stills.py section.
   capture_stills_across_resolutions.py  # Sweeps FORMATS (a list of codec/
                             # variant/resolution/fps tuples) via
@@ -1243,7 +1254,21 @@ examples/
                             # (rest_change_format.py's own per-step reporting), and one
                             # still's failure within a format doesn't stop the rest, same as
                             # capture_multiple_stills.py. Reports observed still sizes grouped
-                            # by format in its summary. Not yet real-hardware-run.
+                            # by format in its summary. FIRST REAL-HARDWARE RUN (2026-08-24)
+                            # confirmed the REST-only-format/BLE-only-trigger transport
+                            # separation held exactly as designed (one PUT /system/format per
+                            # switch, one BLE TX per trigger, never crossed), and surfaced two
+                            # findings: (1) BRAW 3:1 @ HD @ 23.98 was correctly rejected by the
+                            # live GET /system/supportedFormats check -- a real camera fact,
+                            # not a bug, "BRaw:3_1" is the confirmed derivation rule working
+                            # correctly; (2) all 6 stills that DID capture and confirm
+                            # successfully (both other formats) failed at the guess step --
+                            # INITIAL_INDEX_CANDIDATES=range(1,51), copied from
+                            # capture_multiple_stills.py, had itself gone stale from earlier
+                            # session captures. Fixed identically in both scripts -- see that
+                            # script's own entry above. Side effect: guess failing meant
+                            # delete_still() was never reached, leaving 6 real stills orphaned
+                            # on the card undeleted. Not yet re-run with the fix.
   playback.py               # (planned)
 
 tests/

@@ -1997,6 +1997,17 @@ as soon as `939112` actually repeated. This is exactly the generalization the st
 designed for — it never assumes what the "right" size should be, only that the *same* size
 repeating means the write is done.
 
+**`INITIAL_INDEX_CANDIDATES` itself later found stale** (found via `capture_stills_across_
+resolutions.py`'s first real-hardware run, which copied this script's index-search code
+verbatim — see that script's own section below for the full write-up). `range(1, 51)`, widened
+from `range(1, 11)` after this file's very first real-hardware run, had itself gone stale by the
+time the fifth run above left the real index at `59` — past this window's own ceiling. The
+pre-existing "wide fallback" never actually widened anything on a run's first still, since it only
+fired when `last_confirmed_index is not None`, which is never true exactly then. Fixed with a new
+`_guess_with_fallbacks()` helper: hinted band (if known), then the initial bootstrap range, then a
+genuinely wider `WIDE_FALLBACK_INDEX_CANDIDATES` (`range(51, 251)`) — each tried only once the one
+before it comes up completely empty. Not yet re-run against real hardware in this form.
+
 **`examples/capture_stills_across_resolutions.py`** extends this same per-still sequence
 (unchanged — held-open BLE connection, `exclude`, adaptive index search, `INTER_STILL_DELAY_S`,
 the stability-based download check) across a deliberate `set_camera_format()` sweep, because every
@@ -2011,7 +2022,37 @@ since this script calls it through `RestCameraSession`. A failed format switch s
 stills and continues with the next one (mirroring `rest_change_format.py`'s own per-step
 reporting), and a failed still within a format doesn't stop the rest — the same two-level
 partial-success philosophy `capture_multiple_stills.py` already established at one level. Reports
-observed still sizes grouped by format in its final summary. Not yet run against real hardware.
+observed still sizes grouped by format in its final summary.
+
+**First real-hardware run (2026-08-24) confirmed the transport separation and surfaced two
+findings.** The design intent — `set_camera_format` over REST only, `capture_photo()` over BLE
+only, never crossed — held exactly as run: one `PUT /system/format` per switch (no BLE bytes), one
+`TX: FF 04 00 00 0A 03 00 00` per trigger (no REST write). Two findings beyond that:
+
+1. **`BRAW 3:1 @ HD @ 23.98` was correctly rejected.** `set_camera_format` raised
+   `BMDUnsupportedError`: `does not report offering codec='BRaw:3_1' at recordResolution=(1920,
+   1080) frameRate='23.98' in GET /system/supportedFormats`. **Not a bug** — `"BRaw:3_1"` is
+   exactly `rest/mapping.py`'s confirmed colon-to-underscore derivation rule working correctly;
+   the camera's own live capability matrix genuinely doesn't offer this combination on this
+   profile. The capability check did exactly its job (design principle 7): that format's stills
+   were skipped and the sweep continued cleanly with `ProRes 422 4K DCI`, which did switch
+   successfully. First real evidence that not every combination this profile's own tables can
+   *name* is one the camera will actually *offer* over REST — the REST-side analogue of what
+   BLE's `known_unreachable`/`max_fps_int` tables already document for BLE.
+2. **0/6 stills that captured and confirmed successfully were ever usable — all 6 failed at the
+   `guess` step**, across both formats that did switch. Root cause: `INITIAL_INDEX_CANDIDATES =
+   range(1, 51)`, copied verbatim from `capture_multiple_stills.py`, had itself gone stale —
+   `capture_multiple_stills.py`'s own fifth run (above) alone left the camera's real index counter
+   at `59`, past this window's ceiling, and this script never carries an index hint across
+   separate process runs the way one run carries a hint across its own stills. The pre-existing
+   "wide fallback" never actually helped here either: it only fired when `last_confirmed_index is
+   not None`, which is never true on a run's first still — exactly the case that failed. Fixed in
+   both scripts identically: a new `_guess_with_fallbacks()` helper tries the hinted band (if a
+   previous still's index is known), then the initial bootstrap range, then a genuinely wider
+   `WIDE_FALLBACK_INDEX_CANDIDATES` (`range(51, 251)`) — each only once the one before it comes up
+   completely empty. **Side effect of the original failure**: since `guess` never found a path,
+   `delete_still()` was never reached — this run's 6 real stills were left on the card, undeleted.
+   Not yet re-run with the fix.
 
 **Second run, same camera/firmware/day, closes the gap — with a real defect found and fixed.**
 A small standalone script (bypassing `guess_new_still_path()` entirely, calling `delete_still()`

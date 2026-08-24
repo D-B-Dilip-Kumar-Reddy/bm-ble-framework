@@ -69,13 +69,56 @@ not stop that format's remaining stills, or later formats — the same
 partial-success philosophy `capture_multiple_stills.py`/`delete_clips()`/
 `download_clips()` already established.
 
+FIRST REAL-HARDWARE RUN (2026-08-24) surfaced two findings, one real camera
+fact and one real defect in this script's own inherited code — both TX/RX
+confirmed the transport separation this script is built around held exactly
+as designed: `set_camera_format` sent one `PUT /system/format` per format
+(REST only, no BLE bytes), and every photo trigger was `TX: FF 04 00 00 0A
+03 00 00` over BLE (no REST write involved) — see `RestCameraSession`/
+`CameraSession`'s own strict transport separation (design principle 5).
+
+1. **`("BRAW", "3:1", "HD", FPS)` was rejected**: `set_camera_format` raised
+   `BMDUnsupportedError` — `does not report offering codec='BRaw:3_1' at
+   recordResolution=(1920, 1080) frameRate='23.98' in GET
+   /system/supportedFormats`. This is **not a bug** — `"BRaw:3_1"` is
+   exactly the confirmed BRAW colon-to-underscore derivation rule
+   (`rest/mapping.py`) working correctly; the camera's own live capability
+   matrix genuinely doesn't offer BRAW 3:1 at HD/23.98 on this profile. The
+   capability check worked exactly as designed (principle 7): that
+   format's stills were skipped and the sweep continued with `ProRes 422
+   4K DCI`, which did switch successfully. First real-hardware evidence
+   that not every `(codec, variant, resolution, fps)` combination this
+   profile's tables can *name* is one the camera will actually *offer* —
+   worth remembering when picking `FORMATS` values, over REST just as much
+   as BLE's own `known_unreachable`/`max_fps_int` tables already document
+   for BLE.
+2. **0/6 stills that *did* capture successfully were ever confirmed usable**
+   — every single one failed at the `guess` step, both formats, despite
+   `[... #N] Confirmed ✓` printing every time (the REST-side Stills `mtime`
+   signal fired correctly). Root cause: `INITIAL_INDEX_CANDIDATES =
+   range(1, 51)`, copied verbatim from `capture_multiple_stills.py`, had
+   already gone stale by this run — enough earlier development-session
+   captures (that script's own fifth run alone left the index at `59`) had
+   pushed the camera's real index counter past `51`, and this script never
+   carries a hint across separate process runs the way a single run
+   carries one across its own stills. Fixed with a genuinely wider
+   second-tier `WIDE_FALLBACK_INDEX_CANDIDATES` (`range(51, 251)`), tried
+   only once the narrower window(s) come up completely empty — see
+   `_guess_with_fallbacks()`. The same fix was applied to
+   `capture_multiple_stills.py`, which shares the identical defect (its
+   own "wide fallback" was, before this fix, literally the same range as
+   the initial bootstrap — never actually wider). **Side effect of the
+   original failure**: because `guess` never found a path, `delete_still()`
+   was never reached — this run's 6 real stills were left on the card,
+   undeleted; a caller hitting this failure mode should check for
+   orphaned stills manually (e.g. via `rest_delete_still.py` once the real
+   filename is known some other way) rather than assume the card is clean.
+
 STATUS: every mechanism this script reuses from `capture_multiple_stills.py`
-(the held-open connection, `exclude`, the adaptive index search,
-`INTER_STILL_DELAY_S`, and the stability-based download check) is
-real-hardware-confirmed *within a single format* — this script's own
-real-hardware run, which additionally exercises `set_camera_format`
-mid-run and captures across genuinely different resolutions/codecs in one
-session, is what's new and unconfirmed here.
+(the held-open connection, `exclude`, `INTER_STILL_DELAY_S`, and the
+stability-based download check) is real-hardware-confirmed *within a single
+format*. The adaptive index search's three-tier fallback and the format-sweep
+mechanism itself are new following the fixes above and not yet re-run.
 
 Usage:
     python examples/capture_stills_across_resolutions.py
@@ -124,6 +167,15 @@ DEST_DIR = Path(__file__).parent / "downloads"
 # unknown, later ones only increment. See that script's own comments.
 INITIAL_INDEX_CANDIDATES = range(1, 51)
 HINTED_INDEX_WINDOW = 5
+# Real-hardware finding (2026-08-24, this script's first run): even
+# INITIAL_INDEX_CANDIDATES went stale — every one of 6 successful captures
+# across two formats failed at the guess step, because the camera's real
+# index counter had grown past 51 from earlier development-session captures
+# (this script never carries a hint across process runs). A genuinely wider
+# second-tier bootstrap window, tried only once the first one comes up
+# completely empty, catches that without paying its larger per-guess cost on
+# every still. Same fix applied to capture_multiple_stills.py.
+WIDE_FALLBACK_INDEX_CANDIDATES = range(51, 251)
 
 # Real-hardware-confirmed minimum gap between physical captures
 # (capture_multiple_stills.py's second real-hardware run).
@@ -165,6 +217,40 @@ def _index_from_path(path: str) -> int | None:
         return None
     digits = stem[marker + 2 :]
     return int(digits) if digits.isdigit() else None
+
+
+async def _guess_with_fallbacks(
+    rest_session: RestCameraSession,
+    mount_path: str,
+    trigger_time: datetime,
+    guessed_paths: list[str],
+    last_confirmed_index: int | None,
+) -> tuple[str | None, list[str]]:
+    """Three-tier degrading search: the hinted narrow band (if a previous
+    still's index is known), then the initial bootstrap range, then a
+    genuinely wider second-tier range — each tried only if the one before
+    it came up completely empty. Returns the guessed path (or `None`) and a
+    human-readable trail of what was tried, for the failure message."""
+    attempts: list[tuple[str, range]] = []
+    hinted = _index_candidates_for(last_confirmed_index)
+    attempts.append(("hinted" if last_confirmed_index is not None else "initial", hinted))
+    if last_confirmed_index is not None:
+        attempts.append(("initial", INITIAL_INDEX_CANDIDATES))
+    attempts.append(("wide fallback", WIDE_FALLBACK_INDEX_CANDIDATES))
+
+    tried: list[str] = []
+    for label, candidates in attempts:
+        guessed_path = await guess_new_still_path(
+            rest_session,
+            mount_path,
+            around=trigger_time,
+            index_candidates=candidates,
+            exclude=guessed_paths,
+        )
+        tried.append(f"{label} ({candidates.start}-{candidates.stop - 1})")
+        if guessed_path is not None:
+            return guessed_path, tried
+    return None, tried
 
 
 @dataclass
@@ -220,28 +306,12 @@ async def capture_one_still(
     outcome.captured = True
     print(f"  [{format_label} #{index}] Confirmed ✓")
 
-    index_candidates = _index_candidates_for(last_confirmed_index)
-    guessed_path = await guess_new_still_path(
-        rest_session,
-        mount_path,
-        around=trigger_time,
-        index_candidates=index_candidates,
-        exclude=guessed_paths,
+    guessed_path, tried = await _guess_with_fallbacks(
+        rest_session, mount_path, trigger_time, guessed_paths, last_confirmed_index
     )
-    if guessed_path is None and last_confirmed_index is not None:
-        guessed_path = await guess_new_still_path(
-            rest_session,
-            mount_path,
-            around=trigger_time,
-            index_candidates=INITIAL_INDEX_CANDIDATES,
-            exclude=guessed_paths,
-        )
     if guessed_path is None:
         outcome.stopped_at = "guess"
-        outcome.error = (
-            f"guess_new_still_path() found nothing new (searched index_candidates="
-            f"{list(index_candidates)!r}, then the wide fallback)"
-        )
+        outcome.error = f"guess_new_still_path() found nothing new (tried: {', '.join(tried)})"
         return outcome
     outcome.guessed_path = guessed_path
     guessed_paths.append(guessed_path)

@@ -176,6 +176,25 @@ stability check's cross-format generalization claim is still otherwise
 resting on same-format runs only (every still above was `.braw` at
 whatever resolution the camera happened to already be set to).
 
+`INITIAL_INDEX_CANDIDATES` ITSELF WENT STALE (2026-08-24, found via
+`capture_stills_across_resolutions.py`'s first real-hardware run, which
+copied this script's index-search code verbatim) — `range(1, 51)`,
+widened from `range(1, 11)` after the very first real-hardware run in this
+file's own history (see "INDEX SEARCH IS NOW ADAPTIVE" above), had itself
+gone stale by the time that later script ran: the fifth run recorded above
+alone left the camera's real index counter at `59`, past this window's own
+ceiling, and every one of that later script's 6 real captures failed at
+the `guess` step as a result — despite each one confirming successfully.
+The old "wide fallback" (`if guessed_path is None and last_confirmed_index
+is not None: … INITIAL_INDEX_CANDIDATES`) never actually widened anything
+for a run's *first* still, since `last_confirmed_index` is `None` exactly
+then — the fallback and the initial attempt used the identical range. Fixed
+here too, identically: `_guess_with_fallbacks()` now tries the hinted band
+(if a previous still's index is known), then the initial bootstrap range,
+then a genuinely wider `WIDE_FALLBACK_INDEX_CANDIDATES` (`range(51, 251)`)
+— each only once the one before it comes up completely empty. Not yet
+re-run against real hardware in this form.
+
 Usage:
     python examples/capture_multiple_stills.py
 """
@@ -220,6 +239,16 @@ INITIAL_INDEX_CANDIDATES = range(1, 51)
 # Once a real index is known, the counter only increments — a narrow band
 # just above it is both faster and more targeted than guessing blind again.
 HINTED_INDEX_WINDOW = 5
+# Real-hardware finding (2026-08-24, capture_stills_across_resolutions.py's
+# first run — same guess logic, copied verbatim into this script too): even
+# INITIAL_INDEX_CANDIDATES eventually goes stale as more development-session
+# captures push the camera's real index counter past it — that run's every
+# still failed at the guess step, 6/6, because the real index had grown past
+# 51 since the last time this exact window was sized. A genuinely wider
+# second-tier bootstrap window, tried only once the first one comes up
+# completely empty, catches that without paying its larger per-guess cost on
+# every still.
+WIDE_FALLBACK_INDEX_CANDIDATES = range(51, 251)
 
 # Second real-hardware run (2026-08-24, STILL_COUNT=10, no delay at all):
 # every even-numbered still failed to confirm within 15s, every odd one
@@ -282,6 +311,40 @@ def _index_from_path(path: str) -> int | None:
     return int(digits) if digits.isdigit() else None
 
 
+async def _guess_with_fallbacks(
+    rest_session: RestCameraSession,
+    mount_path: str,
+    trigger_time: datetime,
+    guessed_paths: list[str],
+    last_confirmed_index: int | None,
+) -> tuple[str | None, list[str]]:
+    """Three-tier degrading search: the hinted narrow band (if a previous
+    still's index is known), then the initial bootstrap range, then a
+    genuinely wider second-tier range — each tried only if the one before
+    it came up completely empty. Returns the guessed path (or `None`) and a
+    human-readable trail of what was tried, for the failure message."""
+    attempts: list[tuple[str, range]] = []
+    hinted = _index_candidates_for(last_confirmed_index)
+    attempts.append(("hinted" if last_confirmed_index is not None else "initial", hinted))
+    if last_confirmed_index is not None:
+        attempts.append(("initial", INITIAL_INDEX_CANDIDATES))
+    attempts.append(("wide fallback", WIDE_FALLBACK_INDEX_CANDIDATES))
+
+    tried: list[str] = []
+    for label, candidates in attempts:
+        guessed_path = await guess_new_still_path(
+            rest_session,
+            mount_path,
+            around=trigger_time,
+            index_candidates=candidates,
+            exclude=guessed_paths,
+        )
+        tried.append(f"{label} ({candidates.start}-{candidates.stop - 1})")
+        if guessed_path is not None:
+            return guessed_path, tried
+    return None, tried
+
+
 @dataclass
 class StillOutcome:
     index: int
@@ -330,30 +393,12 @@ async def capture_one_still(
     outcome.captured = True
     print(f"  [{index}] Confirmed ✓")
 
-    index_candidates = _index_candidates_for(last_confirmed_index)
-    guessed_path = await guess_new_still_path(
-        rest_session,
-        mount_path,
-        around=trigger_time,
-        index_candidates=index_candidates,
-        exclude=guessed_paths,
+    guessed_path, tried = await _guess_with_fallbacks(
+        rest_session, mount_path, trigger_time, guessed_paths, last_confirmed_index
     )
-    if guessed_path is None and last_confirmed_index is not None:
-        # The hinted narrow band came up empty — fall back to the wide
-        # search once rather than giving up (see module docstring).
-        guessed_path = await guess_new_still_path(
-            rest_session,
-            mount_path,
-            around=trigger_time,
-            index_candidates=INITIAL_INDEX_CANDIDATES,
-            exclude=guessed_paths,
-        )
     if guessed_path is None:
         outcome.stopped_at = "guess"
-        outcome.error = (
-            f"guess_new_still_path() found nothing new (searched index_candidates="
-            f"{list(index_candidates)!r}, then the wide fallback)"
-        )
+        outcome.error = f"guess_new_still_path() found nothing new (tried: {', '.join(tried)})"
         return outcome
     outcome.guessed_path = guessed_path
     guessed_paths.append(guessed_path)
