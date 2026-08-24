@@ -842,10 +842,24 @@ of a real 19-clip-then-20-clip card, and `bytes_written` was computed as `353908
 (`842542612480 - 807151730688`, exact) — the first real-hardware confirmation of the positive
 path (exactly one new clip, both storage snapshots carrying an `active_device`). `record_stop`
 did not raise this run — the first real-hardware run of `record_stop` since
-`stop_verify_timeout_s` was added (the three runs that motivated the fix all predate it). The
-zero-new-clip and more-than-one-new-clip branches remain real-hardware-unexercised, as does
-`bytes_written`'s `None`-returning branches (`storage_before` omitted, or either snapshot
-missing an `active_device`) — this run always had a real active device on both sides.
+`stop_verify_timeout_s` was added (the three runs that motivated the fix all predate it). This
+run always had a real active device on both sides, so it alone didn't exercise the zero-new-clip,
+more-than-one-new-clip, or `bytes_written`'s `None`-returning branches.
+
+**Four of those five branches closed, `POCKET_6K_G2 v8.6`, 2026-08-24** —
+`tools/rest/verify_confirm_new_clip_edge_cases.py`, first run, all tests passed: zero new clips
+(no recording, a same-instant snapshot correctly found nothing new), `bytes_written=None` with
+`storage_before` omitted, `bytes_written=None` with a hand-built no-active-device
+`StorageState` passed as `storage_before` (legitimate — the method only inspects the shape of
+what it's given, never re-validates it was freshly fetched), and more-than-one-new-clip (two
+real clips recorded back-to-back sharing one before-snapshot, both ids named correctly in the
+raised error). **One branch remains genuinely real-hardware-unexercised, deliberately**:
+`bytes_written` staying `None` because the *live* second `storage_state()` call finds no
+active device — forcing it would need the SD card to report no active device at the exact
+moment right after a clip was written, and pulling the card would very likely fail the
+*first* `clips()` call instead of ever reaching this branch. See
+`tools/rest/verify_confirm_new_clip_edge_cases.py`'s own module docstring and
+`docs/rest/transport.md`'s matching section for the full reasoning and run write-up.
 
 ### `set_camera_format(codec, variant, resolution, fps)`
 

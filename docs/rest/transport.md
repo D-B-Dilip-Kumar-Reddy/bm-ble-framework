@@ -1487,7 +1487,20 @@ device. Forcing this would need the SD card to genuinely report no active device
 moment right after a clip was written; pulling the card to simulate it would very likely make
 the *first* `clips()` call (which runs before this branch is ever reached) fail with a 404 ->
 `BMDStorageError` instead, never reaching this branch at all. Left accepted and documented as
-real-hardware-unexercised rather than chased. Not yet run.
+real-hardware-unexercised rather than chased.
+
+**Run 1, `POCKET_6K_G2 v8.6`, 2026-08-24: all 4 tests passed, first try.** Test 1 (zero new
+clips) raised correctly against a same-instant snapshot with nothing recorded since. Tests 2
+and 3 both correctly returned `bytes_written=None` for one real recorded clip
+(`clip_unique_id=5`) — once with `storage_before` omitted, once with the hand-built
+no-active-device `StorageState` — with `confirm_new_clip()` returning the same clip both
+times, as expected. Test 4 correctly raised on two real clips recorded back-to-back
+(`clip_unique_id`s `6` and `7`) sharing one before-snapshot, naming both ids in the error
+message. All three recorded clips were cleaned up afterward (`delete_clip()` for the single
+clip, `delete_clips()` for the pair) — the already-known `/clips/list` same-session staleness
+fired on cleanup exactly as documented elsewhere, not a new finding. 4 of `confirm_new_clip()`'s
+5 defensive branches are now real-hardware-confirmed; the fifth remains the accepted,
+deliberately-unattempted gap described above.
 
 ---
 

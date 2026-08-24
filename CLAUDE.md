@@ -264,10 +264,13 @@ src/bmd_camera/
                               # only new id) with bytes_written=35390881792 computed exactly —
                               # the first real-hardware confirmation of the positive path.
                               # record_stop did not raise — the first real-hardware run since
-                              # stop_verify_timeout_s was added. The zero/multi-new-clip
-                              # branches and bytes_written's None-returning cases remain
-                              # real-hardware-unexercised. See docs/rest/session.md's
-                              # confirm_new_clip() and record_start()/record_stop() sections)
+                              # stop_verify_timeout_s was added. 4 of the zero/multi-new-clip
+                              # and bytes_written None-returning branches were later closed via
+                              # tools/rest/verify_confirm_new_clip_edge_cases.py (POCKET_6K_G2
+                              # v8.6, 2026-08-24, all passed first try); one bytes_written=None
+                              # sub-case (fresh storage_after with no active device) remains
+                              # deliberately unexercised — see that tool's own entry below and
+                              # docs/rest/session.md's confirm_new_clip() section)
                               # and set_camera_format (Phase 5, dual-check
                               # verified, live-capability-gated via supported_formats(),
                               # optional sensor_resolution param for disambiguating
@@ -748,8 +751,12 @@ tools/
                             # would need the SD card to report no active device at the exact
                             # moment right after a clip was written, and pulling the card would
                             # very likely fail the first clips() call instead of ever reaching
-                            # this branch; left accepted and documented rather than chased. Not
-                            # yet run. See docs/rest/transport.md.
+                            # this branch; left accepted and documented rather than chased.
+                            # First run, POCKET_6K_G2 v8.6, 2026-08-24: all 4 tests passed —
+                            # zero new clips, both bytes_written=None cases, and more-than-one-
+                            # new-clip (clip_unique_ids 6 and 7, both named correctly in the
+                            # raised error) all confirmed on the first try. See
+                            # docs/rest/transport.md.
   captures/                 # Runtime output of sniffers/, control/, and rest/ scripts (gitignored)
 
 Tools are grouped by folder according to what kind of thing they do — read-only
