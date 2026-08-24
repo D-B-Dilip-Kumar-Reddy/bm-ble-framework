@@ -1226,8 +1226,14 @@ examples/
                             # three-tier _guess_with_fallbacks() helper -- hinted band, then
                             # initial bootstrap, then a genuinely wider
                             # WIDE_FALLBACK_INDEX_CANDIDATES=range(51,251) -- each tried only
-                            # once the one before it comes up empty. Not yet re-run. See
-                            # docs/rest/session.md's capture_multiple_stills.py section.
+                            # once the one before it comes up empty. CONFIRMED via
+                            # capture_stills_across_resolutions.py's second real-hardware run
+                            # (2026-08-24, same day): 6/6 stills succeeded with no guess
+                            # failures, including the first still of that run whose real index
+                            # was already past the initial bootstrap window and only reachable
+                            # via the new wide-fallback tier. This script shares the identical
+                            # fix but has not itself been re-run since. See docs/rest/session.md's
+                            # capture_multiple_stills.py section.
   capture_stills_across_resolutions.py  # Sweeps FORMATS (a list of codec/
                             # variant/resolution/fps tuples) via
                             # RestCameraSession.set_camera_format(), capturing
@@ -1268,7 +1274,21 @@ examples/
                             # session captures. Fixed identically in both scripts -- see that
                             # script's own entry above. Side effect: guess failing meant
                             # delete_still() was never reached, leaving 6 real stills orphaned
-                            # on the card undeleted. Not yet re-run with the fix.
+                            # on the card undeleted. SECOND REAL-HARDWARE RUN (2026-08-24, same
+                            # day, with the fix) CONFIRMED it end to end: 6/6 stills succeeded,
+                            # BRAW 3:1 @ HD @ 23.98 was rejected again with the identical error
+                            # (a second independent confirmation this is a real, repeatable
+                            # camera limit), and still sizes varied ~9x across codec exactly as
+                            # designed to test -- BRAW 3:1 @ 6K landed at 2856040 bytes, ProRes
+                            # 422 @ 4K DCI (correctly discovered as .dng, no code change needed)
+                            # landed at 26065024 bytes -- with the stability check handling both
+                            # sizes and every observed retry pattern (a classic 4096-byte
+                            # placeholder on one BRAW still, a real larger-file settling pattern
+                            # on two ProRes stills) correctly with no threshold to retune. First
+                            # real evidence the stability check and the index-search fix both
+                            # generalize across a genuine format change, not just within one
+                            # format. _guess_with_fallbacks() now also returns which tier found
+                            # each match, logged as "Guessed (<tier>): ...".
   playback.py               # (planned)
 
 tests/

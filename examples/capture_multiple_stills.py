@@ -192,8 +192,16 @@ then — the fallback and the initial attempt used the identical range. Fixed
 here too, identically: `_guess_with_fallbacks()` now tries the hinted band
 (if a previous still's index is known), then the initial bootstrap range,
 then a genuinely wider `WIDE_FALLBACK_INDEX_CANDIDATES` (`range(51, 251)`)
-— each only once the one before it comes up completely empty. Not yet
-re-run against real hardware in this form.
+— each only once the one before it comes up completely empty. Also now
+returns which tier found the match, printed as `Guessed (<tier>): ...`
+instead of a bare `Guessed: ...`, for future evidentiary clarity.
+
+CONFIRMED via `capture_stills_across_resolutions.py`'s second real-hardware
+run (2026-08-24, same day): 6/6 stills succeeded with no `guess` failures,
+including the first still of that run, whose real index was already past
+the initial bootstrap window's ceiling and only reachable through the new
+`WIDE_FALLBACK_INDEX_CANDIDATES` tier. This script shares the identical fix
+and helper but has not itself been re-run since.
 
 Usage:
     python examples/capture_multiple_stills.py
@@ -317,12 +325,13 @@ async def _guess_with_fallbacks(
     trigger_time: datetime,
     guessed_paths: list[str],
     last_confirmed_index: int | None,
-) -> tuple[str | None, list[str]]:
+) -> tuple[str | None, str | None, list[str]]:
     """Three-tier degrading search: the hinted narrow band (if a previous
     still's index is known), then the initial bootstrap range, then a
     genuinely wider second-tier range — each tried only if the one before
-    it came up completely empty. Returns the guessed path (or `None`) and a
-    human-readable trail of what was tried, for the failure message."""
+    it came up completely empty. Returns the guessed path (or `None`), the
+    label of the tier that found it (or `None`), and a human-readable trail
+    of what was tried, for the failure message."""
     attempts: list[tuple[str, range]] = []
     hinted = _index_candidates_for(last_confirmed_index)
     attempts.append(("hinted" if last_confirmed_index is not None else "initial", hinted))
@@ -341,8 +350,8 @@ async def _guess_with_fallbacks(
         )
         tried.append(f"{label} ({candidates.start}-{candidates.stop - 1})")
         if guessed_path is not None:
-            return guessed_path, tried
-    return None, tried
+            return guessed_path, label, tried
+    return None, None, tried
 
 
 @dataclass
@@ -393,7 +402,7 @@ async def capture_one_still(
     outcome.captured = True
     print(f"  [{index}] Confirmed ✓")
 
-    guessed_path, tried = await _guess_with_fallbacks(
+    guessed_path, tier, tried = await _guess_with_fallbacks(
         rest_session, mount_path, trigger_time, guessed_paths, last_confirmed_index
     )
     if guessed_path is None:
@@ -402,7 +411,7 @@ async def capture_one_still(
         return outcome
     outcome.guessed_path = guessed_path
     guessed_paths.append(guessed_path)
-    print(f"  [{index}] Guessed: {guessed_path}")
+    print(f"  [{index}] Guessed ({tier}): {guessed_path}")
 
     dest: Path | None = None
     sizes: list[int] = []

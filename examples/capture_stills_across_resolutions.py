@@ -114,11 +114,42 @@ as designed: `set_camera_format` sent one `PUT /system/format` per format
    orphaned stills manually (e.g. via `rest_delete_still.py` once the real
    filename is known some other way) rather than assume the card is clean.
 
+SECOND REAL-HARDWARE RUN (2026-08-24, same day, with the index-search fix
+above) CONFIRMED both fixes end to end: **6/6 stills succeeded**, and
+`("BRAW", "3:1", "HD", FPS)` was rejected again with the identical error —
+a second, independent confirmation that this is a genuine, repeatable
+camera capability limit, not a one-off glitch. This run is also the first
+real evidence the stability check and the three-tier index search both
+generalize across a real format change, not just within one format:
+
+- **Still sizes varied by ~9x across codec, exactly the axis this script
+  exists to exercise**: `BRAW 3:1 @ 6K` stills all landed at `2856040`
+  bytes; `ProRes 422 @ 4K DCI` stills (`.dng`, correctly discovered by
+  `guess_new_still_path()`'s extension search — `STILL_EXTENSIONS`, no
+  code change needed) all landed at `26065024` bytes. The stability check
+  handled both sizes correctly with no threshold to retune, exactly the
+  design goal `MIN_STILL_BYTES` couldn't have met safely. One BRAW still
+  (#3) hit the classic `4096`-byte placeholder on attempt 1 before
+  stabilizing on attempt 3; the two ProRes stills that needed more than
+  one attempt disagreed slightly between reads (`25952256` vs `26065024`)
+  before repeating — a real, larger file settling over more than one
+  size change, not just placeholder-vs-real, and the check handled that
+  correctly too by simply waiting for two consecutive identical reads
+  regardless of how many distinct sizes came before.
+- **The index-search fix worked**: all 6 guesses succeeded (0 failures,
+  down from 6/6 failing in the previous run), including the very first
+  still of the run, whose real index (`66`) was already past the initial
+  bootstrap window's ceiling (`51`) — only reachable via the new
+  `WIDE_FALLBACK_INDEX_CANDIDATES` tier. `_guess_with_fallbacks()` now
+  returns which tier found the match (`Guessed (<tier>): ...`) so a future
+  run's log makes this directly visible instead of just inferable from
+  index arithmetic.
+
 STATUS: every mechanism this script reuses from `capture_multiple_stills.py`
 (the held-open connection, `exclude`, `INTER_STILL_DELAY_S`, and the
-stability-based download check) is real-hardware-confirmed *within a single
-format*. The adaptive index search's three-tier fallback and the format-sweep
-mechanism itself are new following the fixes above and not yet re-run.
+stability-based download check), the three-tier index search, and the
+format-sweep mechanism itself are all now real-hardware-confirmed, including
+across a genuine codec/resolution change within one run.
 
 Usage:
     python examples/capture_stills_across_resolutions.py
@@ -225,12 +256,13 @@ async def _guess_with_fallbacks(
     trigger_time: datetime,
     guessed_paths: list[str],
     last_confirmed_index: int | None,
-) -> tuple[str | None, list[str]]:
+) -> tuple[str | None, str | None, list[str]]:
     """Three-tier degrading search: the hinted narrow band (if a previous
     still's index is known), then the initial bootstrap range, then a
     genuinely wider second-tier range — each tried only if the one before
-    it came up completely empty. Returns the guessed path (or `None`) and a
-    human-readable trail of what was tried, for the failure message."""
+    it came up completely empty. Returns the guessed path (or `None`), the
+    label of the tier that found it (or `None`), and a human-readable trail
+    of what was tried, for the failure message."""
     attempts: list[tuple[str, range]] = []
     hinted = _index_candidates_for(last_confirmed_index)
     attempts.append(("hinted" if last_confirmed_index is not None else "initial", hinted))
@@ -249,8 +281,8 @@ async def _guess_with_fallbacks(
         )
         tried.append(f"{label} ({candidates.start}-{candidates.stop - 1})")
         if guessed_path is not None:
-            return guessed_path, tried
-    return None, tried
+            return guessed_path, label, tried
+    return None, None, tried
 
 
 @dataclass
@@ -306,7 +338,7 @@ async def capture_one_still(
     outcome.captured = True
     print(f"  [{format_label} #{index}] Confirmed ✓")
 
-    guessed_path, tried = await _guess_with_fallbacks(
+    guessed_path, tier, tried = await _guess_with_fallbacks(
         rest_session, mount_path, trigger_time, guessed_paths, last_confirmed_index
     )
     if guessed_path is None:
@@ -315,7 +347,7 @@ async def capture_one_still(
         return outcome
     outcome.guessed_path = guessed_path
     guessed_paths.append(guessed_path)
-    print(f"  [{format_label} #{index}] Guessed: {guessed_path}")
+    print(f"  [{format_label} #{index}] Guessed ({tier}): {guessed_path}")
 
     dest: Path | None = None
     sizes: list[int] = []

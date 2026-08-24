@@ -2006,7 +2006,15 @@ pre-existing "wide fallback" never actually widened anything on a run's first st
 fired when `last_confirmed_index is not None`, which is never true exactly then. Fixed with a new
 `_guess_with_fallbacks()` helper: hinted band (if known), then the initial bootstrap range, then a
 genuinely wider `WIDE_FALLBACK_INDEX_CANDIDATES` (`range(51, 251)`) — each tried only once the one
-before it comes up completely empty. Not yet re-run against real hardware in this form.
+before it comes up completely empty. Also now returns which tier found the match, printed as
+`Guessed (<tier>): ...` instead of a bare `Guessed: ...`, for future evidentiary clarity.
+
+**CONFIRMED** via `capture_stills_across_resolutions.py`'s second real-hardware run (2026-08-24,
+same day — see that script's own section below for the full write-up): 6/6 stills succeeded with
+no `guess` failures, including the first still of that run, whose real index was already past the
+initial bootstrap window's ceiling and only reachable through the new `WIDE_FALLBACK_INDEX_
+CANDIDATES` tier. This script shares the identical fix and helper but has not itself been re-run
+since.
 
 **`examples/capture_stills_across_resolutions.py`** extends this same per-still sequence
 (unchanged — held-open BLE connection, `exclude`, adaptive index search, `INTER_STILL_DELAY_S`,
@@ -2052,7 +2060,27 @@ only, never crossed — held exactly as run: one `PUT /system/format` per switch
    `WIDE_FALLBACK_INDEX_CANDIDATES` (`range(51, 251)`) — each only once the one before it comes up
    completely empty. **Side effect of the original failure**: since `guess` never found a path,
    `delete_still()` was never reached — this run's 6 real stills were left on the card, undeleted.
-   Not yet re-run with the fix.
+
+**Second real-hardware run (2026-08-24, same day, with the index-search fix in place) CONFIRMED
+both fixes end to end: 6/6 stills succeeded.** `("BRAW", "3:1", "HD", FPS)` was rejected again with
+the identical error — a second, independent confirmation this is a genuine, repeatable camera
+capability limit, not a one-off glitch. This run is also the first real evidence the stability
+check and the three-tier index search both generalize across a real format change, not just within
+one format:
+
+- **Still sizes varied by ~9x across codec**, exactly the axis this script exists to exercise:
+  `BRAW 3:1 @ 6K` stills all landed at `2856040` bytes; `ProRes 422 @ 4K DCI` stills (`.dng`,
+  correctly discovered by `guess_new_still_path()`'s extension search, `STILL_EXTENSIONS` — no code
+  change needed) all landed at `26065024` bytes. The stability check handled both sizes with no
+  threshold to retune — exactly the design goal a fixed `MIN_STILL_BYTES` couldn't have met safely.
+  One BRAW still hit the classic `4096`-byte placeholder on attempt 1 before stabilizing on attempt
+  3; two ProRes stills disagreed slightly between reads (`25952256` vs `26065024`) before
+  repeating — a real, larger file settling across more than one size change, not just
+  placeholder-vs-real — and the check handled that correctly too, since it only ever waits for two
+  *consecutive* identical reads, regardless of how many distinct sizes came before.
+- **The index-search fix worked**: all 6 guesses succeeded, including the very first still of the
+  run, whose real index (`66`) was already past the initial bootstrap window's ceiling (`51`) —
+  only reachable via the new `WIDE_FALLBACK_INDEX_CANDIDATES` tier.
 
 **Second run, same camera/firmware/day, closes the gap — with a real defect found and fixed.**
 A small standalone script (bypassing `guess_new_still_path()` entirely, calling `delete_still()`
