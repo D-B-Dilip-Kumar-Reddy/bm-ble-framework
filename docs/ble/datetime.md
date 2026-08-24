@@ -1,16 +1,16 @@
 # BLE Date/Time (Category 7 — Real Time Clock)
 
-**Status: UNCONFIRMED, and now 0-for-4 on real hardware.** Four real-hardware
-runs so far (§4-§6, §8) — committed date/time/timezone changes, a full
-connect-time state burst (48 notifications across 7 categories, 16 Lens
-parameters alone), and a correctly-formed active write with the default
-wire coordinates — and none produced any Category 7 signal, in either
-direction: no report ever observed, and a plausibly-correct write had no
-visible effect on the camera. Nothing in this document beyond §1 is
-anything more than [spec] transcription. `tools/control/send_datetime_
-command.py` now has `--reserved`/`--operation` override flags (§7) to try
-two untested wire coordinates before concluding a permanent limitation —
-neither tried yet.
+**Status: UNCONFIRMED, and now 0-for-6 on real hardware — every avenue this
+investigation identified has been tried.** Six real-hardware runs (§4-§6,
+§8-§9): three passive (committed changes, a full connect-time state burst
+covering 7 categories and 16 Lens parameters) and three active (`ASSIGN`
+with default coordinates, `ASSIGN` with an alternate reserved byte,
+`OFFSET`). None produced any Category 7 signal in either direction — no
+report, ever, and no write ever visibly changed the camera. Nothing in this
+document beyond §1 is anything more than [spec] transcription. See §9 for
+why "this camera/firmware does not implement Category 7 over BLE at all" is
+now the best-supported reading, and what's left (increasingly
+unprincipled brute-forcing, not further reasoned discovery).
 
 ## 1. Why this category, and why now
 
@@ -266,9 +266,10 @@ has no way to read the camera's current value to compute that delta itself,
 so the operator supplies it directly (e.g. `--minutes 15` to nudge
 `UTC+05:30` by 15 minutes under `OFFSET`, not `--minutes 345`).
 
-**Status: real-hardware-run, `POCKET_6K_G2 v8.6`, 2026-08-24 — failed with
-default `--reserved`/`--operation` (§8); the two override flags above are
-untried.**
+**Status: real-hardware-run, `POCKET_6K_G2 v8.6`, 2026-08-24 — failed on
+every coordinate tried: default `--reserved`/`--operation` (§8), the
+alternate reserved byte, and `OFFSET` (§9). See §9 for why this now points
+toward a permanent BLE limitation rather than a wrong wire coordinate.**
 
 ## 8. Run 4 — active write probe: correctly-formed, camera did not visibly change, `POCKET_6K_G2 v8.6`, 2026-08-24
 
@@ -314,7 +315,39 @@ Both are real possibilities; neither is preferred by the evidence so far.
 `send_settings_command.py`'s own discovery axes) are the next concrete
 tooling step if this investigation continues — not yet built.
 
-## 9. Planned shape once confirmed
+## 9. Runs 5-6 — both remaining discovery axes tried, both failed, `POCKET_6K_G2 v8.6`, 2026-08-24
+
+Two more real-hardware runs, both against `--parameter timezone`, closing
+out the two discovery axes §8 identified:
+
+- **Run 5**: `--reserved 0x01` (`ASSIGN`, `--minutes 345`). TX: `FF 08 00 01
+  07 02 03 00 59 01 00 00` — header byte 3 correctly shows `0x01`. **No
+  visible change on the camera's SETUP screen. No Category 7 traffic** —
+  same signature as run 4.
+- **Run 6**: `--operation OFFSET` (`--minutes 15`, the delta form per this
+  flag's documented semantics — see §7). TX: `FF 08 00 00 07 02 03 01 0F 00
+  00 00` — header byte 7 correctly shows `0x01` (`OFFSET`). **No visible
+  change on the camera's SETUP screen. No Category 7 traffic** — again the
+  same signature.
+
+**Both of the two identified discovery axes are now exhausted, in addition
+to the default coordinates run 4 already tried.** Across six real-hardware
+attempts total (three passive, three active — default `ASSIGN`, `ASSIGN`
+with the alternate reserved byte, and `OFFSET`), Category 7 has never once
+produced a BLE-observable effect in either direction — no report, ever, and
+no write, of any form tried, ever visibly changed the camera. Reading 1 from
+§8 (this camera/firmware genuinely does not implement Category 7 over BLE,
+in either direction) is now the far better-supported explanation; reading 2
+(an untested wire coordinate) has had its two most-likely candidates
+directly tested and ruled out. What remains untested is a much larger and
+progressively less-principled space — every possible reserved byte value,
+an entirely different category/parameter numbering than the spec table
+describes, or other operation/data-type combinations with no particular
+reason to expect any of them over the two already tried. Continuing further
+would mean brute-forcing rather than reasoned discovery, a different kind of
+effort than everything tried so far.
+
+## 10. Planned shape once confirmed
 
 Not yet built — recorded here so the plan is visible before any code exists,
 per this project's practice of documenting design intent honestly rather than
