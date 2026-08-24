@@ -2071,13 +2071,18 @@ way `BulkDeleteResult.deleted` does — for a download, the new/interesting info
 file landed locally*, not clip metadata (which `download_clip()` doesn't return in the first
 place).
 
-**Status: not yet real-hardware-run.** The real-hardware verification script is
+**Status: real-hardware-confirmed, `POCKET_6K_G2 v8.6`, 2026-08-24**, first run of
 `examples/rest_download_clips_bulk.py` — an ordinary capability-demonstration script, not an
-edge-case-forcing one, so it lives under `examples/` rather than `tools/rest/`. It downloads the
-first `MAX_CLIPS` (default 3) clips `clips()` reports (or an explicit `CLIP_UNIQUE_IDS` list) and
-reports both per-clip and aggregate throughput (total bytes / total elapsed time) — since the
-user's stated interest going forward is capabilities affecting SD card read/write speed, this
-script doubles as a rough real-world read-speed measurement, not just a correctness check.
+edge-case-forcing one, so it lives under `examples/` rather than `tools/rest/`. The card had only
+two clips, so `clips[:MAX_CLIPS]` (default 3) naturally selected both: `clip_unique_id=4`
+(`A002_08120219_C002.braw`, `30931108` bytes) and `clip_unique_id=3`
+(`A002_08132258_C003.braw`, `85028752` bytes). `download_clips(): 2/2 downloaded, 0 failed` — no
+defects found, both files written correctly with no `Content-Length` mismatch. Aggregate:
+`115959860` bytes in `0.5s` (`248.5 MB/s`) — since the user's stated interest going forward is
+capabilities affecting SD card read/write speed, this script doubles as a rough real-world
+read-speed measurement, not just a correctness check; this first number is USB-transport-bound
+(both files together fit in half a second), not yet a measurement of a real multi-GB clip's
+sustained transfer rate.
 
 ---
 

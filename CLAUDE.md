@@ -613,9 +613,12 @@ src/bmd_camera/
                               # (which download_clip() doesn't return either). No bulk
                               # download_still() — stills have no clips()-equivalent listing to
                               # validate a batch against, the same reason delete_clips() has no
-                              # bulk still-deletion counterpart. Not yet real-hardware-run — see
-                              # examples/rest_download_clips_bulk.py and docs/rest/session.md's
-                              # Phase 15 section.
+                              # bulk still-deletion counterpart. Real-hardware-confirmed,
+                              # POCKET_6K_G2 v8.6, 2026-08-24, first run of
+                              # examples/rest_download_clips_bulk.py: the card's two clips
+                              # (clip_unique_id 4 and 3) both downloaded successfully, 0 failed,
+                              # 115959860 bytes total in 0.5s (248.5 MB/s aggregate) — no defects
+                              # found. See docs/rest/session.md's Phase 15 section.
     mapping.py                 # Codec name derivation between the BLE profile's vocabulary
                               # and REST's own spelling — confirmed strings always win
                               # (design principle 1); this is a fallback seed only.
@@ -1085,8 +1088,11 @@ examples/
                             # against deleting real footage. Reports both per-clip and aggregate
                             # (total bytes / total elapsed) throughput, doubling as a rough
                             # real-world SD card read-speed measurement given the user's stated
-                            # interest in card read/write performance going forward. Not yet
-                            # real-hardware-run. See docs/rest/session.md's Phase 15 section.
+                            # interest in card read/write performance going forward.
+                            # Real-hardware-confirmed, POCKET_6K_G2 v8.6, 2026-08-24: first run
+                            # downloaded both clips on the card (clip_unique_id 4 and 3, 2/2, 0
+                            # failed), 115959860 bytes total in 0.5s (248.5 MB/s aggregate) — no
+                            # defects found. See docs/rest/session.md's Phase 15 section.
   playback.py               # (planned)
 
 tests/
