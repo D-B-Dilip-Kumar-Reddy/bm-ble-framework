@@ -11,12 +11,24 @@ document, not [sniffer-verified] (design principle 6 — every protocol value
 must come from a real capture on the specific camera/firmware, never from the
 spec alone). This tool is how that capture gets taken.
 
-Connects to the camera, then runs one interactive capture window per action
-label, exactly like sniffer_settings.py. The operator triggers each change on
-the physical camera's SETUP menu between two Enter presses; the tool only
-listens. For each window it prints every (characteristic, category,
-parameter) triple observed on INCOMING_CONTROL / CAMERA_STATUS and saves the
-full decoded capture to tools/captures/.
+Two modes:
+
+1. Default (`--actions`): runs one interactive capture window per action
+   label, exactly like sniffer_settings.py. The operator triggers each change
+   on the physical camera's SETUP menu between two Enter presses; the tool
+   only listens.
+2. `--burst-seconds N`: connect-burst mode — no operator action at all.
+   Listens for N seconds starting immediately after subscribing, to test
+   whether the camera announces state (Category 7 included) unprompted right
+   after a BLE client connects. Added after two real-hardware `--actions`
+   runs (docs/ble/datetime.md §4, §5) found zero Category 7 traffic even
+   across genuine committed date/time/timezone changes — this mode exists to
+   rule in or out a capture-timing gap as the explanation, before escalating
+   to an active write probe.
+
+Either way, every window prints every (characteristic, category, parameter)
+triple observed on INCOMING_CONTROL / CAMERA_STATUS and saves the full
+decoded capture to tools/captures/.
 
 WHY THIS MATTERS BEYOND THE CATEGORY ITSELF
 ---------------------------------------------
@@ -63,6 +75,7 @@ Usage:
     python tools/sniffers/sniffer_datetime.py
     python tools/sniffers/sniffer_datetime.py --model-key POCKET_6K_PRO --firmware v8.6
     python tools/sniffers/sniffer_datetime.py --actions change_date,change_time
+    python tools/sniffers/sniffer_datetime.py --burst-seconds 10
 """
 
 from __future__ import annotations
@@ -78,6 +91,7 @@ from capture import (  # noqa: E402
     configure_console_logging,
     print_window_summary,
     run_capture_windows,
+    run_immediate_burst_capture,
     save_capture,
 )
 
@@ -96,19 +110,29 @@ DEFAULT_ACTION_LABELS = [
 
 
 async def run(args: argparse.Namespace) -> int:
-    labels = [label.strip() for label in args.actions.split(",") if label.strip()]
-    if not labels:
-        raise SystemExit("--actions must name at least one capture window label.")
-
     profile = CameraProfile.for_model(model_key=args.model_key, firmware=args.firmware)
     discovered = await scan_for_camera(profile.ble_name, timeout=args.timeout)
     cam = BMDCameraController(discovered=discovered, profile=profile)
 
     await cam.connect()
     try:
-        session = await run_capture_windows(cam, labels)
-        for window in session.windows:
-            print_window_summary(window)
+        if args.burst_seconds is not None:
+            print(
+                f"\nConnect-burst mode: listening for {args.burst_seconds}s starting "
+                "immediately after subscribing, no operator action needed — tests "
+                "whether the camera announces state (Category 7 included) unprompted "
+                "right after a BLE client connects, which the operator-triggered "
+                "--actions windows structurally cannot catch (docs/ble/datetime.md §5)."
+            )
+            session = await run_immediate_burst_capture(cam, listen_seconds=args.burst_seconds)
+        else:
+            labels = [label.strip() for label in args.actions.split(",") if label.strip()]
+            if not labels:
+                raise SystemExit("--actions must name at least one capture window label.")
+            session = await run_capture_windows(cam, labels)
+            for window in session.windows:
+                print_window_summary(window)
+
         saved_path = save_capture(args.model_key, args.firmware, session)
         print(f"\nCapture saved to: {saved_path}")
         print(
@@ -147,7 +171,20 @@ def parse_args() -> argparse.Namespace:
         default=",".join(DEFAULT_ACTION_LABELS),
         help=(
             "Comma-separated capture window labels, one window per operator-"
-            "triggered change. Default: " + ",".join(DEFAULT_ACTION_LABELS)
+            "triggered change. Ignored when --burst-seconds is given. "
+            "Default: " + ",".join(DEFAULT_ACTION_LABELS)
+        ),
+    )
+    parser.add_argument(
+        "--burst-seconds",
+        type=float,
+        default=None,
+        help=(
+            "Connect-burst mode instead of --actions: listen for this many "
+            "seconds starting immediately after subscribing, no operator "
+            "action needed. Tests whether the camera announces state "
+            "unprompted right after connecting (docs/ble/datetime.md §5) — "
+            "run this with no other setup needed. Not combined with --actions."
         ),
     )
     parser.add_argument(

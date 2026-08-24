@@ -171,11 +171,21 @@ all. Two readings, not yet distinguished:
    ruled out either.
 
 Neither reading has been distinguished yet; both are consistent with what's
-been captured so far. See the parent conversation for the options considered
-for how to proceed (an active `ASSIGN` write probe with visual confirmation
-on the camera's own screen, a passive reconnect-burst check, or accepting
-this as a permanent BLE limitation and closing the investigation) — the path
-chosen from those options will be recorded here once decided.
+been captured so far. Three options were considered for how to proceed: an
+active `ASSIGN` write probe with visual confirmation on the camera's own
+screen, a passive connect-burst check, or accepting this as a permanent BLE
+limitation and closing the investigation. **Chosen: connect-burst check
+first, active probe as the fallback if that's also inconclusive** — cheapest
+and lowest-risk option, and it directly targets reading 2 above before
+committing to an active write built on a payload encoding with zero real
+evidence behind it.
+
+`tools/sniffers/sniffer_datetime.py --burst-seconds N` implements this: a new
+`run_immediate_burst_capture()` mode in `tools/common/capture.py` that
+subscribes and starts listening immediately, with no operator action and no
+"get ready" delay — closing the exact timing gap `run_capture_windows` has
+(its first window only opens after the operator's first Enter press, well
+after subscription). No real-hardware run of this mode yet.
 
 ## 6. Planned shape once confirmed
 
