@@ -1209,8 +1209,41 @@ examples/
                             # download even when the first attempt already got the real file.
                             # Unconfirmed in this form -- the underlying placeholder finding
                             # is real-hardware-confirmed (fourth run), this specific detection
-                            # mechanism is not yet. See docs/rest/session.md's
-                            # capture_multiple_stills.py section.
+                            # mechanism is not yet. FIFTH RUN (STILL_COUNT=10) CONFIRMED the
+                            # stability check: 10/10 succeeded, 9/10 stabilized in exactly 2
+                            # attempts (4096 -> 943208 bytes, matching run four), and still 2
+                            # needed 3 attempts landing on a different real size (939112
+                            # bytes) -- a genuine photo-to-photo content difference, not a
+                            # defect: the check correctly waited for two IDENTICAL reads
+                            # rather than assuming any particular target size. See
+                            # docs/rest/session.md's capture_multiple_stills.py section.
+  capture_stills_across_resolutions.py  # Sweeps FORMATS (a list of codec/
+                            # variant/resolution/fps tuples) via
+                            # RestCameraSession.set_camera_format(), capturing
+                            # STILLS_PER_FORMAT real stills at each one -- reuses
+                            # capture_multiple_stills.py's exact per-still sequence (held-open
+                            # BLE connection, exclude, adaptive index search,
+                            # INTER_STILL_DELAY_S, the stability-based download check)
+                            # verbatim. Built specifically to close the one gap
+                            # capture_multiple_stills.py's stability check still had: every
+                            # real-hardware run of it to date used whatever format the camera
+                            # already happened to be in, so its "generalizes across
+                            # codec/resolution" design claim was never actually exercised
+                            # across a real format change. Default FORMATS spans both axes
+                            # docs/ble/photo_capture.md Sec8/Sec8.4 identifies as moving still
+                            # size: BRAW 3:1 6K -> BRAW 3:1 HD (resolution, codec held
+                            # constant) -> ProRes 422 4K DCI (codec change) -- the last entry
+                            # also deliberately the exact combination docs/ble/settings.md
+                            # records as known_unreachable over BLE on this profile but
+                            # real-hardware-confirmed reachable over REST
+                            # (docs/rest/session.md), which the BLE-only restriction never
+                            # gates here since set_camera_format is a RestCameraSession
+                            # method. Partial failure at two levels: a failed format switch
+                            # skips that format's stills and continues to the next format
+                            # (rest_change_format.py's own per-step reporting), and one
+                            # still's failure within a format doesn't stop the rest, same as
+                            # capture_multiple_stills.py. Reports observed still sizes grouped
+                            # by format in its summary. Not yet real-hardware-run.
   playback.py               # (planned)
 
 tests/

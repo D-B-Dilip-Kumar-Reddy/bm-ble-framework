@@ -1986,6 +1986,33 @@ checks. **Unconfirmed in this specific form**: the underlying placeholder-then-r
 is real-hardware-confirmed (fourth run above), but this stability-based detection mechanism itself
 has not yet been run against real hardware.
 
+**Fifth run (`STILL_COUNT=10`, with the stability check in place) CONFIRMED the new mechanism.**
+10/10 stills succeeded, and 9 of the 10 stabilized in exactly 2 attempts — `4096` bytes on attempt
+1, the real `943208`-byte size on attempt 2, matching the fourth run's own per-still pattern
+exactly. Still 2 needed 3 attempts and landed on `939112` bytes instead of `943208` — a real,
+photo-to-photo content difference (a genuinely different scene/exposure compresses to a genuinely
+different size), not a defect: attempt 2's `939112` didn't repeat on attempt 3's first read of it,
+so the check correctly kept going rather than accepting a size it had only seen once, and stopped
+as soon as `939112` actually repeated. This is exactly the generalization the stability check was
+designed for — it never assumes what the "right" size should be, only that the *same* size
+repeating means the write is done.
+
+**`examples/capture_stills_across_resolutions.py`** extends this same per-still sequence
+(unchanged — held-open BLE connection, `exclude`, adaptive index search, `INTER_STILL_DELAY_S`,
+the stability-based download check) across a deliberate `set_camera_format()` sweep, because every
+real-hardware run above, including the fifth, still only ever exercised the stability check within
+one format — the cross-codec/cross-resolution generalization claim itself was never actually put
+to a real format change. Default `FORMATS`: `BRAW 3:1 6K` -> `BRAW 3:1 HD` (resolution varied,
+codec held constant) -> `ProRes 422 4K DCI` (codec varied) — the last entry chosen deliberately as
+the exact combination this profile's `docs/ble/settings.md` records as `known_unreachable` over
+BLE (nine falsification attempts, all silent) but confirmed reachable over REST
+(`set_camera_format()`'s own Phase 5 write-up above) — the BLE-only restriction never applies here
+since this script calls it through `RestCameraSession`. A failed format switch skips that format's
+stills and continues with the next one (mirroring `rest_change_format.py`'s own per-step
+reporting), and a failed still within a format doesn't stop the rest — the same two-level
+partial-success philosophy `capture_multiple_stills.py` already established at one level. Reports
+observed still sizes grouped by format in its final summary. Not yet run against real hardware.
+
 **Second run, same camera/firmware/day, closes the gap — with a real defect found and fixed.**
 A small standalone script (bypassing `guess_new_still_path()` entirely, calling `delete_still()`
 directly against the real path the operator had obtained by other means,

@@ -153,13 +153,28 @@ this form — the underlying placeholder-then-real-file finding is
 real-hardware-confirmed (fourth run above), but this specific mechanism
 for detecting "finished" is new.
 
+FIFTH REAL-HARDWARE RUN (2026-08-24, `STILL_COUNT=10`, with the stability
+check above) CONFIRMED the new mechanism: 10/10 stills succeeded, and 9 of
+the 10 stabilized in exactly 2 attempts (`4096` bytes on attempt 1, the
+real `943208`-byte size on attempt 2, matching the fourth run's own
+per-still pattern). Still 2 needed 3 attempts and landed on `939112`
+bytes instead — a real, still-photo-to-photo content difference (a
+genuinely different scene/exposure produces a genuinely different
+compressed size), not a defect: the check correctly recognized attempt 2's
+`939112` wasn't stable yet (it hadn't repeated), retried once more, and
+accepted once two consecutive reads actually agreed. This is exactly the
+generalization the stability check was designed for — it doesn't assume
+any particular target size, only that the *same* size repeats.
+
 STATUS: `exclude`, the held-open BLE connection, the adaptive index
-search, and `INTER_STILL_DELAY_S` are real-hardware-confirmed working as
-designed (second, third, and fourth runs above). The download-completion
-detection is confirmed *necessary* (fourth run) but its current
-stability-based *implementation* is unconfirmed — this script's next run
-downloading every still at a real, stable size, across however many
-attempts it actually takes, is that confirmation.
+search, `INTER_STILL_DELAY_S`, and the stability-based download check are
+all real-hardware-confirmed working as designed (second through fifth
+runs above), including a real same-size-doesn't-repeat-until-actually-done
+case. `examples/capture_stills_across_resolutions.py` extends this same
+per-still sequence across a deliberate codec/resolution sweep — the
+stability check's cross-format generalization claim is still otherwise
+resting on same-format runs only (every still above was `.braw` at
+whatever resolution the camera happened to already be set to).
 
 Usage:
     python examples/capture_multiple_stills.py
