@@ -1,14 +1,13 @@
 # BLE Date/Time (Category 7 — Real Time Clock)
 
-**Status: UNCONFIRMED, and now a real open question rather than just an
-untaken capture.** Two real-hardware runs so far (§4, §5) — the second with
-genuine committed date/time/timezone changes on the camera — and neither
-observed any Category 7 activity on `INCOMING_CONTROL` at all. Nothing in
-this document beyond §1 is anything more than [spec] transcription. Whether
-this category simply isn't reported over BLE on this camera/firmware, or
-whether passive sniffing is the wrong technique for it, is not yet
-distinguished — see §5's two readings and the next-step options recorded
-there.
+**Status: UNCONFIRMED.** Three real-hardware runs so far (§4-§6) — committed
+date/time/timezone changes (run 2) and a full connect-time state burst (run
+3, 48 notifications across 7 categories, 16 Lens parameters alone) — and
+none observed any Category 7 activity on `INCOMING_CONTROL` at all. Nothing
+in this document beyond §1 is anything more than [spec] transcription. Every
+passive avenue tried so far has come back empty; the one thing not yet
+tried is an active controller-initiated write (§6), which is the current
+next step.
 
 ## 1. Why this category, and why now
 
@@ -187,7 +186,42 @@ subscribes and starts listening immediately, with no operator action and no
 (its first window only opens after the operator's first Enter press, well
 after subscription). No real-hardware run of this mode yet.
 
-## 6. Planned shape once confirmed
+## 6. Run 3 — connect burst captured, still zero Category 7, `POCKET_6K_G2 v8.6`, 2026-08-24
+
+First real-hardware run of `--burst-seconds 10`. This time the theory
+paid off in one sense: **a real, substantial connect-time state burst was
+captured** — 48 notifications across 7 distinct categories in about 8.6
+seconds (`0x35:33.166` to `0x35:41.748`), including a comprehensive 16-entry
+sweep of every Category `0x0C` (Lens) parameter (`0x00`-`0x0F` — lens type
+string `"Canon EF-S 18-55mm f/3.5-5.6 IS STM"`, aperture, focal length,
+distance range, and more), several Category `0x01` (video/recording),
+`0x00` (Lens control), `0x03`, `0x04`, and `0x0A` reports, and the
+already-known Category `0x09` ambient telemetry tail. This independently
+reconfirms `docs/ble/sniffer_capture_engine.md`'s "Connect-burst
+contamination of early windows" finding (previously only observed on two
+photo-capture runs, 2026-07-27) on a third, unrelated investigation — the
+burst is real, general, and not photo-capture-specific.
+
+**Category `0x07` does not appear anywhere in this burst.** Zero entries,
+across every one of the 48 notifications. This is the strongest result yet:
+unlike runs 1-2 (which only tested reports-on-change), this run directly
+captured the camera's own comprehensive self-announced state dump — a burst
+thorough enough to include 16 separate Lens parameters — and Category 7 was
+still completely absent from it.
+
+This closes reading 2 from §5 (the capture-timing-gap explanation): the
+connect burst was captured in full this time, ruling out "the report existed
+but was captured outside any window." Reading 1 now stands essentially
+alone: **this camera/firmware does not appear to report Category 7 over BLE
+under any circumstance tried so far** (neither on a committed change, nor as
+part of its own connect-time full-state announcement). Not yet proven
+absolutely — an active write is the one avenue this hasn't tested, since
+everything so far has been passive observation of camera-initiated reports
+only, never a controller-initiated write.
+
+**Next step, per the plan recorded in §5: the active `ASSIGN` write probe.**
+
+## 7. Planned shape once confirmed
 
 Not yet built — recorded here so the plan is visible before any code exists,
 per this project's practice of documenting design intent honestly rather than
