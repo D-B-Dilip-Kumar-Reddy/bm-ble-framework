@@ -1192,8 +1192,25 @@ examples/
                             # size-based retry was chosen over a fixed sleep. Every mechanism
                             # in this script (exclude, the held-open connection, the adaptive
                             # index search, INTER_STILL_DELAY_S, and the download-size retry)
-                            # is now real-hardware-confirmed end to end. See
-                            # docs/rest/session.md's capture_multiple_stills.py section.
+                            # was real-hardware-confirmed end to end. MIN_STILL_BYTES then
+                            # replaced with a stability check (design change, not a new
+                            # real-hardware run): a fixed byte floor tuned on one codec/
+                            # resolution (.braw, one resolution) can't generalize -- DNG vs
+                            # BRAW alone differ by an order of magnitude or more
+                            # (docs/ble/photo_capture.md Sec8/Sec8.4), and a floor that's safe
+                            # for one combination could falsely reject a genuinely smaller
+                            # real still from a combination never exercised. The 4096-byte
+                            # placeholder itself is very likely a filesystem block-size
+                            # artifact, not something that scales with codec/resolution.
+                            # STABILITY_CHECK_DELAY_S/STABILITY_MAX_ATTEMPTS now download
+                            # repeatedly and accept once two consecutive downloads report the
+                            # same nonzero size ("stopped growing"), detecting completion
+                            # directly instead of guessing a size. Costs one extra confirming
+                            # download even when the first attempt already got the real file.
+                            # Unconfirmed in this form -- the underlying placeholder finding
+                            # is real-hardware-confirmed (fourth run), this specific detection
+                            # mechanism is not yet. See docs/rest/session.md's
+                            # capture_multiple_stills.py section.
   playback.py               # (planned)
 
 tests/

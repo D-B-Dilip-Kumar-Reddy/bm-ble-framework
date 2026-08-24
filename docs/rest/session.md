@@ -1961,6 +1961,31 @@ ever spent per still. Every mechanism this script introduced — `exclude`, the 
 connection, the adaptive index search, `INTER_STILL_DELAY_S`, and the download-size retry — is now
 real-hardware-confirmed working as designed, end to end, with real file sizes throughout.
 
+**`MIN_STILL_BYTES` replaced with a stability check (design change, prompted by a question about
+codec/resolution variance, not a new real-hardware run).** The absolute byte-count floor above
+worked, but it was tuned from exactly one data point — `.braw` stills at one resolution, on one
+camera. Still file size varies substantially with both codec and resolution: DNG (raw) vs BRAW
+(compressed) alone differ by an order of magnitude or more, and every model's stills follow the
+active codec on `POCKET_6K_PRO` (`.braw` for BRAW, DNG for ProRes — `docs/ble/photo_capture.md`
+§8.4), while the G2 was earlier believed uniformly DNG until that same section corrected it. A
+fixed floor is only safe in one direction: it can force unnecessary retries, but a floor tuned for
+one combination could reject a genuinely smaller *real*, finished still from a combination this
+codebase hasn't exercised yet, exhausting every retry and reporting a false "stayed suspiciously
+small" failure. The `4096`-byte placeholder itself, by contrast, is very likely a filesystem
+block-size artifact from the camera creating the file entry before writing payload — not something
+that scales with codec or resolution the way real content does.
+
+Replaced with a size-stability check: `capture_one_still()` now downloads the file, waits
+`STABILITY_CHECK_DELAY_S`, downloads it again, and accepts the result once two consecutive
+downloads report the same nonzero size ("stopped growing") rather than comparing against any
+absolute threshold. This generalizes to any codec/resolution combination without retuning a
+constant, at the cost of always spending at least two downloads per still — even the two stills
+that got the real file on the very first attempt in the fourth run above would now pay one extra
+confirming download — and more bandwidth for a large raw still that stays unstable across several
+checks. **Unconfirmed in this specific form**: the underlying placeholder-then-real-file finding
+is real-hardware-confirmed (fourth run above), but this stability-based detection mechanism itself
+has not yet been run against real hardware.
+
 **Second run, same camera/firmware/day, closes the gap — with a real defect found and fixed.**
 A small standalone script (bypassing `guess_new_still_path()` entirely, calling `delete_still()`
 directly against the real path the operator had obtained by other means,

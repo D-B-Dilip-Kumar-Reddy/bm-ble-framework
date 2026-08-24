@@ -90,12 +90,7 @@ as soon as the Stills entry is *created*, not once the camera has finished
 confirmation, as this script always has, was catching a small placeholder/
 header allocation instead of the finished file, and only succeeded when
 something incidentally delayed the download long enough for the real
-write to land first. Fixed by retrying the download itself, up to
-`DOWNLOAD_MAX_ATTEMPTS` times with `DOWNLOAD_RETRY_DELAY_S` between tries,
-whenever the result is smaller than `MIN_STILL_BYTES` — a threshold chosen
-with generous margin above the one observed placeholder size and below
-every observed real one, but from limited evidence (one resolution/codec
-only). Not yet confirmed itself.
+write to land first.
 
 WHAT THIS SCRIPT CHANGES ON THE CAMERA: takes `STILL_COUNT` real photos,
 downloads each to `DEST_DIR`, then deletes each from the card. Net effect
@@ -118,24 +113,53 @@ guessed, downloaded, deleted, or where it stopped and why) is tracked and
 printed in a final summary — this is why the script is not just three
 single-still scripts pasted in a loop.
 
-FOURTH REAL-HARDWARE RUN (2026-08-24, `STILL_COUNT=10`, with the download
-retry above) CONFIRMED the fix: 10/10 stills succeeded, and every single
+FOURTH REAL-HARDWARE RUN (2026-08-24, `STILL_COUNT=10`, with a first
+download-retry fix keyed on `MIN_STILL_BYTES`, an absolute byte-count
+floor) CONFIRMED that fix worked: 10/10 stills succeeded, and every single
 download landed at the same real size (`943208` bytes) the third run's one
-success also reported. The retry logs show the placeholder-then-real-file
+success also reported. The retry logs showed the placeholder-then-real-file
 theory holding exactly as predicted: 8 of the 10 stills needed exactly one
 retry (4096 bytes on attempt 1, the real size ~0.4-0.8s later on attempt 2),
 while the other 2 (stills 6 and 9) happened to get the real file on the
 very first attempt — consistent with the write-completion timing being
-real but variable, not a fixed delay, which is exactly why a size-based
-retry loop was chosen over a fixed sleep. Total run time was also far
-faster than the second/third runs (40.7s for all 10 stills) since at most
-one extra `DOWNLOAD_RETRY_DELAY_S` was ever spent per still.
+real but variable, not a fixed delay.
 
-STATUS: every mechanism in this script — `exclude`, the held-open BLE
-connection, the adaptive index search, `INTER_STILL_DELAY_S`, and the
-download-size retry (`MIN_STILL_BYTES`/`DOWNLOAD_MAX_ATTEMPTS`/
-`DOWNLOAD_RETRY_DELAY_S`) — is now real-hardware-confirmed working as
-designed, end to end, 10/10, real file sizes throughout (fourth run above).
+`MIN_STILL_BYTES` REPLACED WITH A STABILITY CHECK (design change, not yet
+run) — `MIN_STILL_BYTES=100_000` worked, but it was tuned from exactly one
+data point: `.braw` stills at one resolution on this one camera. Still file
+size varies a lot with codec and resolution — DNG (raw) vs BRAW
+(compressed) alone can differ by an order of magnitude or more
+(`docs/ble/photo_capture.md` §8/§8.4), and resolution scales roughly with
+pixel count on top of that. A fixed byte floor is only ever safe in one
+direction: it can force extra retries needlessly, but if a real, finished
+still for some codec/resolution combination this codebase hasn't exercised
+yet is genuinely smaller than the floor, the retry loop would burn through
+every attempt and report a false "stayed suspiciously small" failure on a
+file that was actually done. The `4096`-byte placeholder itself, by
+contrast, is very likely a filesystem block-size artifact from the camera
+creating the file entry before writing payload — not something that scales
+with codec or resolution the way the real content does.
+
+So the check no longer compares against an absolute floor at all: it
+downloads the file, waits `STABILITY_CHECK_DELAY_S`, downloads it again,
+and accepts the file once two consecutive downloads report the identical,
+nonzero size — "stopped growing," not "big enough." This generalizes to
+any codec/resolution without retuning a threshold, at the cost of always
+needing at least two downloads per still (even the two stills that got the
+real file on attempt one now pay one extra confirming download) and
+somewhat more bandwidth for a large raw still downloaded multiple times
+while its size is still settling. Not yet run against real hardware in
+this form — the underlying placeholder-then-real-file finding is
+real-hardware-confirmed (fourth run above), but this specific mechanism
+for detecting "finished" is new.
+
+STATUS: `exclude`, the held-open BLE connection, the adaptive index
+search, and `INTER_STILL_DELAY_S` are real-hardware-confirmed working as
+designed (second, third, and fourth runs above). The download-completion
+detection is confirmed *necessary* (fourth run) but its current
+stability-based *implementation* is unconfirmed — this script's next run
+downloading every still at a real, stable size, across however many
+attempts it actually takes, is that confirmation.
 
 Usage:
     python examples/capture_multiple_stills.py
@@ -204,21 +228,19 @@ INTER_STILL_DELAY_S = 3.0
 # happened to be the one still whose guess took measurably longer (an
 # extra ~1s, likely from an index-search fallback) — consistent with "more
 # elapsed time before downloading -> more likely the write had finished."
-# MIN_STILL_BYTES gives an intentionally generous margin: an order of
-# magnitude above the observed placeholder size and an order of magnitude
-# below every observed real one, so it should not mistake a genuinely
-# smaller real still (a resolution/codec this session hasn't seen) for a
-# placeholder — but this is a threshold chosen from limited evidence
-# (`.braw` stills at one resolution/codec only), not a confirmed rule.
-# Fourth real-hardware run (2026-08-24, STILL_COUNT=10) confirmed the whole
-# retry mechanism: 10/10 downloads landed at the real 943208-byte size, 8 of
-# them needing exactly one retry (4096 bytes -> real size ~0.4-0.8s later)
-# and 2 (stills 6 and 9) getting the real file on the first attempt — real
-# but variable write-completion timing, exactly why a size-based retry was
-# chosen over a fixed sleep. See module docstring.
-MIN_STILL_BYTES = 100_000
-DOWNLOAD_MAX_ATTEMPTS = 5
-DOWNLOAD_RETRY_DELAY_S = 1.0
+# A fixed byte-count floor (the original fix, real-hardware-confirmed
+# 2026-08-24) doesn't generalize: still file size varies with codec (DNG
+# vs BRAW) and resolution, so a floor tuned on one combination could
+# reject a genuinely smaller real still from a combination not yet
+# exercised. Replaced with a stability check — download, wait, download
+# again, accept once two consecutive reads agree on a nonzero size — which
+# detects "the camera stopped writing" directly instead of guessing how
+# big the result should be. See module docstring. STABILITY_MAX_ATTEMPTS
+# must be at least 2 (a single download can never confirm stability on its
+# own); the default gives up to 4 chances for the size to change before
+# giving up.
+STABILITY_CHECK_DELAY_S = 1.0
+STABILITY_MAX_ATTEMPTS = 5
 
 
 def _format_bytes(num_bytes: int) -> str:
@@ -323,30 +345,32 @@ async def capture_one_still(
     print(f"  [{index}] Guessed: {guessed_path}")
 
     dest: Path | None = None
-    size = 0
-    for attempt in range(1, DOWNLOAD_MAX_ATTEMPTS + 1):
+    sizes: list[int] = []
+    for attempt in range(1, STABILITY_MAX_ATTEMPTS + 1):
         try:
             dest = await rest_session.download_still(guessed_path, DEST_DIR, overwrite=True)
         except (ValueError, FileExistsError, BMDVerificationError) as exc:
             outcome.stopped_at = "download"
             outcome.error = str(exc)
             return outcome
-        size = dest.stat().st_size
-        if size >= MIN_STILL_BYTES:
+        sizes.append(dest.stat().st_size)
+        if sizes[-1] > 0 and len(sizes) >= 2 and sizes[-1] == sizes[-2]:
             break
         print(
-            f"  [{index}] Download suspiciously small ({size} bytes) on attempt "
-            f"{attempt}/{DOWNLOAD_MAX_ATTEMPTS} — camera may still be writing the file, "
+            f"  [{index}] Download size not yet stable ({sizes[-1]} bytes) on attempt "
+            f"{attempt}/{STABILITY_MAX_ATTEMPTS} — camera may still be writing the file, "
             f"retrying …"
         )
-        if attempt < DOWNLOAD_MAX_ATTEMPTS:
-            await asyncio.sleep(DOWNLOAD_RETRY_DELAY_S)
+        if attempt < STABILITY_MAX_ATTEMPTS:
+            await asyncio.sleep(STABILITY_CHECK_DELAY_S)
     else:
         outcome.stopped_at = "download"
         outcome.error = (
-            f"file stayed suspiciously small ({size} bytes) after {DOWNLOAD_MAX_ATTEMPTS} attempts"
+            f"file size never stabilized after {STABILITY_MAX_ATTEMPTS} attempts "
+            f"(sizes observed: {sizes})"
         )
         return outcome
+    size = sizes[-1]
     outcome.downloaded_to = dest
     print(f"  [{index}] Downloaded: {dest} ({_format_bytes(size)})")
 
