@@ -33,13 +33,15 @@ is the first active consumer.
 | `make_capture_callback(session)` | Builds the Bleak-style `callback(characteristic, data)` that records into whichever window is currently active. |
 | `run_capture_windows(cam, labels)` | Drives the interactive (passive) capture: one window per label, operator-triggered. |
 | `run_send_and_capture(cam, actions, listen_seconds=3.0)` | Drives the active capture: sends each `(label, command_bytes)` via `cam.write_outgoing_control`, then listens for `listen_seconds`. See `docs/ble/active_camera_control.md`. |
+| `run_immediate_burst_capture(cam, label="connect_burst", listen_seconds=10.0)` | Drives a third, fully passive capture mode: subscribes and starts listening immediately, no operator action and no delay, for `listen_seconds`. Added for `tools/sniffers/sniffer_datetime.py --burst-seconds` (`docs/ble/datetime.md` §5) to test whether a camera announces state unprompted right after connecting — see "Connect-burst contamination of early windows" below, which this mode deliberately captures on purpose rather than avoiding. |
 | `print_window_summary(window)` | Console report: deduped triples, then the full raw notification list. |
 | `save_capture(model_key, firmware, session)` | Writes the full-fidelity capture to JSON. |
 | `configure_console_logging(level=logging.INFO)` | Console logging setup that keeps `BMDCameraController`'s default per-notification DEBUG logging out of the console (see below). |
 
-Both capture modes share the same subscribe step (`_subscribe_capture_callback`),
-decode/dedupe/report/save machinery — only how a window's "hot" period starts
-and ends differs (operator-triggered vs. self-triggered-then-timed).
+All three capture modes share the same subscribe step
+(`_subscribe_capture_callback`), decode/dedupe/report/save machinery — only
+how a window's "hot" period starts and ends differs (operator-triggered,
+self-triggered-then-timed, or immediate-then-timed).
 
 ---
 
@@ -133,6 +135,17 @@ to decode as one. In that case `category`/`parameter`/`data_type`/`operation`/
 `payload_hex` are `None` and `decode_error` holds the reason — the raw hex is
 still recorded so the notification isn't silently lost.
 
+**`run_immediate_burst_capture` deliberately captures this exact burst,
+rather than the "wait for it to slow down" rule above.** Added for the
+Category 7 (Real Time Clock) investigation (`docs/ble/datetime.md`): two
+`run_capture_windows`-based runs found zero Category 7 signal even across
+genuine committed changes, and one open explanation is that the operator-
+triggered window model's real gap between subscribing and the first window
+opening (well past this connect-time burst) could have missed a state
+announcement that only happens right after connect. The `10.0s` default for
+`listen_seconds` is not arbitrary — it matches the "10+ seconds" duration
+this burst has already been confirmed to last on both cameras.
+
 ---
 
 ## Triple dedup semantics
@@ -225,6 +238,12 @@ turned a single-sample correlation into a demonstrated, on-demand-toggling
 signal — `run_capture_windows` has no dedicated "repeat" concept, since a
 duplicated label in `--actions` already gets its own fresh window.
 
+`tools/sniffers/sniffer_datetime.py` is the fifth consumer, investigating
+Category 7 (Real Time Clock / language / timezone — `docs/ble/datetime.md`).
+Same `--actions`-overridable pattern by default, but also the first script to
+use `run_immediate_burst_capture` (`--burst-seconds`), added after two
+`--actions` runs found zero signal even across genuine committed changes.
+
 ---
 
 ## Testing
@@ -232,7 +251,7 @@ duplicated label in `--actions` already gets its own fresh window.
 Only `decode_notification` and `dedupe_triples` are unit tested
 (`tests/unit/tools/common/test_capture.py`) — they are pure functions with
 no BLE, no `input()`, and no filesystem access. `run_capture_windows`,
-`run_send_and_capture`, `print_window_summary`, and `save_capture` are
-exercised manually against real hardware, matching the existing
-`tools/query/*.py` scripts, none of which have unit tests either — CLAUDE.md's
-"Hardware" test tier is manual by design.
+`run_send_and_capture`, `run_immediate_burst_capture`, `print_window_summary`,
+and `save_capture` are exercised manually against real hardware, matching
+the existing `tools/query/*.py` scripts, none of which have unit tests
+either — CLAUDE.md's "Hardware" test tier is manual by design.

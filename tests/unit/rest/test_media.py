@@ -326,6 +326,112 @@ class TestGuessNewStillPath:
         assert result is None
 
     @pytest.mark.asyncio
+    async def test_default_covers_two_minutes_behind(self):
+        """docs/ble/datetime.md's confirmed no-Seconds-field finding, 2026-08-24:
+        even a just-set camera clock can lag real time by up to a couple of
+        minutes (manual entry lag + unset-seconds snap) — the default
+        minute_offsets was widened from (0, 1, -1) to cover this."""
+        session = FakeMediaSession(storage=_storage_with_active("A001"), mounts=("A001-sd1",))
+        session.set_existing("/mounts/A001-sd1/Stills/A001_08041124_S003.dng")
+
+        result = await guess_new_still_path(
+            session, "/mounts/A001-sd1/", around=datetime(2026, 8, 4, 11, 26, 24)
+        )
+
+        assert result == "/mounts/A001-sd1/Stills/A001_08041124_S003.dng"
+
+    @pytest.mark.asyncio
+    async def test_default_covers_three_minutes_ahead(self):
+        session = FakeMediaSession(storage=_storage_with_active("A001"), mounts=("A001-sd1",))
+        session.set_existing("/mounts/A001-sd1/Stills/A001_08041129_S003.dng")
+
+        result = await guess_new_still_path(
+            session, "/mounts/A001-sd1/", around=datetime(2026, 8, 4, 11, 26, 24)
+        )
+
+        assert result == "/mounts/A001-sd1/Stills/A001_08041129_S003.dng"
+
+    @pytest.mark.asyncio
+    async def test_default_still_prefers_zero_offset_over_wider_ones(self):
+        """Ordering matters: a genuine same-minute match should win even
+        when a wider-offset candidate also happens to exist."""
+        session = FakeMediaSession(storage=_storage_with_active("A001"), mounts=("A001-sd1",))
+        session.set_existing(
+            "/mounts/A001-sd1/Stills/A001_08041126_S003.dng",
+            "/mounts/A001-sd1/Stills/A001_08041124_S009.dng",
+        )
+
+        result = await guess_new_still_path(
+            session, "/mounts/A001-sd1/", around=datetime(2026, 8, 4, 11, 26, 24)
+        )
+
+        assert result == "/mounts/A001-sd1/Stills/A001_08041126_S003.dng"
+
+    @pytest.mark.asyncio
+    async def test_default_prefers_negative_offset_over_positive_at_same_distance(self):
+        """(0, -1, 1, -2, 2, -3, 3) checks the lag direction (camera behind
+        real time, from manual entry lag) before the lead direction at each
+        distance — see the module docstring's SETUP SCREEN HAS NO SECONDS
+        FIELD section."""
+        session = FakeMediaSession(storage=_storage_with_active("A001"), mounts=("A001-sd1",))
+        session.set_existing(
+            "/mounts/A001-sd1/Stills/A001_08041125_S003.dng",
+            "/mounts/A001-sd1/Stills/A001_08041127_S009.dng",
+        )
+
+        result = await guess_new_still_path(
+            session, "/mounts/A001-sd1/", around=datetime(2026, 8, 4, 11, 26, 24)
+        )
+
+        assert result == "/mounts/A001-sd1/Stills/A001_08041125_S003.dng"
+
+    @pytest.mark.asyncio
+    async def test_exclude_skips_a_previous_stills_path_and_finds_the_new_one(self):
+        """Multiple stills in one session: the earlier still's real path
+        must not be returned again as the later still's guess, even though
+        it's a genuine match well within the widened minute_offsets
+        radius."""
+        session = FakeMediaSession(storage=_storage_with_active("A001"), mounts=("A001-sd1",))
+        earlier_still = "/mounts/A001-sd1/Stills/A001_08041125_S003.dng"
+        later_still = "/mounts/A001-sd1/Stills/A001_08041128_S004.dng"
+        session.set_existing(earlier_still, later_still)
+
+        result = await guess_new_still_path(
+            session,
+            "/mounts/A001-sd1/",
+            around=datetime(2026, 8, 4, 11, 26, 24),
+            exclude=(earlier_still,),
+        )
+
+        assert result == later_still
+
+    @pytest.mark.asyncio
+    async def test_exclude_empty_by_default_preserves_existing_behavior(self):
+        session = FakeMediaSession(storage=_storage_with_active("A001"), mounts=("A001-sd1",))
+        session.set_existing("/mounts/A001-sd1/Stills/A001_08041126_S003.dng")
+
+        result = await guess_new_still_path(
+            session, "/mounts/A001-sd1/", around=datetime(2026, 8, 4, 11, 26, 24)
+        )
+
+        assert result == "/mounts/A001-sd1/Stills/A001_08041126_S003.dng"
+
+    @pytest.mark.asyncio
+    async def test_returns_none_when_the_only_match_is_excluded(self):
+        session = FakeMediaSession(storage=_storage_with_active("A001"), mounts=("A001-sd1",))
+        only_match = "/mounts/A001-sd1/Stills/A001_08041126_S003.dng"
+        session.set_existing(only_match)
+
+        result = await guess_new_still_path(
+            session,
+            "/mounts/A001-sd1/",
+            around=datetime(2026, 8, 4, 11, 26, 24),
+            exclude=(only_match,),
+        )
+
+        assert result is None
+
+    @pytest.mark.asyncio
     async def test_derives_reel_from_mount_path(self):
         session = FakeMediaSession(storage=_storage_with_active("B002"), mounts=("B002-sd2",))
         session.set_existing("/mounts/B002-sd2/Stills/B002_08041126_S001.dng")

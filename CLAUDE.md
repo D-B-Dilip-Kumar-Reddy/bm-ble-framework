@@ -651,7 +651,25 @@ src/bmd_camera/
                               # guess_new_still_path() is a separate, opt-in, informational-
                               # only best-effort filename lookup that never gates
                               # confirmation. No BLE channel (echo/CAMERA_STATUS) moves on a
-                              # photo trigger, on either camera. Playback controls (planned)
+                              # photo trigger, on either camera. minute_offsets' default widened
+                              # 2026-08-24 from (0, 1, -1) to (0, -1, 1, -2, 2, -3, 3), closest-
+                              # first with lag (negative) before lead (positive) at each
+                              # distance -- confirmed camera fact motivating this: the SETUP >
+                              # Date/Time screen has no Seconds field, so even a just-set clock
+                              # can lag real time by up to a couple of minutes (manual entry lag
+                              # + unset-seconds snap), distinct from the separate, unbounded
+                              # clock-never-set-at-all skew case no default window can cover.
+                              # See docs/ble/datetime.md, whose BLE Category 7 investigation
+                              # (0-for-6 real-hardware, no way to read or write the camera's
+                              # clock over BLE at all) is what surfaced this camera fact.
+                              # exclude: Iterable[str] = () added the same day -- the wider
+                              # minute_offsets radius makes an earlier still (from the same
+                              # multi-still session) a likelier false match for a later one's
+                              # guess; callers taking several stills accumulate returned paths
+                              # here so a genuine earlier match is skipped, not re-returned, and
+                              # the search keeps going until it finds a name not already given
+                              # out. Default () -- every pre-existing call site unaffected.
+                              # Playback controls (planned)
 
 tools/
   common/                   # Shared BLE capture/decode engine (tools/common/capture.py)
@@ -1093,6 +1111,184 @@ examples/
                             # downloaded both clips on the card (clip_unique_id 4 and 3, 2/2, 0
                             # failed), 115959860 bytes total in 0.5s (248.5 MB/s aggregate) — no
                             # defects found. See docs/rest/session.md's Phase 15 section.
+  capture_multiple_stills.py  # The first multi-still workflow in this codebase, and
+                            # guess_new_still_path()'s exclude parameter's real-hardware
+                            # exercise (2026-08-24) — takes STILL_COUNT (default 3) real
+                            # photos in one session, and for each one: trigger over BLE,
+                            # confirm over REST, guess the filename with
+                            # exclude=guessed_paths (the accumulated list from every earlier
+                            # still this run), download it, then delete it. exclude exists
+                            # because the wider minute_offsets default (0, -1, 1, -2, 2, -3,
+                            # 3) creates a real risk unique to repeated captures: an earlier
+                            # still's real, still-existing filename can sit within a later
+                            # still's ±3-minute search radius and get matched first instead
+                            # of the new one — exclude skips already-returned paths so the
+                            # search keeps going. One still's failure at any step (trigger/
+                            # confirm/guess/download/delete) does not stop the batch — the
+                            # same partial-success philosophy delete_clips()/download_clips()
+                            # already established — each still's outcome is tracked in a
+                            # StillOutcome and printed in a final summary, which also flags a
+                            # WARNING if two stills ever guessed the same path (exclude
+                            # failing to do its job). FIRST REAL-HARDWARE RUN (STILL_COUNT=10)
+                            # surfaced two real defects in the original design, both fixed
+                            # same day: (1) a fresh CameraSession was opened/closed per still
+                            # (matching every single-still script's own pattern) — the
+                            # operator flagged the repeated-reconnect overhead as unwanted;
+                            # now one CameraSession is held open for the whole run, sending
+                            # capture_photo() repeatedly over it, the same way
+                            # send_settings_command.py --repeat already sends other commands
+                            # repeatedly over one connection. (2) 0/10 stills guessed
+                            # successfully, every one failing at the guess step — traced to
+                            # guess_new_still_path()'s own default index_candidates=range(1,
+                            # 11) being far too narrow for this development session's card,
+                            # which already held well more than 10 stills from many earlier
+                            # real-hardware runs. Fixed with an adaptive search: the first
+                            # still now probes a wide, still-bounded INITIAL_INDEX_CANDIDATES
+                            # (range(1, 51)) to bootstrap a real starting index, and every
+                            # later still reuses a narrow HINTED_INDEX_WINDOW (5) band just
+                            # above the last confirmed index — guess_new_still_path()'s own
+                            # docstring already recommends exactly this "narrow range around
+                            # a real hint" pattern, just not yet applied by any caller until
+                            # now — falling back to the wide range once if the narrow one
+                            # comes up empty. Not yet re-run against real hardware with
+                            # these fixes. SECOND RUN (STILL_COUNT=10) confirmed both fixes
+                            # working -- one connection held throughout, every guess that got
+                            # the chance to run succeeded, exclude never had to intervene --
+                            # but surfaced a third defect: a strict alternating pattern, every
+                            # even-numbered still failing to confirm within 15s while every
+                            # odd one succeeded, all ten stills. Working hypothesis: a real
+                            # camera-side cooldown between physical captures that the
+                            # zero-delay loop (~0.3-0.6s between one still's delete and the
+                            # next trigger) lands inside often enough to matter, while each
+                            # failure's own 15s timeout-then-retry always clears it -- the
+                            # exact ">1s, <15s" split the data shows. Fixed with
+                            # INTER_STILL_DELAY_S (default 3.0s) between stills, unconfirmed
+                            # itself. A separate, unexplained anomaly from the same run: still
+                            # 1's download was only 4096 bytes against every other successful
+                            # still's consistent ~1MB (matching rest_download_still.py's own
+                            # earlier confirmed size) -- not addressed by this fix, noted
+                            # rather than silently dropped. THIRD RUN (STILL_COUNT=10, with
+                            # the delay) confirmed the cooldown fix completely -- 10/10
+                            # confirmed and guessed -- but the "secondary anomaly" turned out
+                            # to be the dominant behavior: 9/10 downloads came back as exactly
+                            # 4096 bytes, and only the one still whose guess happened to take
+                            # measurably longer (an index-search fallback, ~1s extra) got a
+                            # real, correctly-sized file. Working hypothesis:
+                            # wait_for_new_still()'s mtime signal fires on file *creation*, not
+                            # once the camera finishes *writing* the real payload -- downloading
+                            # immediately after confirmation was catching a placeholder/header
+                            # allocation instead of the finished file. Fixed by retrying the
+                            # download itself (MIN_STILL_BYTES=100_000,
+                            # DOWNLOAD_MAX_ATTEMPTS=5, DOWNLOAD_RETRY_DELAY_S=1.0) whenever the
+                            # result is suspiciously small, an order of magnitude of margin
+                            # above the one observed placeholder size and below every observed
+                            # real one -- but from limited evidence (one resolution/codec
+                            # only). FOURTH RUN (STILL_COUNT=10) CONFIRMED the fix: 10/10
+                            # succeeded, every download landed at the real 943208-byte size --
+                            # 8 of 10 needed exactly one retry (4096 bytes on attempt 1, real
+                            # size ~0.4-0.8s later on attempt 2), the other 2 (stills 6 and 9)
+                            # got the real file on the first attempt -- confirming the
+                            # write-completion delay is real but variable, exactly why a
+                            # size-based retry was chosen over a fixed sleep. Every mechanism
+                            # in this script (exclude, the held-open connection, the adaptive
+                            # index search, INTER_STILL_DELAY_S, and the download-size retry)
+                            # was real-hardware-confirmed end to end. MIN_STILL_BYTES then
+                            # replaced with a stability check (design change, not a new
+                            # real-hardware run): a fixed byte floor tuned on one codec/
+                            # resolution (.braw, one resolution) can't generalize -- DNG vs
+                            # BRAW alone differ by an order of magnitude or more
+                            # (docs/ble/photo_capture.md Sec8/Sec8.4), and a floor that's safe
+                            # for one combination could falsely reject a genuinely smaller
+                            # real still from a combination never exercised. The 4096-byte
+                            # placeholder itself is very likely a filesystem block-size
+                            # artifact, not something that scales with codec/resolution.
+                            # STABILITY_CHECK_DELAY_S/STABILITY_MAX_ATTEMPTS now download
+                            # repeatedly and accept once two consecutive downloads report the
+                            # same nonzero size ("stopped growing"), detecting completion
+                            # directly instead of guessing a size. Costs one extra confirming
+                            # download even when the first attempt already got the real file.
+                            # Unconfirmed in this form -- the underlying placeholder finding
+                            # is real-hardware-confirmed (fourth run), this specific detection
+                            # mechanism is not yet. FIFTH RUN (STILL_COUNT=10) CONFIRMED the
+                            # stability check: 10/10 succeeded, 9/10 stabilized in exactly 2
+                            # attempts (4096 -> 943208 bytes, matching run four), and still 2
+                            # needed 3 attempts landing on a different real size (939112
+                            # bytes) -- a genuine photo-to-photo content difference, not a
+                            # defect: the check correctly waited for two IDENTICAL reads
+                            # rather than assuming any particular target size. INITIAL_
+                            # INDEX_CANDIDATES=range(1,51) later found to have itself gone
+                            # stale (found via capture_stills_across_resolutions.py's first
+                            # run, which copied this script's index-search code verbatim) --
+                            # the fifth run above alone left the real index at 59, past this
+                            # window's own ceiling, and the old "wide fallback" never actually
+                            # widened anything on a run's first still (last_confirmed_index is
+                            # None exactly then, so it used the identical range). Fixed with a
+                            # three-tier _guess_with_fallbacks() helper -- hinted band, then
+                            # initial bootstrap, then a genuinely wider
+                            # WIDE_FALLBACK_INDEX_CANDIDATES=range(51,251) -- each tried only
+                            # once the one before it comes up empty. CONFIRMED via
+                            # capture_stills_across_resolutions.py's second real-hardware run
+                            # (2026-08-24, same day): 6/6 stills succeeded with no guess
+                            # failures, including the first still of that run whose real index
+                            # was already past the initial bootstrap window and only reachable
+                            # via the new wide-fallback tier. This script shares the identical
+                            # fix but has not itself been re-run since. See docs/rest/session.md's
+                            # capture_multiple_stills.py section.
+  capture_stills_across_resolutions.py  # Sweeps FORMATS (a list of codec/
+                            # variant/resolution/fps tuples) via
+                            # RestCameraSession.set_camera_format(), capturing
+                            # STILLS_PER_FORMAT real stills at each one -- reuses
+                            # capture_multiple_stills.py's exact per-still sequence (held-open
+                            # BLE connection, exclude, adaptive index search,
+                            # INTER_STILL_DELAY_S, the stability-based download check)
+                            # verbatim. Built specifically to close the one gap
+                            # capture_multiple_stills.py's stability check still had: every
+                            # real-hardware run of it to date used whatever format the camera
+                            # already happened to be in, so its "generalizes across
+                            # codec/resolution" design claim was never actually exercised
+                            # across a real format change. Default FORMATS spans both axes
+                            # docs/ble/photo_capture.md Sec8/Sec8.4 identifies as moving still
+                            # size: BRAW 3:1 6K -> BRAW 3:1 HD (resolution, codec held
+                            # constant) -> ProRes 422 4K DCI (codec change) -- the last entry
+                            # also deliberately the exact combination docs/ble/settings.md
+                            # records as known_unreachable over BLE on this profile but
+                            # real-hardware-confirmed reachable over REST
+                            # (docs/rest/session.md), which the BLE-only restriction never
+                            # gates here since set_camera_format is a RestCameraSession
+                            # method. Partial failure at two levels: a failed format switch
+                            # skips that format's stills and continues to the next format
+                            # (rest_change_format.py's own per-step reporting), and one
+                            # still's failure within a format doesn't stop the rest, same as
+                            # capture_multiple_stills.py. Reports observed still sizes grouped
+                            # by format in its summary. FIRST REAL-HARDWARE RUN (2026-08-24)
+                            # confirmed the REST-only-format/BLE-only-trigger transport
+                            # separation held exactly as designed (one PUT /system/format per
+                            # switch, one BLE TX per trigger, never crossed), and surfaced two
+                            # findings: (1) BRAW 3:1 @ HD @ 23.98 was correctly rejected by the
+                            # live GET /system/supportedFormats check -- a real camera fact,
+                            # not a bug, "BRaw:3_1" is the confirmed derivation rule working
+                            # correctly; (2) all 6 stills that DID capture and confirm
+                            # successfully (both other formats) failed at the guess step --
+                            # INITIAL_INDEX_CANDIDATES=range(1,51), copied from
+                            # capture_multiple_stills.py, had itself gone stale from earlier
+                            # session captures. Fixed identically in both scripts -- see that
+                            # script's own entry above. Side effect: guess failing meant
+                            # delete_still() was never reached, leaving 6 real stills orphaned
+                            # on the card undeleted. SECOND REAL-HARDWARE RUN (2026-08-24, same
+                            # day, with the fix) CONFIRMED it end to end: 6/6 stills succeeded,
+                            # BRAW 3:1 @ HD @ 23.98 was rejected again with the identical error
+                            # (a second independent confirmation this is a real, repeatable
+                            # camera limit), and still sizes varied ~9x across codec exactly as
+                            # designed to test -- BRAW 3:1 @ 6K landed at 2856040 bytes, ProRes
+                            # 422 @ 4K DCI (correctly discovered as .dng, no code change needed)
+                            # landed at 26065024 bytes -- with the stability check handling both
+                            # sizes and every observed retry pattern (a classic 4096-byte
+                            # placeholder on one BRAW still, a real larger-file settling pattern
+                            # on two ProRes stills) correctly with no threshold to retune. First
+                            # real evidence the stability check and the index-search fix both
+                            # generalize across a genuine format change, not just within one
+                            # format. _guess_with_fallbacks() now also returns which tier found
+                            # each match, logged as "Guessed (<tier>): ...".
   playback.py               # (planned)
 
 tests/
@@ -1133,6 +1329,7 @@ added, a new `docs/<feature>.md` must be created alongside the code change.
 | `docs/ble/timecode.md` | `TIMECODE` wire format, BCD decode, clip-duration math |
 | `docs/ble/settings.md` | Settings families (codec/quality, video format, recording format) — byte layouts, verification runbook |
 | `docs/ble/photo_capture.md` | Photo-capture reverse engineering — trigger confirmed on both cameras, no BLE-observable confirmation signal found; Sensor Area BLE investigation (closed, unwritable); Phase 6 — `capture_photo()` built, confirmation moved to REST (`rest/media.py`) |
+| `docs/ble/datetime.md` | BLE Category 7 (Real Time Clock/language/timezone) investigation — CLOSED 2026-08-24 on both transports: 0-for-6 on real BLE hardware across three passive and three active attempts (`tools/sniffers/sniffer_datetime.py`, `tools/control/send_datetime_command.py`), every identified discovery axis exhausted, plus a direct check of all 11 official REST OpenAPI/AsyncAPI spec files finding zero date/time/clock/NTP endpoint anywhere; working conclusion is this camera/firmware doesn't expose its date/time to a controller over either transport. Surfaced the confirmed camera fact (no Seconds field on the SETUP screen) that closed the original motivation by a different route — see `rest/media.py`'s widened `guess_new_still_path()` default |
 | `docs/ble/reverse_engineering.md` | Tool-by-tool procedure for bringing up a new `(MODEL_KEY, FIRMWARE)` pair, and for adding a single new command |
 | `docs/ble/camera_registry.md` | Full evidentiary notes behind the Camera Registry table above |
 | `docs/rest/transport.md` | REST/WebSocket transport (8.6) — addressing the camera over USB, scheme discovery, `tools/rest/probe_endpoints.py`, sweep results for both cameras, the `RestClient`/`RestEventRouter` library surface |

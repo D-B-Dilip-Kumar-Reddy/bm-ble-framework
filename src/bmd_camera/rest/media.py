@@ -132,6 +132,46 @@ filename by another means (as this session did) and skip
 `guess_new_still_path()` entirely. Operators should also just set the
 camera's clock correctly — this failure mode disappears once the camera's
 onboard date/time matches reality.
+
+A NARROWER, FIXABLE COUSIN OF THE SAME PROBLEM — THE SETUP SCREEN HAS NO
+SECONDS FIELD (confirmed 2026-08-24, `docs/ble/datetime.md`)
+--------------------------------------------------------------------------
+The clock-skew case above is about a camera whose date/time was never set
+correctly at all — genuinely unbounded, no default search window can cover
+it. But even an operator who *does* set the camera's clock correctly, right
+before shooting, faces a smaller, structural imprecision this module *can*
+and does default around: `POCKET_6K_G2 v8.6`'s SETUP > Date/Time screen
+only exposes Year/Month/Day/Hour/Minute fields — there is no way to dial in
+Seconds. Two compounding effects follow, both confirmed by BLE Category 7
+investigation attempts finding no way to read or write the camera's clock
+programmatically either (`docs/ble/datetime.md`), which is why this has to
+be handled here rather than fixed at the source:
+
+1. **Entry-to-commit lag.** Stepping through five fields with on-screen `<`
+   `>` arrows and pressing "Update" takes real, non-negligible time —
+   plausibly tens of seconds. Whatever the operator read off their
+   reference clock when they *started* is already a little stale by the
+   time the camera actually commits it.
+2. **Unset-seconds snap.** Whatever second the RTC happens to be on when
+   "Update" commits is unknown and arbitrary within the entered minute —
+   the display only ever showed whole minutes.
+
+Once committed, the camera's RTC then ticks forward accurately from
+whatever phase it landed on — this offset is a roughly **constant** lag
+established once at set-time, not a per-shot random jitter, and not
+compounding further during the session (real-time-clock drift over a
+single shoot is negligible). Realistically this combined lag could run to
+a couple of minutes, comfortably wider than the original `(0, 1, -1)`
+default's single-minute margin. `guess_new_still_path()`'s default
+`minute_offsets` was widened to `(0, -1, 1, -2, 2, -3, 3)` for exactly this
+reason — checked in this order (closest to `around` first, negative before
+positive at each distance, since entry lag makes the camera run *behind*
+wall-clock time more often than ahead) so the most likely candidates are
+still tried first. This is deliberately still a *bounded* window, not an
+attempt to cover the unbounded clock-skew case above — a caller who knows
+the camera's clock was never set at all should still fall back to the
+guidance in the CAMERA CLOCK SKEW section, not rely on this wider default
+alone.
 """
 
 from __future__ import annotations
@@ -261,8 +301,9 @@ async def guess_new_still_path(
     *,
     around: datetime,
     index_candidates: Iterable[int] = range(1, 11),
-    minute_offsets: tuple[int, ...] = (0, 1, -1),
+    minute_offsets: tuple[int, ...] = (0, -1, 1, -2, 2, -3, 3),
     extensions: tuple[str, ...] = STILL_EXTENSIONS,
+    exclude: Iterable[str] = (),
 ) -> str | None:
     """Best-effort reconstruction of a just-confirmed still's exact
     filename — opt-in, informational only, and never a substitute for
@@ -274,14 +315,19 @@ async def guess_new_still_path(
     minute the trigger was sent (real evidence: a trigger logged at
     `11:26:24` produced a still stamped exactly `08041126`) — **provided
     the camera's own clock agrees with `around`'s clock** (normally the
-    operator's PC, via `datetime.now()`). It does not always: see the
-    module docstring's "CAMERA CLOCK SKEW" section for a confirmed
-    real-hardware case where the camera's clock ran ~37h21m behind, and
-    every `minute_offsets` candidate missed as a result — this function
-    correctly returned `None` rather than guess wrong. Only the counter
-    `<NNN>` is genuinely unknowable without a directory listing (Stills
-    always `500`s — module docstring), so this probes every
-    `(minute offset, index, extension)` combination in
+    operator's PC, via `datetime.now()`). It does not always, in two
+    different ways — see the module docstring's "CAMERA CLOCK SKEW" section
+    for a confirmed real-hardware case where the camera's clock was never
+    set at all and ran ~37h21m behind (unbounded, no default window can
+    cover it — `guess_new_still_path()` correctly returned `None` rather
+    than guess wrong), and the "SETUP SCREEN HAS NO SECONDS FIELD" section
+    for the smaller, bounded imprecision `minute_offsets`'s default is
+    explicitly widened to cover: even a camera whose clock was *just* set
+    correctly can lag real time by up to a couple of minutes, since the
+    SETUP screen only accepts whole minutes and committing a change itself
+    takes real time. Only the counter `<NNN>` is genuinely unknowable
+    without a directory listing (Stills always `500`s — module docstring),
+    so this probes every `(minute offset, index, extension)` combination in
     `index_candidates` × `minute_offsets` × `extensions`.
 
     Within a given `minute_offsets` entry, `index_candidates` is always
@@ -297,7 +343,11 @@ async def guess_new_still_path(
     likely timestamp first) and the first offset with any match wins, so
     this does not fully solve every ambiguous case (a genuinely wrong
     timestamp guess with its own stale match would still win over a correct
-    but untried one) — only the specific, observed failure mode.
+    but untried one) — only the specific, observed failure mode. `exclude`
+    (below) closes the most common real-world instance of this residual
+    gap — a *previous* still from the same session, whose path the caller
+    already knows — but not the fully general case of an unrelated stale
+    file from a wholly different, unremembered session happening to match.
 
     `index_candidates` defaults to a narrow `range(1, 11)` deliberately —
     this function has no way to know how many stills already exist on the
@@ -313,13 +363,32 @@ async def guess_new_still_path(
     evidence the capture failed (`wait_for_new_still()` already settled
     that); it only means this function's guess was wrong or the true
     index fell outside `index_candidates`.
+
+    `exclude` — paths this function has already returned for a *previous*
+    still in the same session — closes the ambiguous case named two
+    paragraphs up, sharpened by `minute_offsets`'s wider default (2026-08-24):
+    taking several stills in quick succession, each guessed right after its
+    own confirmation, means an *earlier* photo's real, still-existing
+    filename can sit well within a *later* photo's `minute_offsets` search
+    radius (up to 3 minutes wide) and get matched first, at a closer offset
+    than the later photo's own true minute — silently returning a stale,
+    already-reported name instead of continuing to search. Passing every
+    previously-returned path here makes this function skip them and keep
+    searching, rather than ever returning the same guess twice; a caller
+    guessing N stills in one session should accumulate the growing set
+    across calls (see `examples/rest_download_still.py` for a worked
+    single-still example this generalizes from). Default `()` — every
+    existing call site is unaffected until it opts in.
     """
+    exclude_set = set(exclude)
     reel = _reel_from_mount_path(mount_path)
     for offset in minute_offsets:
         stamp = (around + timedelta(minutes=offset)).strftime("%m%d%H%M")
         for index in sorted(index_candidates, reverse=True):
             for ext in extensions:
                 path = f"{mount_path}{STILLS_DIR_NAME}/{reel}_{stamp}_S{index:03d}{ext}"
+                if path in exclude_set:
+                    continue
                 if await session.path_exists(path):
                     return path
     return None

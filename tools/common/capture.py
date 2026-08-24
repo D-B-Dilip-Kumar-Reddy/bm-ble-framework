@@ -4,13 +4,20 @@ tools/common/capture.py
 Reusable BLE-notification capture engine shared by tools/sniffers/ (passive,
 listen-only) and tools/control/ (active, sends a command then listens).
 
-Two capture modes:
+Three capture modes:
   - `run_capture_windows` — interactive, operator-triggered: for each labeled
     action, the operator is prompted to trigger it on the physical camera
     between two Enter presses.
   - `run_send_and_capture` — this repo's tooling sends the command itself
     (via `BMDCameraController.write_outgoing_control`) and listens for a
     fixed duration afterwards, for a deterministic, repeatable capture.
+  - `run_immediate_burst_capture` — passive and fully automatic: opens its
+    capture window as soon as it subscribes, with no operator action and no
+    "get ready" delay, then listens for a fixed duration. For testing
+    whether a camera announces some or all of its state unprompted right
+    after a BLE client subscribes (a "connect burst") — `run_capture_windows`
+    structurally cannot catch this, since its first window only opens after
+    the operator's first Enter press, well after subscription.
 
 Either way, every INCOMING_CONTROL / CAMERA_STATUS notification received
 during a window is decoded and reported, letting a feature script discover
@@ -259,6 +266,39 @@ async def run_send_and_capture(
 
         print_window_summary(window)
 
+    return session
+
+
+async def run_immediate_burst_capture(
+    cam: BMDCameraController,
+    *,
+    label: str = "connect_burst",
+    listen_seconds: float = 10.0,
+) -> CaptureSession:
+    """Subscribe and immediately start listening, with no operator action and
+    no delay, for `listen_seconds`. Tests whether the camera announces state
+    unprompted right after a BLE client subscribes — a "connect burst" — which
+    neither `run_capture_windows` (whose first window opens only after the
+    operator's first Enter press) nor `run_send_and_capture` (which only
+    listens after this repo's own write) can observe, since both have a real
+    gap between subscribing and their first window opening.
+
+    `cam` must already be connected; this function only subscribes and
+    listens. Callers wanting a longer/shorter window should pass
+    `listen_seconds` explicitly — there's no "right" duration since a burst's
+    real timing, if one exists at all, has never been observed.
+    """
+    session = CaptureSession()
+    await _subscribe_capture_callback(cam, session)
+
+    window = CaptureWindow(label=label)
+    session.windows.append(window)
+
+    session.active = window
+    await asyncio.sleep(listen_seconds)
+    session.active = None
+
+    print_window_summary(window)
     return session
 
 
