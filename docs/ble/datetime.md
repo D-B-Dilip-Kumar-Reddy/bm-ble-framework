@@ -3,12 +3,14 @@
 **Status: UNCONFIRMED, and now 0-for-4 on real hardware.** Four real-hardware
 runs so far (§4-§6, §8) — committed date/time/timezone changes, a full
 connect-time state burst (48 notifications across 7 categories, 16 Lens
-parameters alone), and a correctly-formed active write — and none produced
-any Category 7 signal, in either direction: no report ever observed, and a
-plausibly-correct write had no visible effect on the camera. Nothing in this
-document beyond §1 is anything more than [spec] transcription. See §8 for
-the two remaining unresolved readings (permanent BLE limitation vs. an
-untested wire-coordinate) and what's next.
+parameters alone), and a correctly-formed active write with the default
+wire coordinates — and none produced any Category 7 signal, in either
+direction: no report ever observed, and a plausibly-correct write had no
+visible effect on the camera. Nothing in this document beyond §1 is
+anything more than [spec] transcription. `tools/control/send_datetime_
+command.py` now has `--reserved`/`--operation` override flags (§7) to try
+two untested wire coordinates before concluding a permanent limitation —
+neither tried yet.
 
 ## 1. Why this category, and why now
 
@@ -255,7 +257,18 @@ echo at all — the same shape as the photo-capture trigger
 (`docs/ble/photo_capture.md`): a real, working write with no way to confirm
 it over the wire.
 
-**Status: real-hardware-run, `POCKET_6K_G2 v8.6`, 2026-08-24 — failed.**
+**`--reserved`/`--operation` overrides added after run 4's failure** (§8) —
+the same two discovery axes `send_settings_command.py` already exposes for
+its own CANDIDATE families, generic across both `timezone` and `rtc`.
+**`--operation OFFSET` changes `--minutes`/`--raw-elements`'s meaning to a
+delta from the camera's current value, not an absolute target** — this tool
+has no way to read the camera's current value to compute that delta itself,
+so the operator supplies it directly (e.g. `--minutes 15` to nudge
+`UTC+05:30` by 15 minutes under `OFFSET`, not `--minutes 345`).
+
+**Status: real-hardware-run, `POCKET_6K_G2 v8.6`, 2026-08-24 — failed with
+default `--reserved`/`--operation` (§8); the two override flags above are
+untried.**
 
 ## 8. Run 4 — active write probe: correctly-formed, camera did not visibly change, `POCKET_6K_G2 v8.6`, 2026-08-24
 

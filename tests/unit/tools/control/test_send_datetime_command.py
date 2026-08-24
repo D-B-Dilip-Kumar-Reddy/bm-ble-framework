@@ -20,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "tools" / "control"
 
 import send_datetime_command as sdc  # noqa: E402
 
-from bmd_camera.ble.protocol.codec import decode_packet  # noqa: E402
+from bmd_camera.ble.protocol.codec import RESERVED_BYTE, Operation, decode_packet  # noqa: E402
 from bmd_camera.ble.protocol.types import DataType  # noqa: E402
 
 
@@ -32,6 +32,8 @@ def _args(**overrides) -> argparse.Namespace:
         time=None,
         raw_elements=None,
         when=None,
+        reserved=None,
+        operation=None,
     )
     defaults.update(overrides)
     return argparse.Namespace(**defaults)
@@ -105,6 +107,62 @@ class TestBuildCommand:
     def test_language_not_implemented_raises_system_exit(self):
         with pytest.raises(SystemExit, match="not implemented"):
             sdc.build_command(_args(parameter="language"))
+
+    def test_default_reserved_and_operation_produce_no_label_suffix(self):
+        label, command = sdc.build_command(_args(parameter="timezone", minutes=330))
+
+        header, _ = decode_packet(command)
+        assert header.reserved == RESERVED_BYTE
+        assert header.operation == Operation.ASSIGN
+        assert "reserved=" not in label
+        assert "operation=" not in label
+
+    def test_reserved_override_applied_and_recorded_in_label(self):
+        label, command = sdc.build_command(_args(parameter="timezone", minutes=330, reserved=0x01))
+
+        header, _ = decode_packet(command)
+        assert header.reserved == 0x01
+        assert "reserved=0x01" in label
+
+    def test_operation_override_applied_and_recorded_in_label(self):
+        label, command = sdc.build_command(
+            _args(parameter="timezone", minutes=15, operation="OFFSET")
+        )
+
+        header, payload = decode_packet(command)
+        assert header.operation == Operation.OFFSET
+        assert int.from_bytes(payload, byteorder="little", signed=True) == 15
+        assert "operation=OFFSET" in label
+
+    def test_reserved_and_operation_overrides_apply_to_rtc_too(self):
+        _, command = sdc.build_command(
+            _args(
+                parameter="rtc",
+                raw_elements=(0x11400000, 0x20260824),
+                reserved=0x01,
+                operation="OFFSET",
+            )
+        )
+
+        header, _ = decode_packet(command)
+        assert header.reserved == 0x01
+        assert header.operation == Operation.OFFSET
+
+
+class TestResolveReserved:
+    def test_default_is_reserved_byte_constant(self):
+        assert sdc.resolve_reserved(_args()) == RESERVED_BYTE
+
+    def test_override_returned_when_given(self):
+        assert sdc.resolve_reserved(_args(reserved=0x07)) == 0x07
+
+
+class TestResolveOperation:
+    def test_default_is_assign(self):
+        assert sdc.resolve_operation(_args()) == Operation.ASSIGN
+
+    def test_override_returned_when_given(self):
+        assert sdc.resolve_operation(_args(operation="OFFSET")) == Operation.OFFSET
 
 
 class TestParseWhen:

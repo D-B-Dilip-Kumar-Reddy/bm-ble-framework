@@ -54,6 +54,29 @@ over the observed duration) before sending, so the write and its capture
 window aren't buried in that burst — the same hazard send_settings_command.py
 already documented and fixed for its own family.
 
+FIRST RUN RESULT AND THE TWO NEW DISCOVERY AXES (2026-08-24, see
+docs/ble/datetime.md §8): `--parameter timezone --minutes 345` sent a
+correctly-formed `ASSIGN` (verified against the [spec] table byte-for-byte)
+and the camera's SETUP screen did not visibly change at all — no BLE
+traffic on category `0x07` either, same as every passive run before it.
+Two untested wire coordinates could explain this, mirroring
+send_settings_command.py's own discovery axes for its CANDIDATE families:
+
+- `--reserved BYTE`: overrides header byte 3 (default `0x00`). This exact
+  camera has a real precedent (`docs/ble/recording.md`) where the recording
+  family silently required a specific reserved byte no camera-originated
+  report ever revealed — a report need not carry the value a write requires.
+- `--operation NAME`: overrides header byte 7 (default `ASSIGN`). A plain
+  minutes-offset parameter is arguably a better semantic fit for `OFFSET`'s
+  documented "add to current value" meaning than for an absolute `ASSIGN`
+  target — `docs/ble/protocol.md` §4. **When using `--operation OFFSET`,
+  `--minutes`/`--raw-elements` should be the delta you want to test, not an
+  absolute target** — e.g. to nudge `UTC+05:30` (330) to `UTC+05:45` (345)
+  via `OFFSET`, pass `--minutes 15`, not `345`. This tool does not compute
+  the delta for you (it has no way to read the camera's current value), the
+  same "operator supplies the delta" stance
+  `send_settings_command.py --raw-payload --operation OFFSET` already uses.
+
 Usage:
     # Safest first probe: timezone, an unambiguous plain int32
     python tools/control/send_datetime_command.py \\
@@ -75,6 +98,17 @@ Usage:
     python tools/control/send_datetime_command.py \\
         --model-key POCKET_6K_G2 --firmware v8.6 \\
         --parameter rtc --raw-elements 0x11400000 0x20260824
+
+    # Discovery: try a different reserved byte after ASSIGN got no response
+    python tools/control/send_datetime_command.py \\
+        --model-key POCKET_6K_G2 --firmware v8.6 \\
+        --parameter timezone --minutes 345 --reserved 0x01
+
+    # Discovery: try OFFSET's delta semantics instead of an absolute ASSIGN
+    # (a +15 minute delta from a starting UTC+05:30, not an absolute 345)
+    python tools/control/send_datetime_command.py \\
+        --model-key POCKET_6K_G2 --firmware v8.6 \\
+        --parameter timezone --minutes 15 --operation OFFSET
 """
 
 from __future__ import annotations
@@ -90,7 +124,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "common"))
 from capture import configure_console_logging, run_send_and_capture, save_capture  # noqa: E402
 
 from bmd_camera.ble.camera_controller import BMDCameraController  # noqa: E402
-from bmd_camera.ble.protocol.codec import encode_assign, encode_assign_elements  # noqa: E402
+from bmd_camera.ble.protocol.codec import (  # noqa: E402
+    RESERVED_BYTE,
+    Operation,
+    encode_assign,
+    encode_assign_elements,
+)
 from bmd_camera.ble.protocol.types import DataType  # noqa: E402
 from bmd_camera.ble.scanner import scan_for_camera  # noqa: E402
 from bmd_camera.camera_profile import CameraProfile  # noqa: E402
@@ -124,37 +163,84 @@ def _require_flags(args: argparse.Namespace, needed: tuple[str, ...]) -> None:
         raise SystemExit(f"--parameter {args.parameter} requires {flags}")
 
 
+def resolve_reserved(args: argparse.Namespace) -> int:
+    """The header reserved byte to encode with: `--reserved` if given, else
+    the packet-header default (`0x00`) — see module docstring's FIRST RUN
+    RESULT section. This category has no profile block to read a default
+    from (nothing about it is confirmed yet), unlike
+    `send_settings_command.py`'s `resolve_reserved`, which falls back to a
+    CANDIDATE profile value."""
+    if args.reserved is not None:
+        return args.reserved
+    return RESERVED_BYTE
+
+
+def _reserved_override_suffix(resolved: int, args: argparse.Namespace) -> str:
+    """Label suffix noting a `--reserved` override — empty string when
+    unused, so the label matches this tool's pre-flag behavior exactly."""
+    if args.reserved is None:
+        return ""
+    return f" reserved=0x{resolved:02X}(override; default 0x{RESERVED_BYTE:02X})"
+
+
+def resolve_operation(args: argparse.Namespace) -> Operation:
+    """The operation byte to encode with: `--operation` if given, else
+    `Operation.ASSIGN` — every write this codebase has ever sent, across
+    every family, until this flag existed."""
+    if args.operation is not None:
+        return Operation[args.operation]
+    return Operation.ASSIGN
+
+
+def _operation_override_suffix(resolved: Operation, args: argparse.Namespace) -> str:
+    """Label suffix noting an `--operation` override — empty string when
+    unused, matching `_reserved_override_suffix`'s evidence-visibility role."""
+    if args.operation is None:
+        return ""
+    return f" operation={resolved.name}(0x{int(resolved):02X} override; default ASSIGN/0x00)"
+
+
 def build_command(args: argparse.Namespace) -> tuple[str, bytes]:
     """Build (label, command_bytes) for the requested Category 7 parameter.
     Every value here is a candidate/guess (see module docstring) — never a
     confirmed protocol value."""
+    resolved_reserved = resolve_reserved(args)
+    resolved_operation = resolve_operation(args)
+    suffix = _reserved_override_suffix(resolved_reserved, args) + _operation_override_suffix(
+        resolved_operation, args
+    )
+
     if args.parameter == "timezone":
         _require_flags(args, ("minutes",))
-        label = f"datetime timezone minutes={args.minutes}"
+        label = f"datetime timezone minutes={args.minutes}" + suffix
         return label, encode_assign(
             category=CATEGORY_CONFIGURATION,
             parameter=PARAMETER_TIMEZONE,
             data_type=DataType.INT32,
             value=args.minutes,
+            reserved=resolved_reserved,
+            operation=resolved_operation,
         )
 
     if args.parameter == "rtc":
         if args.raw_elements is not None:
             time_value, date_value = args.raw_elements
-            label = f"datetime rtc raw_elements=(0x{time_value:08X}, 0x{date_value:08X})"
+            label = f"datetime rtc raw_elements=(0x{time_value:08X}, 0x{date_value:08X})" + suffix
         else:
             when = args.when
             time_value = _pack_bcd_time(when.hour, when.minute, when.second)
             date_value = _pack_bcd_date(when.year, when.month, when.day)
             label = (
                 f"datetime rtc {when.isoformat(timespec='seconds')} "
-                f"(time=0x{time_value:08X} date=0x{date_value:08X}, BCD hypothesis)"
+                f"(time=0x{time_value:08X} date=0x{date_value:08X}, BCD hypothesis)" + suffix
             )
         return label, encode_assign_elements(
             category=CATEGORY_CONFIGURATION,
             parameter=PARAMETER_RTC,
             data_type=DataType.INT32,
             values=[time_value, date_value],
+            reserved=resolved_reserved,
+            operation=resolved_operation,
         )
 
     raise SystemExit(
@@ -277,6 +363,29 @@ def parse_args() -> argparse.Namespace:
             "rtc only: bypass this tool's BCD-packing guess entirely and send these two "
             "literal int32 element values (accepts 0x.. hex or decimal) as (time, date) "
             "instead of --date/--time."
+        ),
+    )
+    parser.add_argument(
+        "--reserved",
+        type=lambda s: int(s, 0),
+        default=None,
+        help=(
+            "Override the header reserved byte (accepts 0x.. hex or decimal). Default: "
+            "unset, uses 0x00. Discovery-grade: this exact camera has a real precedent "
+            "of silently requiring a specific reserved byte no report ever revealed — "
+            "see module docstring's FIRST RUN RESULT section."
+        ),
+    )
+    parser.add_argument(
+        "--operation",
+        choices=[o.name for o in Operation],
+        default=None,
+        help=(
+            "Override the wire operation byte (header byte 7) instead of Operation.ASSIGN. "
+            "Discovery-grade: try OFFSET's documented 'add to current value' semantics — "
+            "see module docstring's FIRST RUN RESULT section for why --minutes/"
+            "--raw-elements should be a DELTA, not an absolute target, when using this. "
+            "Default: unset, ASSIGN unchanged."
         ),
     )
     parser.add_argument(
