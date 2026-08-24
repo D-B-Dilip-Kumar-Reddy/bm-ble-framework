@@ -303,6 +303,7 @@ async def guess_new_still_path(
     index_candidates: Iterable[int] = range(1, 11),
     minute_offsets: tuple[int, ...] = (0, -1, 1, -2, 2, -3, 3),
     extensions: tuple[str, ...] = STILL_EXTENSIONS,
+    exclude: Iterable[str] = (),
 ) -> str | None:
     """Best-effort reconstruction of a just-confirmed still's exact
     filename — opt-in, informational only, and never a substitute for
@@ -342,7 +343,11 @@ async def guess_new_still_path(
     likely timestamp first) and the first offset with any match wins, so
     this does not fully solve every ambiguous case (a genuinely wrong
     timestamp guess with its own stale match would still win over a correct
-    but untried one) — only the specific, observed failure mode.
+    but untried one) — only the specific, observed failure mode. `exclude`
+    (below) closes the most common real-world instance of this residual
+    gap — a *previous* still from the same session, whose path the caller
+    already knows — but not the fully general case of an unrelated stale
+    file from a wholly different, unremembered session happening to match.
 
     `index_candidates` defaults to a narrow `range(1, 11)` deliberately —
     this function has no way to know how many stills already exist on the
@@ -358,13 +363,32 @@ async def guess_new_still_path(
     evidence the capture failed (`wait_for_new_still()` already settled
     that); it only means this function's guess was wrong or the true
     index fell outside `index_candidates`.
+
+    `exclude` — paths this function has already returned for a *previous*
+    still in the same session — closes the ambiguous case named two
+    paragraphs up, sharpened by `minute_offsets`'s wider default (2026-08-24):
+    taking several stills in quick succession, each guessed right after its
+    own confirmation, means an *earlier* photo's real, still-existing
+    filename can sit well within a *later* photo's `minute_offsets` search
+    radius (up to 3 minutes wide) and get matched first, at a closer offset
+    than the later photo's own true minute — silently returning a stale,
+    already-reported name instead of continuing to search. Passing every
+    previously-returned path here makes this function skip them and keep
+    searching, rather than ever returning the same guess twice; a caller
+    guessing N stills in one session should accumulate the growing set
+    across calls (see `examples/rest_download_still.py` for a worked
+    single-still example this generalizes from). Default `()` — every
+    existing call site is unaffected until it opts in.
     """
+    exclude_set = set(exclude)
     reel = _reel_from_mount_path(mount_path)
     for offset in minute_offsets:
         stamp = (around + timedelta(minutes=offset)).strftime("%m%d%H%M")
         for index in sorted(index_candidates, reverse=True):
             for ext in extensions:
                 path = f"{mount_path}{STILLS_DIR_NAME}/{reel}_{stamp}_S{index:03d}{ext}"
+                if path in exclude_set:
+                    continue
                 if await session.path_exists(path):
                     return path
     return None

@@ -1868,6 +1868,17 @@ FIELD") for the full reasoning and `docs/ble/datetime.md` for the confirming evi
 during the BLE Category 7 investigation, which independently also confirmed there is no way to
 read or write the camera's clock over BLE at all — see that doc for the full write-up).
 
+**`exclude` parameter added the same day, closing the multi-still corollary of the same
+widening.** The wider `minute_offsets` search radius (up to 3 minutes) makes it more likely that
+guessing a still's name *right after* a series of quick captures matches an *earlier* still's
+real, still-existing path instead of the later one's — the earlier file is a genuine match, just
+the wrong one, and would otherwise be silently returned again. `exclude: Iterable[str] = ()`
+lets a caller taking several stills in one session pass every path already returned so far;
+matching candidates in `exclude` are skipped rather than returned, so the search keeps going
+until it finds a name it hasn't already given out (or exhausts the window and returns `None`).
+Default `()` — every pre-existing call site (`examples/capture_photo.py`,
+`rest_delete_still.py`, `rest_download_still.py`, all single-still scripts) is unaffected.
+
 **Second run, same camera/firmware/day, closes the gap — with a real defect found and fixed.**
 A small standalone script (bypassing `guess_new_still_path()` entirely, calling `delete_still()`
 directly against the real path the operator had obtained by other means,

@@ -662,6 +662,13 @@ src/bmd_camera/
                               # See docs/ble/datetime.md, whose BLE Category 7 investigation
                               # (0-for-6 real-hardware, no way to read or write the camera's
                               # clock over BLE at all) is what surfaced this camera fact.
+                              # exclude: Iterable[str] = () added the same day -- the wider
+                              # minute_offsets radius makes an earlier still (from the same
+                              # multi-still session) a likelier false match for a later one's
+                              # guess; callers taking several stills accumulate returned paths
+                              # here so a genuine earlier match is skipped, not re-returned, and
+                              # the search keeps going until it finds a name not already given
+                              # out. Default () -- every pre-existing call site unaffected.
                               # Playback controls (planned)
 
 tools/
