@@ -161,7 +161,13 @@ src/bmd_camera/
   rest/
     constants.py             # API base path, WS path, default timeouts (fixed by spec)
     client.py                # RestClient — REST transport only, raw status-code handling
-                              # (204/501/2xx/other), no camera semantics — see docs/rest/transport.md
+                              # (204/501/2xx/other), no camera semantics — see docs/rest/transport.md.
+                              # download() (Phase 12) streams a GET body straight to disk via
+                              # aiohttp's iter_chunked() + asyncio.to_thread() writes, never
+                              # buffering a whole multi-GB clip in memory; stall-based timeout
+                              # (sock_read, not total) and a Content-Length integrity check are
+                              # its own transport-level verification. Not yet real-hardware-run —
+                              # see docs/rest/session.md's Phase 12 section
     events.py                # RestEventRouter — buffers propertyValueChanged WS events,
                               # mirrors ble/notification_router.py's arm()/wait_for() contract
                               # exactly, keyed by property path instead of (category, parameter)
@@ -258,10 +264,13 @@ src/bmd_camera/
                               # only new id) with bytes_written=35390881792 computed exactly —
                               # the first real-hardware confirmation of the positive path.
                               # record_stop did not raise — the first real-hardware run since
-                              # stop_verify_timeout_s was added. The zero/multi-new-clip
-                              # branches and bytes_written's None-returning cases remain
-                              # real-hardware-unexercised. See docs/rest/session.md's
-                              # confirm_new_clip() and record_start()/record_stop() sections)
+                              # stop_verify_timeout_s was added. 4 of the zero/multi-new-clip
+                              # and bytes_written None-returning branches were later closed via
+                              # tools/rest/verify_confirm_new_clip_edge_cases.py (POCKET_6K_G2
+                              # v8.6, 2026-08-24, all passed first try); one bytes_written=None
+                              # sub-case (fresh storage_after with no active device) remains
+                              # deliberately unexercised — see that tool's own entry below and
+                              # docs/rest/session.md's confirm_new_clip() section)
                               # and set_camera_format (Phase 5, dual-check
                               # verified, live-capability-gated via supported_formats(),
                               # optional sensor_resolution param for disambiguating
@@ -463,7 +472,25 @@ src/bmd_camera/
                               # post-check: logs a WARNING if clip_unique_id is still
                               # listed after confirmed deletion, purely informational
                               # (design principle 9). See docs/rest/session.md's
-                              # Phase 11 section.
+                              # Phase 11 section. "No polling loop" above was RETRACTED,
+                              # POCKET_6K_G2 v8.6, 2026-08-14: delete_clips()'s (Phase 13)
+                              # first two real-hardware runs called delete_clip() back-to-
+                              # back in a loop and hit BMDVerificationError: still exists
+                              # after DELETE repeatedly (1/3 clips failed run 1, 2/3 run 2
+                              # — always the clips after the first in the batch, never the
+                              # first). The identical false-negative propagation-delay race
+                              # delete_still() was already fixed for, just never exposed by
+                              # delete_clip()'s own two earlier ISOLATED single-clip runs,
+                              # which had a natural gap around each call a tight loop
+                              # doesn't. Fixed the same way: the after-DELETE check now
+                              # polls (poll_interval_s/verify_timeout_s) instead of
+                              # checking once. THIRD RUN CONFIRMED THE FIX, same day: all 3
+                              # clips deleted, 0 failed — also incidentally answered the
+                              # open "does /clips/list staleness clear within the same
+                              # session without reconnecting" question: yes, at least one
+                              # stale entry cleared on its own in well under two seconds,
+                              # no reconnect. See docs/rest/session.md's delete_clip()
+                              # section for the full write-up.
                               # delete_still(path, *, confirm) (Phase 11) — DELETEs one
                               # still's real /mounts/.../Stills/... path. Unlike
                               # delete_clip(), takes the full path directly rather than
@@ -483,6 +510,115 @@ src/bmd_camera/
                               # the still half of the same investigation delete_clip()'s
                               # confirmation closed for clips. See docs/rest/session.md's
                               # Phase 11 section.
+                              # download_clip(clip_unique_id, dest_dir, *, overwrite=False) and
+                              # download_still(path, dest_dir, *, overwrite=False) (Phase 12) —
+                              # the mirror-image capability of Phase 11: copy a clip/still to
+                              # local disk instead of erasing it, reusing delete_clip()'s exact
+                              # clip-resolution/mount-path logic and delete_still()'s exact
+                              # "caller supplies the full path" shape. Verification is
+                              # RestClient.download()'s own Content-Length integrity check, not
+                              # a camera-state dual-check (this is a read + local write, not a
+                              # camera write). dest_dir must already exist; FileExistsError
+                              # without overwrite=True, checked before any network request.
+                              # download_still() real-hardware-confirmed, POCKET_6K_G2 v8.6,
+                              # 2026-08-14, via rest_download_still.py: a real photo triggered,
+                              # confirmed, path guessed, then downloaded — 951400 bytes, no
+                              # Content-Length mismatch. download_clip() also real-hardware-
+                              # confirmed, POCKET_6K_G2 v8.6, 2026-08-14, via
+                              # rest_download_clip.py: worked with no defects found. See
+                              # docs/rest/session.md's Phase 12 section.
+                              # delete_clips(clip_unique_ids, *, confirm) -> BulkDeleteResult
+                              # (Phase 13) — bulk clip deletion, built entirely on delete_clip()
+                              # called once per id; adds no new HTTP surface. Validated against
+                              # a single fresh clips() call before any DELETE is sent — a bad id
+                              # anywhere in the batch raises ValueError and deletes nothing, the
+                              # same "resolve first, then act" discipline delete_clip() itself
+                              # uses. After validation, one clip's failure does not stop the
+                              # batch — unlike every single-target write in this codebase,
+                              # partial success is a real, expected outcome here, not
+                              # exceptional: each failure is caught, logged at ERROR, and
+                              # recorded in BulkDeleteResult.failed rather than raised.
+                              # clip_unique_ids is de-duplicated (order-preserving) first. No
+                              # bulk delete_still() — stills have no clips()-equivalent listing
+                              # to validate a batch against. Three real-hardware runs,
+                              # POCKET_6K_G2 v8.6, 2026-08-14 (rest_delete_clips_bulk.py):
+                              # delete_clips()'s own batching/validation/partial-failure logic
+                              # worked exactly as designed all three times, but the first two
+                              # runs surfaced a real defect in delete_clip() itself — calling it
+                              # back-to-back in a loop (never exercised by delete_clip()'s own
+                              # two earlier isolated runs) hit the same false-negative
+                              # propagation-delay race delete_still() was already fixed for.
+                              # Fixed identically — see delete_clip()'s own entry above. The
+                              # third run confirmed the fix: 3/3 clips deleted, 0 failed. See
+                              # docs/rest/session.md's Phase 13 section.
+                              # reconnect() (Phase 14) — tears down and rebuilds the transport
+                              # on the *same* session object (await self.__aexit__() then
+                              # self.__aenter__(), reused verbatim), so a caller never has to
+                              # swap which RestCameraSession reference it holds. Built to answer
+                              # whether restarting the client session is a good way to force a
+                              # non-stale /clips/list read — confirmed reliable once via a
+                              # genuinely separate process (rest_read_state.py, ~48s after the
+                              # deleting run's own process exited), now confirmed a second time
+                              # via reconnect() itself (see real-hardware status below); a
+                              # same-session self-clear finding is a separate, non-deterministic
+                              # mechanism, not a reconnect confirmation. Resets every
+                              # notification-driven/bookkeeping field
+                              # (_reset_connection_state(), also shared by __init__ so the
+                              # literal initial-value list exists once) to its __init__ default
+                              # before reconnecting, per design principle 4 — a reconnect is a
+                              # gap where nothing was observed, so old values must not survive
+                              # it. playback_interrupted becomes a brand-new asyncio.Event
+                              # instance, not merely cleared. Leaves two things deliberately
+                              # untouched: the router's own buffered event state (every write's
+                              # dual-check arms fresh before its own request, so a stale
+                              # buffered value is never surfaced) and the resulting
+                              # 14-vs-7 redundant subscribe sends per reconnect (harmless,
+                              # bounded, not worth reaching into RestEventRouter's private
+                              # state for). No internal locking — concurrent use during a
+                              # reconnect is undefined, a genuinely new hazard flagged loudly
+                              # in the docstring. Real-hardware-confirmed, POCKET_6K_G2 v8.6,
+                              # 2026-08-14, first run of examples/rest_reconnect_after_delete.py:
+                              # succeeded end to end, no defects found — id(session) unchanged
+                              # across reconnect() (continuity confirmed), clips()/
+                              # storage_state() went from stale (3, matching the known
+                              # same-session staleness) to accurate (2, clip gone) immediately
+                              # after. New finding: the reconnect itself took only ~1.16s, far
+                              # under the ~48s gap the original separate-process confirmation
+                              # happened to have — it's the act of reconnecting that clears the
+                              # staleness, not elapsed time. See docs/rest/session.md's
+                              # "Connection lifecycle" section.
+                              # download_clips(clip_unique_ids, dest_dir, *, overwrite=False) ->
+                              # BulkDownloadResult (Phase 15) — bulk clip download, the
+                              # mirror-image of delete_clips() (Phase 13), built the same way:
+                              # entirely on top of download_clip() called once per id, adds no
+                              # new HTTP surface. Non-destructive, so no confirm gate, unlike
+                              # delete_clips(). Validated up front in two parts: dest_dir must
+                              # already exist (ValueError if not, checked before the validating
+                              # clips() call so a bad destination costs nothing, not even a
+                              # network read) and every id must be found in one fresh clips()
+                              # call (ValueError naming every missing one, downloads nothing —
+                              # delete_clip()'s "resolve first, then act" discipline, applied to
+                              # the whole batch). clip_unique_ids is de-duplicated
+                              # (order-preserving) first. After validation, one clip's failure
+                              # does not stop the batch, same partial-success philosophy as
+                              # delete_clips(): each failure
+                              # (BMDRestError/BMDUnsupportedError/BMDConnectionError/
+                              # FileExistsError/ValueError, matching download_clip()'s own
+                              # failure modes rather than delete_clip()'s
+                              # BMDVerificationError/ValueError) is caught, logged at ERROR, and
+                              # recorded in BulkDownloadResult.failed rather than raised.
+                              # BulkDownloadResult.downloaded holds (clip_unique_id, Path) pairs
+                              # rather than Clip objects, since the new information for a
+                              # download is where the file landed locally, not clip metadata
+                              # (which download_clip() doesn't return either). No bulk
+                              # download_still() — stills have no clips()-equivalent listing to
+                              # validate a batch against, the same reason delete_clips() has no
+                              # bulk still-deletion counterpart. Real-hardware-confirmed,
+                              # POCKET_6K_G2 v8.6, 2026-08-24, first run of
+                              # examples/rest_download_clips_bulk.py: the card's two clips
+                              # (clip_unique_id 4 and 3) both downloaded successfully, 0 failed,
+                              # 115959860 bytes total in 0.5s (248.5 MB/s aggregate) — no defects
+                              # found. See docs/rest/session.md's Phase 15 section.
     mapping.py                 # Codec name derivation between the BLE profile's vocabulary
                               # and REST's own spelling — confirmed strings always win
                               # (design principle 1); this is a fallback seed only.
@@ -627,7 +763,32 @@ tools/
                             # still's exact path has been read off a listing the way this
                             # clip's was) — plausibly the same mechanism, not yet proven. See
                             # docs/rest/transport.md's "Mounts DELETE investigation —
-                            # CONFIRMED" section for the full write-up
+                            # CONFIRMED" section for the full write-up. verify_confirm_new_clip_edge_cases.py
+                            # (real-hardware verification for 4 of the 5 defensive branches in
+                            # confirm_new_clip() (Phase 9) that PR #17 named as deferred — all
+                            # already unit-tested against a fake client, never against a real
+                            # camera. Deliberately engineers each edge case rather than waiting
+                            # for it by accident: zero new clips (no recording — a snapshot with
+                            # nothing recorded since), bytes_written=None with storage_before
+                            # omitted, bytes_written=None with a hand-built
+                            # StorageState(active_device=None) passed as storage_before
+                            # (legitimate — confirm_new_clip() only inspects the shape of what
+                            # it's given, never re-validates it was freshly fetched), and more
+                            # than one new clip (two real recordings sharing one before-snapshot,
+                            # on purpose). Self-contained, no confirmation prompt — every clip
+                            # touched is one recorded in this exact run, cleaned up via
+                            # delete_clip()/delete_clips() afterward. Deliberately does not
+                            # attempt the fifth branch (bytes_written=None because the live
+                            # second storage_state() call finds no active device) — forcing it
+                            # would need the SD card to report no active device at the exact
+                            # moment right after a clip was written, and pulling the card would
+                            # very likely fail the first clips() call instead of ever reaching
+                            # this branch; left accepted and documented rather than chased.
+                            # First run, POCKET_6K_G2 v8.6, 2026-08-24: all 4 tests passed —
+                            # zero new clips, both bytes_written=None cases, and more-than-one-
+                            # new-clip (clip_unique_ids 6 and 7, both named correctly in the
+                            # raised error) all confirmed on the first try. See
+                            # docs/rest/transport.md.
   captures/                 # Runtime output of sniffers/, control/, and rest/ scripts (gitignored)
 
 Tools are grouped by folder according to what kind of thing they do — read-only
@@ -857,14 +1018,81 @@ examples/
                             # shape record_stop hit and was fixed for), not a failed
                             # deletion. Fixed: the after-check now polls
                             # (poll_interval_s/verify_timeout_s) instead of checking once.
-                            # delete_clip() was deliberately left unchanged — both its real
-                            # runs confirmed correctly on the first immediate check. A third
+                            # delete_clip() was deliberately left unchanged at the time — both
+                            # its real runs confirmed correctly on the first immediate check
+                            # (retracted the next day — see rest_delete_clips_bulk.py's entry
+                            # below and docs/rest/session.md's delete_clip() section). A third
                             # run, same day, confirmed the fix: the same standalone script
                             # deleted the still successfully with no error. delete_still()
                             # composed through RestCameraSession's own machinery is now
                             # real-hardware-confirmed end to end, the same status
                             # delete_clip() already carried. See docs/rest/session.md's
                             # delete_still() section.
+  rest_download_clip.py     # Phase 12 — RestCameraSession.download_clip(). Non-destructive
+                            # mirror-image of rest_delete_clip.py: downloads whatever clip
+                            # already happens to be on the card (the first clips() entry by
+                            # default, or an explicit CLIP_UNIQUE_ID) to a local downloads/
+                            # directory rather than recording and deleting a disposable one —
+                            # there is nothing to protect against here the way
+                            # rest_delete_clip.py's self-recorded-clip design protects against
+                            # deleting real footage. Real-hardware-confirmed, POCKET_6K_G2
+                            # v8.6, 2026-08-14: worked with no defects found. See
+                            # docs/rest/session.md's Phase 12 section.
+  rest_download_still.py    # Phase 12 — RestCameraSession.download_still(). Mirrors
+                            # rest_delete_still.py's BLE-trigger + REST-confirm + guess
+                            # composition exactly, swapping the final destructive
+                            # delete_still(confirm=True) for a non-destructive
+                            # download_still() — the photo stays on the card. Inherits
+                            # rest_delete_still.py's own real-hardware-confirmed camera-clock-
+                            # skew failure mode for guess_new_still_path() (rest/media.py's
+                            # module docstring); if the guess returns None, the fix is the same
+                            # — obtain the real filename by another means and call
+                            # download_still() directly. Real-hardware-confirmed, POCKET_6K_G2
+                            # v8.6, 2026-08-14: full sequence succeeded first try — capture
+                            # confirmed, guess matched immediately (the camera's clock now
+                            # agrees with the operator's PC, so the clock-skew failure mode
+                            # above did not recur this run), 951400 bytes downloaded with no
+                            # Content-Length mismatch. See docs/rest/session.md's Phase 12
+                            # section.
+  rest_delete_clips_bulk.py # Phase 13 — RestCameraSession.delete_clips(). Self-contained,
+                            # like rest_delete_clip.py: records CLIP_COUNT (default 3) real
+                            # disposable throwaway clips one at a time (record_start/
+                            # wait_while_recording/record_stop/confirm_new_clip, per clip),
+                            # then bulk-deletes all of them in a single delete_clips() call —
+                            # no typed-confirmation prompt needed, since whatever it deletes is
+                            # guaranteed to be clips it just recorded itself in this exact run.
+                            # Two real-hardware runs, POCKET_6K_G2 v8.6, 2026-08-14: both
+                            # surfaced the same real delete_clip() defect (see that method's
+                            # CLAUDE.md/docs/rest/session.md entries) — 1/3 clips failed run 1,
+                            # 2/3 failed run 2, always the ones after the first in the batch.
+                            # Fixed by polling delete_clip()'s after-DELETE check. Third run,
+                            # same day, confirmed the fix: 3/3 clips deleted, 0 failed —
+                            # delete_clips() is now real-hardware-confirmed end to end. See
+                            # docs/rest/session.md's Phase 13 section.
+  rest_reconnect_after_delete.py  # Phase 14 — RestCameraSession.reconnect().
+                            # Self-contained like rest_delete_clip.py: records and deletes one
+                            # disposable clip, then calls reconnect() on the same session
+                            # object and confirms id(session) is unchanged (the continuity
+                            # claim reconnect() exists to make) and clips()/storage_state()
+                            # are accurate afterward. Real-hardware-confirmed, POCKET_6K_G2
+                            # v8.6, 2026-08-14: first run succeeded end to end with no defects
+                            # — the first time this codebase exercised an in-process,
+                            # same-object reconnect at all. See docs/rest/session.md's
+                            # "Connection lifecycle" section.
+  rest_download_clips_bulk.py  # Phase 15 — RestCameraSession.download_clips(). Non-destructive,
+                            # like rest_download_clip.py: downloads whatever clips already
+                            # happen to be on the card (the first MAX_CLIPS, default 3, or an
+                            # explicit CLIP_UNIQUE_IDS list) rather than recording disposable
+                            # ones first — there is nothing to protect against here the way
+                            # rest_delete_clips_bulk.py's self-recorded-clips design protects
+                            # against deleting real footage. Reports both per-clip and aggregate
+                            # (total bytes / total elapsed) throughput, doubling as a rough
+                            # real-world SD card read-speed measurement given the user's stated
+                            # interest in card read/write performance going forward.
+                            # Real-hardware-confirmed, POCKET_6K_G2 v8.6, 2026-08-24: first run
+                            # downloaded both clips on the card (clip_unique_id 4 and 3, 2/2, 0
+                            # failed), 115959860 bytes total in 0.5s (248.5 MB/s aggregate) — no
+                            # defects found. See docs/rest/session.md's Phase 15 section.
   playback.py               # (planned)
 
 tests/

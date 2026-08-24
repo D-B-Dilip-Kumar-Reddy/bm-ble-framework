@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from pathlib import Path
 
 import aiohttp
 import pytest
@@ -35,6 +36,8 @@ from bmd_camera.rest.session import (
     TIMELINE_PATH,
     TRANSPORT_MODE_PROPERTY,
     WORKINGSET_PROPERTY,
+    BulkDeleteResult,
+    BulkDownloadResult,
     Clip,
     Format,
     RestCameraSession,
@@ -264,16 +267,19 @@ class FakeRestClient:
         errors: dict[str, Exception] | None = None,
         put_responses: dict[str, object] | None = None,
         exists_responses: dict[str, bool] | None = None,
+        download_responses: dict[str, bytes] | None = None,
     ):
         self.responses = responses
         self.errors = errors or {}
         self.put_responses = put_responses or {}
         self.exists_responses = exists_responses or {}
+        self.download_responses = download_responses or {}
         self.calls: list[str] = []
         self.put_calls: list[tuple[str, object]] = []
         self.exists_calls: list[str] = []
         self.delete_calls: list[str] = []
         self.post_calls: list[tuple[str, object]] = []
+        self.download_calls: list[tuple[str, str]] = []
         self.api_prefixed_calls: dict[str, bool] = {}
 
     async def get(self, path: str, *, api_prefixed: bool = True):
@@ -308,6 +314,15 @@ class FakeRestClient:
         if path in self.errors:
             raise self.errors[path]
         return self.exists_responses.get(path, False)
+
+    async def download(self, path: str, dest, *, api_prefixed: bool = False) -> int:
+        self.download_calls.append((path, str(dest)))
+        self.api_prefixed_calls[path] = api_prefixed
+        if path in self.errors:
+            raise self.errors[path]
+        content = self.download_responses.get(path, b"")
+        Path(dest).write_bytes(content)
+        return len(content)
 
 
 def make_session(
@@ -1800,6 +1815,12 @@ class FakeAiohttpSession:
     def __init__(self, *, ws_connect_raises: Exception | None = None):
         self.responses: dict[str, FakeResponse] = {}
         self.ws = FakeWebSocket()
+        # Every ws_connect() call gets its own FakeWebSocket, so a test that
+        # triggers a reconnect (RestCameraSession.reconnect(), Phase 14) can
+        # tell the pre- and post-reconnect sockets apart. `self.ws` always
+        # points at the latest — existing single-connect tests are
+        # unaffected, since they never look past that one attribute.
+        self.ws_connections: list[FakeWebSocket] = []
         self.requests: list[tuple[str, str]] = []
         self.closed = False
         self.ws_connect_raises = ws_connect_raises
@@ -1814,6 +1835,8 @@ class FakeAiohttpSession:
     async def ws_connect(self, url: str, timeout=None):
         if self.ws_connect_raises is not None:
             raise self.ws_connect_raises
+        self.ws = FakeWebSocket()
+        self.ws_connections.append(self.ws)
         return self.ws
 
     async def close(self) -> None:
@@ -1960,6 +1983,124 @@ class TestConnectionLifecycle:
             )
             await asyncio.sleep(0.05)
             assert session.is_recording is True
+
+    @pytest.mark.asyncio
+    async def test_reconnect_rebuilds_transport_on_same_object(self):
+        """reconnect() (Phase 14) tears down and rebuilds the transport on
+        the *same* RestCameraSession object — the whole point being that a
+        caller never has to swap which object it holds."""
+        fake_session = FakeAiohttpSession()
+        session = RestCameraSession("cam.local", MODEL_KEY, FIRMWARE, session=fake_session)
+
+        async with session:
+            first_ws = fake_session.ws
+            first_client = session._client
+
+            await session.reconnect()
+
+            assert len(fake_session.ws_connections) == 2
+            assert fake_session.ws_connections[0] is first_ws
+            assert fake_session.ws_connections[1] is not first_ws
+            assert first_ws.closed is True
+            assert fake_session.ws.closed is False
+            assert session._client is not first_client
+
+    @pytest.mark.asyncio
+    async def test_reconnect_reuses_injected_session_without_closing_it(self):
+        fake_session = FakeAiohttpSession()
+        session = RestCameraSession("cam.local", MODEL_KEY, FIRMWARE, session=fake_session)
+
+        async with session:
+            await session.reconnect()
+
+            assert session._session is fake_session
+            assert fake_session.closed is False
+
+    @pytest.mark.asyncio
+    async def test_reconnect_replaces_owned_session(self, monkeypatch):
+        """No `session=` injected, so RestCameraSession owns a real
+        aiohttp.ClientSession — reconnect() must close the old one and
+        open a fresh one, mirroring
+        test_owned_session_closed_when_connect_fails's monkeypatch
+        pattern (router network calls stubbed out; only session
+        ownership is under test here)."""
+        session = RestCameraSession("cam.local", MODEL_KEY, FIRMWARE)
+
+        async def noop(*args, **kwargs):
+            return None
+
+        monkeypatch.setattr(session._router, "connect", noop)
+        monkeypatch.setattr(session._router, "disconnect", noop)
+        monkeypatch.setattr(session._router, "subscribe", noop)
+
+        async with session:
+            first_owned_session = session._session
+            assert first_owned_session is not None
+
+            await session.reconnect()
+
+            assert first_owned_session.closed is True
+            assert session._session is not None
+            assert session._session is not first_owned_session
+
+    @pytest.mark.asyncio
+    async def test_reconnect_resets_camera_state_and_bookkeeping(self):
+        fake_session = FakeAiohttpSession()
+        session = RestCameraSession("cam.local", MODEL_KEY, FIRMWARE, session=fake_session)
+
+        async with session:
+            old_playback_event = session.playback_interrupted
+
+            session.is_recording = True
+            session.last_known_storage = StorageState(devices=(), active_device=None)
+            session._in_playback = True
+            session.last_known_play = True
+            session.last_known_stop = True
+            old_playback_event.set()
+            session._recording_stopped.set()
+            session._low_storage_min_record_time_s = 10.0
+            session._low_storage_min_space_bytes = 1000
+            session._low_storage_event.set()
+            session._playback_write_in_flight = True
+            session._transport_mode_write_in_flight = True
+            session._expected_speed = 2.0
+
+            await session.reconnect()
+
+            assert session.is_recording is None
+            assert session.last_known_storage is None
+            assert session._in_playback is False
+            assert session.last_known_play is None
+            assert session.last_known_stop is None
+            assert session.playback_interrupted is not old_playback_event
+            assert session.playback_interrupted.is_set() is False
+            assert session._recording_stopped.is_set() is False
+            assert session._low_storage_min_record_time_s is None
+            assert session._low_storage_min_space_bytes is None
+            assert session._low_storage_event.is_set() is False
+            assert session._playback_write_in_flight is False
+            assert session._transport_mode_write_in_flight is False
+            assert session._expected_speed is None
+
+    @pytest.mark.asyncio
+    async def test_reconnect_resubscribes_every_property(self):
+        fake_session = FakeAiohttpSession()
+        session = RestCameraSession("cam.local", MODEL_KEY, FIRMWARE, session=fake_session)
+
+        async with session:
+            await session.reconnect()
+
+            new_ws = fake_session.ws_connections[-1]
+            subscribed = {prop for message in new_ws.sent for prop in message["data"]["properties"]}
+            assert subscribed == {
+                RECORD_PROPERTY,
+                FORMAT_PROPERTY,
+                TRANSPORT_MODE_PROPERTY,
+                PLAYBACK_PROPERTY,
+                WORKINGSET_PROPERTY,
+                PLAY_PROPERTY,
+                STOP_PROPERTY,
+            }
 
 
 class TestEnterExitPlayback:
@@ -3257,9 +3398,10 @@ class TestDeleteClip:
         format_device()'s "confirm via a fresh read" discipline."""
         client = _delete_clip_client(exists_before=True)  # exists() never flips to False
         session = make_session(make_profile(), client=client)
+        session.verify_timeout_s = 0.05
 
         with pytest.raises(BMDVerificationError, match="still exists after DELETE"):
-            await session.delete_clip(1, confirm=True)
+            await session.delete_clip(1, confirm=True, poll_interval_s=0.01)
 
         assert client.delete_calls == [DELETE_CLIP_TARGET]
 
@@ -3282,6 +3424,31 @@ class TestDeleteClip:
         assert deleted.clip_unique_id == 1
         assert client.delete_calls == [DELETE_CLIP_TARGET]
         assert client.api_prefixed_calls[DELETE_CLIP_TARGET] is False
+
+    @pytest.mark.asyncio
+    async def test_after_check_polls_past_a_transient_stale_exists(self):
+        """Real-hardware finding, POCKET_6K_G2 v8.6, 2026-08-14
+        (examples/rest_delete_clips_bulk.py, both real runs): calling
+        delete_clip() back-to-back in a loop hit a false "still exists"
+        far more often than an isolated call ever had — the identical
+        propagation-delay race delete_still() was already fixed for. The
+        after-check must retry rather than fail on the first stale read."""
+        client = _delete_clip_client()
+        call_count = {"n": 0}
+
+        async def exists(path: str, *, api_prefixed: bool = True) -> bool:
+            call_count["n"] += 1
+            # True before DELETE, then one stale True, then finally False.
+            return call_count["n"] in (1, 2)
+
+        client.exists = exists
+        session = make_session(make_profile(), client=client)
+
+        deleted = await session.delete_clip(1, confirm=True, poll_interval_s=0.01)
+
+        assert deleted.clip_unique_id == 1
+        assert call_count["n"] == 3
+        assert client.delete_calls == [DELETE_CLIP_TARGET]
 
     @pytest.mark.asyncio
     async def test_logs_warning_when_clip_still_listed_after_deletion(self, caplog):
@@ -3414,7 +3581,7 @@ class TestDeleteStill:
         assert client.delete_calls == [DELETE_STILL_PATH]
 
     @pytest.mark.asyncio
-    async def test_full_flow_success(self):
+    async def test_full_flow_success(self, caplog):
         client = FakeRestClient({})
         call_count = {"n": 0}
 
@@ -3427,10 +3594,17 @@ class TestDeleteStill:
         client.exists = exists
         session = make_session(make_profile(), client=client)
 
-        await session.delete_still(DELETE_STILL_PATH, confirm=True)  # must not raise
+        with caplog.at_level(logging.INFO):
+            await session.delete_still(DELETE_STILL_PATH, confirm=True)  # must not raise
 
         assert client.delete_calls == [DELETE_STILL_PATH]
         assert client.api_prefixed_calls[DELETE_STILL_PATH] is False
+        # Regression test: an earlier edit inserting download_clip()/download_still()
+        # right after delete_still() accidentally orphaned this success log line
+        # past a `return`, so delete_still() silently stopped logging its own
+        # confirmation. Guards against that specific class of copy-paste defect.
+        messages = [record.message for record in caplog.records]
+        assert any("deleted and confirmed gone" in m for m in messages)
 
     @pytest.mark.asyncio
     async def test_after_check_polls_past_a_transient_stale_exists(self):
@@ -3456,3 +3630,449 @@ class TestDeleteStill:
 
         assert call_count["n"] == 3
         assert client.delete_calls == [DELETE_STILL_PATH]
+
+
+DOWNLOAD_CLIP_MOUNT_NAME = "A001-sd1"
+DOWNLOAD_CLIP_TARGET = f"/mounts/{DOWNLOAD_CLIP_MOUNT_NAME}/clip_1.braw"
+DOWNLOAD_CLIP_CONTENT = b"fake clip bytes"
+
+
+def _download_clip_client(*, content: bytes = DOWNLOAD_CLIP_CONTENT) -> FakeRestClient:
+    """Everything download_clip() needs: clips() (one clip,
+    clip_unique_id=1, file_path basename clip_1.braw), storage_state() +
+    mount_names() (so resolve_active_mount() resolves unambiguously to the
+    single mount A001-sd1), and a download_responses entry for the real
+    target path that composition resolves to — mirrors
+    _delete_clip_client() exactly, swapping exists_responses for
+    download_responses."""
+    return FakeRestClient(
+        {
+            "/clips/list": _clip_list_body(1),
+            "/media/workingset": {
+                "size": 1,
+                "workingset": [
+                    {
+                        "activeDisk": True,
+                        "clipCount": 1,
+                        "deviceName": "sd0",
+                        "index": 0,
+                        "remainingRecordTime": 100,
+                        "remainingSpace": 123,
+                        "totalSpace": 456,
+                        "volume": "A001",
+                    }
+                ],
+            },
+            "/media/active": {"deviceName": "sd0", "workingsetIndex": 0},
+            "/mounts/": [{"name": DOWNLOAD_CLIP_MOUNT_NAME, "type": "directory"}],
+        },
+        download_responses={DOWNLOAD_CLIP_TARGET: content},
+    )
+
+
+class TestDownloadClip:
+    """download_clip() — the mirror-image operation of delete_clip(),
+    reusing the same clip-resolution and mount-path-construction logic.
+    Not yet real-hardware-run; unit-tested against a fake client only."""
+
+    @pytest.mark.asyncio
+    async def test_raises_value_error_when_clip_not_found(self, tmp_path):
+        client = FakeRestClient({"/clips/list": _clip_list_body(2)})
+        session = make_session(make_profile(), client=client)
+
+        with pytest.raises(ValueError, match="No clip with clip_unique_id=1"):
+            await session.download_clip(1, tmp_path)
+
+        assert client.download_calls == []
+
+    @pytest.mark.asyncio
+    async def test_raises_value_error_when_dest_dir_missing(self, tmp_path):
+        client = _download_clip_client()
+        session = make_session(make_profile(), client=client)
+
+        with pytest.raises(ValueError, match="does not exist"):
+            await session.download_clip(1, tmp_path / "nonexistent")
+
+        assert client.download_calls == []
+
+    @pytest.mark.asyncio
+    async def test_raises_file_exists_error_without_overwrite(self, tmp_path):
+        client = _download_clip_client()
+        session = make_session(make_profile(), client=client)
+        (tmp_path / "clip_1.braw").write_bytes(b"already here")
+
+        with pytest.raises(FileExistsError, match="overwrite=True"):
+            await session.download_clip(1, tmp_path)
+
+        assert client.download_calls == []
+
+    @pytest.mark.asyncio
+    async def test_overwrite_true_replaces_existing_file(self, tmp_path):
+        client = _download_clip_client()
+        session = make_session(make_profile(), client=client)
+        (tmp_path / "clip_1.braw").write_bytes(b"stale")
+
+        dest = await session.download_clip(1, tmp_path, overwrite=True)
+
+        assert dest == tmp_path / "clip_1.braw"
+        assert dest.read_bytes() == DOWNLOAD_CLIP_CONTENT
+
+    @pytest.mark.asyncio
+    async def test_full_flow_success(self, tmp_path):
+        client = _download_clip_client()
+        session = make_session(make_profile(), client=client)
+
+        dest = await session.download_clip(1, tmp_path)
+
+        assert dest == tmp_path / "clip_1.braw"
+        assert dest.read_bytes() == DOWNLOAD_CLIP_CONTENT
+        assert client.download_calls == [(DOWNLOAD_CLIP_TARGET, str(dest))]
+        assert client.api_prefixed_calls[DOWNLOAD_CLIP_TARGET] is False
+
+
+DOWNLOAD_STILL_PATH = "/mounts/A002-sd1/Stills/A002_08120219_S001.braw"
+DOWNLOAD_STILL_CONTENT = b"fake still bytes"
+
+
+class TestDownloadStill:
+    """download_still() — the mirror-image operation of delete_still():
+    takes the full /mounts/... path directly, no listing to resolve
+    against. Not yet real-hardware-run; unit-tested against a fake client
+    only."""
+
+    @pytest.mark.asyncio
+    async def test_raises_value_error_when_dest_dir_missing(self, tmp_path):
+        client = FakeRestClient({})
+        session = make_session(make_profile(), client=client)
+
+        with pytest.raises(ValueError, match="does not exist"):
+            await session.download_still(DOWNLOAD_STILL_PATH, tmp_path / "nonexistent")
+
+        assert client.download_calls == []
+
+    @pytest.mark.asyncio
+    async def test_raises_file_exists_error_without_overwrite(self, tmp_path):
+        client = FakeRestClient({})
+        session = make_session(make_profile(), client=client)
+        (tmp_path / "A002_08120219_S001.braw").write_bytes(b"already here")
+
+        with pytest.raises(FileExistsError, match="overwrite=True"):
+            await session.download_still(DOWNLOAD_STILL_PATH, tmp_path)
+
+        assert client.download_calls == []
+
+    @pytest.mark.asyncio
+    async def test_overwrite_true_replaces_existing_file(self, tmp_path):
+        client = FakeRestClient(
+            {}, download_responses={DOWNLOAD_STILL_PATH: DOWNLOAD_STILL_CONTENT}
+        )
+        session = make_session(make_profile(), client=client)
+        (tmp_path / "A002_08120219_S001.braw").write_bytes(b"stale")
+
+        dest = await session.download_still(DOWNLOAD_STILL_PATH, tmp_path, overwrite=True)
+
+        assert dest == tmp_path / "A002_08120219_S001.braw"
+        assert dest.read_bytes() == DOWNLOAD_STILL_CONTENT
+
+    @pytest.mark.asyncio
+    async def test_full_flow_success(self, tmp_path):
+        client = FakeRestClient(
+            {}, download_responses={DOWNLOAD_STILL_PATH: DOWNLOAD_STILL_CONTENT}
+        )
+        session = make_session(make_profile(), client=client)
+
+        dest = await session.download_still(DOWNLOAD_STILL_PATH, tmp_path)
+
+        assert dest == tmp_path / "A002_08120219_S001.braw"
+        assert dest.read_bytes() == DOWNLOAD_STILL_CONTENT
+        assert client.download_calls == [(DOWNLOAD_STILL_PATH, str(dest))]
+        assert client.api_prefixed_calls[DOWNLOAD_STILL_PATH] is False
+
+
+BULK_DELETE_MOUNT_NAME = "A001-sd1"
+
+
+def _bulk_delete_client(*clip_unique_ids: int, exists_before: dict[int, bool] | None = None):
+    """Everything delete_clips() needs for a multi-clip batch — clips()
+    reporting every requested id, storage_state()/mount_names() so
+    resolve_active_mount() resolves unambiguously, and a per-path
+    exists() that toggles True (before DELETE) -> False (after), the same
+    "confirmed deleted" shape TestDeleteClip's own full-flow tests use,
+    applied independently per clip's target path. `exists_before[cid] =
+    False` simulates that clip's file never having existed at all (stays
+    False on every call), for testing a single clip's pre-check failure
+    without affecting the others in the same batch."""
+    exists_before = exists_before or {}
+    call_counts: dict[str, int] = {}
+
+    async def exists(path: str, *, api_prefixed: bool = True) -> bool:
+        call_counts[path] = call_counts.get(path, 0) + 1
+        cid = int(path.rsplit("_", 1)[-1].removesuffix(".braw"))
+        if not exists_before.get(cid, True):
+            return False
+        return call_counts[path] == 1  # True before DELETE, False after
+
+    client = FakeRestClient(
+        {
+            "/clips/list": _clip_list_body(*clip_unique_ids),
+            "/media/workingset": {
+                "size": 1,
+                "workingset": [
+                    {
+                        "activeDisk": True,
+                        "clipCount": len(clip_unique_ids),
+                        "deviceName": "sd0",
+                        "index": 0,
+                        "remainingRecordTime": 100,
+                        "remainingSpace": 123,
+                        "totalSpace": 456,
+                        "volume": "A001",
+                    }
+                ],
+            },
+            "/media/active": {"deviceName": "sd0", "workingsetIndex": 0},
+            "/mounts/": [{"name": BULK_DELETE_MOUNT_NAME, "type": "directory"}],
+        },
+    )
+    client.exists = exists
+    return client
+
+
+class TestDeleteClips:
+    """delete_clips() — built entirely on delete_clip(), called once per
+    id. Not yet real-hardware-run; unit-tested against a fake client only."""
+
+    @pytest.mark.asyncio
+    async def test_raises_value_error_when_confirm_is_false(self):
+        client = _bulk_delete_client(1, 2)
+        session = make_session(make_profile(), client=client)
+
+        with pytest.raises(ValueError, match="confirm=True"):
+            await session.delete_clips([1, 2], confirm=False)
+
+        assert client.calls == []
+        assert client.delete_calls == []
+
+    @pytest.mark.asyncio
+    async def test_raises_value_error_when_no_ids(self):
+        client = _bulk_delete_client(1, 2)
+        session = make_session(make_profile(), client=client)
+
+        with pytest.raises(ValueError, match="no clip_unique_ids"):
+            await session.delete_clips([], confirm=True)
+
+        assert client.delete_calls == []
+
+    @pytest.mark.asyncio
+    async def test_deduplicates_ids(self):
+        client = _bulk_delete_client(1, 2)
+        session = make_session(make_profile(), client=client)
+
+        result = await session.delete_clips([1, 1, 2], confirm=True)
+
+        assert len(result.deleted) == 2
+        assert {c.clip_unique_id for c in result.deleted} == {1, 2}
+        assert client.delete_calls == [
+            f"/mounts/{BULK_DELETE_MOUNT_NAME}/clip_1.braw",
+            f"/mounts/{BULK_DELETE_MOUNT_NAME}/clip_2.braw",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_raises_value_error_and_deletes_nothing_when_an_id_is_missing(self):
+        client = _bulk_delete_client(1)  # only clip_unique_id=1 exists
+        session = make_session(make_profile(), client=client)
+
+        with pytest.raises(ValueError, match=r"\[2\]"):
+            await session.delete_clips([1, 2], confirm=True)
+
+        assert client.delete_calls == []
+
+    @pytest.mark.asyncio
+    async def test_full_flow_success_all_deleted(self):
+        client = _bulk_delete_client(1, 2, 3)
+        session = make_session(make_profile(), client=client)
+
+        result = await session.delete_clips([1, 2, 3], confirm=True)
+
+        assert isinstance(result, BulkDeleteResult)
+        assert [c.clip_unique_id for c in result.deleted] == [1, 2, 3]
+        assert result.failed == ()
+        assert len(client.delete_calls) == 3
+
+    @pytest.mark.asyncio
+    async def test_partial_failure_continues_and_is_reported(self):
+        client = _bulk_delete_client(1, 2, 3, exists_before={2: False})
+        session = make_session(make_profile(), client=client)
+
+        result = await session.delete_clips([1, 2, 3], confirm=True)
+
+        assert [c.clip_unique_id for c in result.deleted] == [1, 3]
+        assert len(result.failed) == 1
+        failed_id, failed_exc = result.failed[0]
+        assert failed_id == 2
+        assert isinstance(failed_exc, BMDVerificationError)
+        # clip 3 must still be attempted even though clip 2 failed first.
+        assert client.delete_calls == [
+            f"/mounts/{BULK_DELETE_MOUNT_NAME}/clip_1.braw",
+            f"/mounts/{BULK_DELETE_MOUNT_NAME}/clip_3.braw",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_logs_error_for_each_failed_clip(self, caplog):
+        client = _bulk_delete_client(1, 2, exists_before={2: False})
+        session = make_session(make_profile(), client=client)
+
+        with caplog.at_level(logging.ERROR):
+            await session.delete_clips([1, 2], confirm=True)
+
+        messages = [record.message for record in caplog.records]
+        assert any("clip_unique_id=2" in m and "failed" in m for m in messages)
+
+
+BULK_DOWNLOAD_MOUNT_NAME = "A001-sd1"
+
+
+def _bulk_download_client(*clip_unique_ids: int, content: bytes = b"fake clip bytes"):
+    """Everything download_clips() needs for a multi-clip batch — clips()
+    reporting every requested id, storage_state()/mount_names() so
+    resolve_active_mount() resolves unambiguously, and a download_responses
+    entry (same content for every clip, by default) for each clip's real
+    target path. Mirrors _bulk_delete_client() exactly, swapping
+    exists_responses for download_responses."""
+    download_responses = {
+        f"/mounts/{BULK_DOWNLOAD_MOUNT_NAME}/clip_{cid}.braw": content for cid in clip_unique_ids
+    }
+    return FakeRestClient(
+        {
+            "/clips/list": _clip_list_body(*clip_unique_ids),
+            "/media/workingset": {
+                "size": 1,
+                "workingset": [
+                    {
+                        "activeDisk": True,
+                        "clipCount": len(clip_unique_ids),
+                        "deviceName": "sd0",
+                        "index": 0,
+                        "remainingRecordTime": 100,
+                        "remainingSpace": 123,
+                        "totalSpace": 456,
+                        "volume": "A001",
+                    }
+                ],
+            },
+            "/media/active": {"deviceName": "sd0", "workingsetIndex": 0},
+            "/mounts/": [{"name": BULK_DOWNLOAD_MOUNT_NAME, "type": "directory"}],
+        },
+        download_responses=download_responses,
+    )
+
+
+class TestDownloadClips:
+    """download_clips() — built entirely on download_clip(), called once
+    per id. Not yet real-hardware-run; unit-tested against a fake client
+    only."""
+
+    @pytest.mark.asyncio
+    async def test_raises_value_error_when_no_ids(self, tmp_path):
+        client = _bulk_download_client(1, 2)
+        session = make_session(make_profile(), client=client)
+
+        with pytest.raises(ValueError, match="no clip_unique_ids"):
+            await session.download_clips([], tmp_path)
+
+        assert client.download_calls == []
+
+    @pytest.mark.asyncio
+    async def test_raises_value_error_when_dest_dir_missing(self, tmp_path):
+        client = _bulk_download_client(1, 2)
+        session = make_session(make_profile(), client=client)
+
+        with pytest.raises(ValueError, match="does not exist"):
+            await session.download_clips([1, 2], tmp_path / "nonexistent")
+
+        assert client.download_calls == []
+        assert client.calls == []  # dest_dir checked before any clips() call
+
+    @pytest.mark.asyncio
+    async def test_deduplicates_ids(self, tmp_path):
+        client = _bulk_download_client(1, 2)
+        session = make_session(make_profile(), client=client)
+
+        result = await session.download_clips([1, 1, 2], tmp_path)
+
+        assert [cid for cid, _ in result.downloaded] == [1, 2]
+        assert client.download_calls == [
+            (f"/mounts/{BULK_DOWNLOAD_MOUNT_NAME}/clip_1.braw", str(tmp_path / "clip_1.braw")),
+            (f"/mounts/{BULK_DOWNLOAD_MOUNT_NAME}/clip_2.braw", str(tmp_path / "clip_2.braw")),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_raises_value_error_and_downloads_nothing_when_an_id_is_missing(self, tmp_path):
+        client = _bulk_download_client(1)  # only clip_unique_id=1 exists
+        session = make_session(make_profile(), client=client)
+
+        with pytest.raises(ValueError, match=r"\[2\]"):
+            await session.download_clips([1, 2], tmp_path)
+
+        assert client.download_calls == []
+
+    @pytest.mark.asyncio
+    async def test_full_flow_success_all_downloaded(self, tmp_path):
+        client = _bulk_download_client(1, 2, 3, content=b"clip bytes")
+        session = make_session(make_profile(), client=client)
+
+        result = await session.download_clips([1, 2, 3], tmp_path)
+
+        assert isinstance(result, BulkDownloadResult)
+        assert [cid for cid, _ in result.downloaded] == [1, 2, 3]
+        assert result.failed == ()
+        for cid, dest in result.downloaded:
+            assert dest == tmp_path / f"clip_{cid}.braw"
+            assert dest.read_bytes() == b"clip bytes"
+
+    @pytest.mark.asyncio
+    async def test_partial_failure_continues_and_is_reported(self, tmp_path):
+        client = _bulk_download_client(1, 2, 3)
+        client.errors[f"/mounts/{BULK_DOWNLOAD_MOUNT_NAME}/clip_2.braw"] = BMDRestError(
+            "simulated transfer failure", status=500, body=None
+        )
+        session = make_session(make_profile(), client=client)
+
+        result = await session.download_clips([1, 2, 3], tmp_path)
+
+        assert [cid for cid, _ in result.downloaded] == [1, 3]
+        assert len(result.failed) == 1
+        failed_id, failed_exc = result.failed[0]
+        assert failed_id == 2
+        assert isinstance(failed_exc, BMDRestError)
+        # clip 3 must still be attempted even though clip 2 failed first.
+        assert client.download_calls == [
+            (f"/mounts/{BULK_DOWNLOAD_MOUNT_NAME}/clip_1.braw", str(tmp_path / "clip_1.braw")),
+            (f"/mounts/{BULK_DOWNLOAD_MOUNT_NAME}/clip_2.braw", str(tmp_path / "clip_2.braw")),
+            (f"/mounts/{BULK_DOWNLOAD_MOUNT_NAME}/clip_3.braw", str(tmp_path / "clip_3.braw")),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_overwrite_passed_through_to_each_download_clip_call(self, tmp_path):
+        client = _bulk_download_client(1, content=b"fresh")
+        session = make_session(make_profile(), client=client)
+        (tmp_path / "clip_1.braw").write_bytes(b"stale")
+
+        result = await session.download_clips([1], tmp_path, overwrite=True)
+
+        assert (tmp_path / "clip_1.braw").read_bytes() == b"fresh"
+        assert result.failed == ()
+
+    @pytest.mark.asyncio
+    async def test_logs_error_for_each_failed_clip(self, caplog, tmp_path):
+        client = _bulk_download_client(1, 2)
+        client.errors[f"/mounts/{BULK_DOWNLOAD_MOUNT_NAME}/clip_2.braw"] = BMDRestError(
+            "simulated transfer failure", status=500, body=None
+        )
+        session = make_session(make_profile(), client=client)
+
+        with caplog.at_level(logging.ERROR):
+            await session.download_clips([1, 2], tmp_path)
+
+        messages = [record.message for record in caplog.records]
+        assert any("clip_unique_id=2" in m and "failed" in m for m in messages)

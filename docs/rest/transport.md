@@ -809,13 +809,34 @@ verification's timing, not a failed deletion.** The single immediate `exists()` 
 after `DELETE` raced a brief camera-side propagation delay, the same shape `record_stop` hit and
 was fixed for. Fixed the same way: the after-`DELETE` check now polls
 (`poll_interval_s`/`verify_timeout_s`) instead of checking once — see `docs/rest/session.md`'s
-`delete_still()` section for the full write-up. `delete_clip()` was deliberately left unchanged,
-since both its real-hardware runs confirmed correctly on the first immediate check.
+`delete_still()` section for the full write-up. `delete_clip()` was deliberately left unchanged
+at the time, since both its real-hardware runs confirmed correctly on the first immediate check.
 
 **Third run, same day, confirms the fix**: the same standalone script, rerun against the
 polling fix, deleted the still successfully with no error. `delete_still()` composed through
 `RestCameraSession`'s own machinery is now real-hardware-confirmed end to end, the same status
 `delete_clip()` already carried.
+
+**That "`delete_clip()` deliberately left unchanged" call was retracted the next day,
+`POCKET_6K_G2 v8.6`, 2026-08-14**, via `examples/rest_delete_clips_bulk.py` (Phase 13's bulk
+clip deletion — see `docs/rest/session.md`'s `delete_clips()` section). Both real runs of that
+script hit the identical false-negative race in `delete_clip()` itself: the first clip deleted
+in each batch succeeded on the first immediate check (matching `delete_clip()`'s two earlier
+isolated runs), but every clip after it — deleted back-to-back with no natural gap between
+calls — hit `BMDVerificationError: still exists after DELETE` far more often than an isolated
+call ever had (1 of 3 failed in run 1, 2 of 3 in run 2). A tight loop exercises the same
+camera-side propagation delay `delete_still()` had already been fixed for, just far more
+reliably than a single standalone call does — which is exactly why neither of `delete_clip()`'s
+own isolated real-hardware runs had ever surfaced it. Fixed identically: `delete_clip()`'s
+after-`DELETE` check now polls instead of checking once. The evidence, not the earlier
+reasoning, was wrong — retracted and corrected in the same doc it was made in.
+
+**Third run, same day, confirms the fix**: the same script, rerun, deleted all 3 clips with `0`
+failures. Bonus finding from that run: the same-session `/clips/list` staleness above isn't
+fixed at "clears only via reconnect after ~48s" — this run's final clip inventory showed one
+stale entry had already cleared on its own within under two seconds, no reconnect involved,
+answering the "remains untested" question `docs/rest/session.md`'s original staleness write-up
+left open. See `delete_clip()`'s own section there for the full account.
 
 ### `POCKET_6K_PRO v8.6`, over USB, plaintext HTTP — 2026-08-03
 
@@ -1442,6 +1463,44 @@ runs 3-5 read as a plain stop (`last_known_stop=True` at readback in runs 4-5) �
 "deviates to a nonzero value, not just 0" case the broadening specifically exists for still
 has no real-hardware run of its own; see `docs/rest/session.md`'s `playback_interrupted`
 section for the full five-run trail.
+
+### `tools/rest/verify_confirm_new_clip_edge_cases.py`
+
+Real-hardware verification for four of the five defensive branches in `confirm_new_clip()`
+(Phase 9, `docs/rest/session.md`'s `confirm_new_clip()` section) that PR #17 named as
+deferred — all already covered by `TestConfirmNewClip` against a fake client, never against
+a real camera. Four tests, each deliberately engineering the edge case rather than waiting
+for it to happen by accident: (1) zero new clips — no recording, calls `confirm_new_clip()`
+against a snapshot with nothing recorded since; (2) `bytes_written=None` when `storage_before`
+is omitted; (3) `bytes_written=None` when a hand-built `StorageState(devices=(),
+active_device=None)` is passed as `storage_before` — legitimate since `confirm_new_clip()`
+only inspects the shape of whatever it's given, never re-validates it was freshly fetched;
+(4) more than one new clip — two real recordings sharing a single before-snapshot taken
+before either one, on purpose. Self-contained, no typed-confirmation prompt, the same
+`rest_delete_clip.py`/`rest_delete_clips_bulk.py` reasoning: every clip this tool touches is
+one it recorded itself in this exact run, cleaned up via `delete_clip()`/`delete_clips()`
+afterward.
+
+**Deliberately not attempted**: the fifth branch — `bytes_written` staying `None` because the
+*live* second `storage_state()` call `confirm_new_clip()` makes internally finds no active
+device. Forcing this would need the SD card to genuinely report no active device at the exact
+moment right after a clip was written; pulling the card to simulate it would very likely make
+the *first* `clips()` call (which runs before this branch is ever reached) fail with a 404 ->
+`BMDStorageError` instead, never reaching this branch at all. Left accepted and documented as
+real-hardware-unexercised rather than chased.
+
+**Run 1, `POCKET_6K_G2 v8.6`, 2026-08-24: all 4 tests passed, first try.** Test 1 (zero new
+clips) raised correctly against a same-instant snapshot with nothing recorded since. Tests 2
+and 3 both correctly returned `bytes_written=None` for one real recorded clip
+(`clip_unique_id=5`) — once with `storage_before` omitted, once with the hand-built
+no-active-device `StorageState` — with `confirm_new_clip()` returning the same clip both
+times, as expected. Test 4 correctly raised on two real clips recorded back-to-back
+(`clip_unique_id`s `6` and `7`) sharing one before-snapshot, naming both ids in the error
+message. All three recorded clips were cleaned up afterward (`delete_clip()` for the single
+clip, `delete_clips()` for the pair) — the already-known `/clips/list` same-session staleness
+fired on cleanup exactly as documented elsewhere, not a new finding. 4 of `confirm_new_clip()`'s
+5 defensive branches are now real-hardware-confirmed; the fifth remains the accepted,
+deliberately-unattempted gap described above.
 
 ---
 

@@ -233,6 +233,81 @@ they only `arm()`/`wait_for()` on a property this method already subscribed. See
 `set_camera_format`'s "Write verbs" entry below for the real-hardware defect that exposed
 `/system/format` never being subscribed at all in the first version of this method.
 
+### `reconnect()` — force a fresh connection without losing the session object (Phase 14)
+
+`GET /clips/list` (and `storage_state().active_device.clip_count`) can go stale within
+the same session immediately after `delete_clip()`/`delete_clips()` — real-hardware-
+confirmed, `POCKET_6K_G2 v8.6`, 2026-08-13/14 (`delete_clip()`'s own docstring/section
+has the full trail). The only mechanism confirmed to *reliably* clear it is a fresh
+reconnect — at the time this method was designed, confirmed exactly once, via a genuinely
+separate process (`examples/rest_read_state.py`, run standalone roughly 48s after the
+deleting run's own process had already exited). A later run separately found the
+staleness can sometimes self-clear within the same session, unreconnected, in well under
+two seconds — one stale entry out of three, a different and non-deterministic mechanism,
+not a second confirmation of reconnecting itself. Until this method existed, "reconnect"
+meant discarding the whole `RestCameraSession` object and starting a new script/process —
+nothing in this repo had ever constructed a second session or re-entered one within a
+single process. `reconnect()` tears down and rebuilds the transport on the *same*
+object instead, so a caller never has to swap which reference it holds. **Now confirmed a
+second time**, via `reconnect()` itself — see the real-hardware run below, which also
+sharpened the finding: the reconnect only took ~1.16s, not anywhere near 48s, and
+staleness was already gone immediately afterward.
+
+**Not `/clips/list`-specific.** Any field this session tracks only from notifications
+reflects only what arrived on the connection about to be replaced. Design principle 4
+requires state to be updated only from a real observed notification, never assumed — a
+reconnect is, definitionally, a gap where this session observed nothing. `reconnect()`
+resets every field `_reset_connection_state()` owns to its `__init__` default *before*
+the new connection opens: `is_recording`, `last_known_storage`, `_in_playback`,
+`last_known_play`, `last_known_stop`, and a **brand-new** `playback_interrupted`
+`asyncio.Event` instance (not merely cleared) on `CameraState`, plus
+`_recording_stopped`, the low-storage arming trio, and the playback/transport-mode
+write-in-flight trio. Plain config (`host`/`scheme`/`port`/`profile`/the four timeouts)
+is untouched — none of it lives in `_reset_connection_state()`.
+
+**Mechanics**: `await self.__aexit__()` then `await self.__aenter__()` — reused
+verbatim, not duplicated. An injected (non-owned) session is preserved and reused
+exactly as the existing `_owns_session` contract above already dictates; only an owned
+session is closed and replaced. `RestEventRouter.connect()` already auto-resubscribes
+every property in its own `_subscribed` set on top of `__aenter__`'s own 7 explicit
+`subscribe()` calls — 14 WS subscribe sends per `reconnect()` instead of 7. Left as-is:
+harmless (a duplicate subscribe is a camera-side no-op) and bounded (`_subscribed` is a
+`set`, so it doesn't compound across repeated reconnects) — fixing it would mean
+reaching into the router's private `_subscribed` from `session.py`, a boundary this file
+has never crossed. `RestEventRouter`'s own buffered event state (`_latest`/`_seq`/
+`_armed_baseline`/`_armed_snapshot_value`) is also left untouched for the same
+reason it's harmless: every write method's dual-check calls `arm()` fresh, immediately
+before its own request, so a leftover pre-reconnect buffered value is only ever a
+discarded baseline, never surfaced to a caller directly.
+
+**Caveats**: a coroutine already blocked on the *old* `playback_interrupted` Event
+object (fetched before `reconnect()` was called) is never woken — re-fetch the property
+afterward rather than holding a reference across the call. `reconnect()` takes no lock
+and does not check `_playback_write_in_flight`/`_transport_mode_write_in_flight` before
+tearing down the transport — calling it concurrently with any other in-flight write/wait
+on the same session is undefined, the same caller-owns-sequencing discipline every write
+method here already relies on, but a genuinely new hazard: previously, reconnecting
+always meant a separate process, so nothing could ever race one.
+
+**Status: real-hardware-confirmed, `POCKET_6K_G2 v8.6`, 2026-08-14, first run.** Unit-tested
+against a fake transport (`TestConnectionLifecycle` in `tests/unit/rest/test_rest_session.py`) —
+transport rebuild, injected-session reuse, owned-session replacement, full state reset, and
+resubscription all covered — then `examples/rest_reconnect_after_delete.py` succeeded end to
+end on its very first real-hardware attempt, no defects found: recorded and deleted a real
+clip (`clip_unique_id=12`) — `clips()` immediately after deletion reported `3` (the known
+same-session staleness, expected), `id(session)` was identical before and after `reconnect()`
+(continuity confirmed), and `clips()`/`storage_state().clip_count` both read `2` immediately
+after — `clip_unique_id=12` genuinely gone, no longer counted.
+
+**New finding, sharpening the original staleness-clearing evidence**: the reconnect itself
+(`Disconnected` → `Connected` in the log) took **~1.16s**, not anywhere near the ~48s gap between
+processes that the original separate-process confirmation happened to have. Staleness was
+already gone on the very first `clips()` call after that ~1.16s reconnect completed — no
+additional wait beyond the reconnect itself. This answers a question the original finding left
+open: it's the *act* of reconnecting that clears the staleness, not elapsed time — a fast,
+sub-two-second `reconnect()` is exactly as effective as a 48-second gap between separate
+processes.
+
 ---
 
 ## Read verbs
@@ -767,10 +842,24 @@ of a real 19-clip-then-20-clip card, and `bytes_written` was computed as `353908
 (`842542612480 - 807151730688`, exact) — the first real-hardware confirmation of the positive
 path (exactly one new clip, both storage snapshots carrying an `active_device`). `record_stop`
 did not raise this run — the first real-hardware run of `record_stop` since
-`stop_verify_timeout_s` was added (the three runs that motivated the fix all predate it). The
-zero-new-clip and more-than-one-new-clip branches remain real-hardware-unexercised, as does
-`bytes_written`'s `None`-returning branches (`storage_before` omitted, or either snapshot
-missing an `active_device`) — this run always had a real active device on both sides.
+`stop_verify_timeout_s` was added (the three runs that motivated the fix all predate it). This
+run always had a real active device on both sides, so it alone didn't exercise the zero-new-clip,
+more-than-one-new-clip, or `bytes_written`'s `None`-returning branches.
+
+**Four of those five branches closed, `POCKET_6K_G2 v8.6`, 2026-08-24** —
+`tools/rest/verify_confirm_new_clip_edge_cases.py`, first run, all tests passed: zero new clips
+(no recording, a same-instant snapshot correctly found nothing new), `bytes_written=None` with
+`storage_before` omitted, `bytes_written=None` with a hand-built no-active-device
+`StorageState` passed as `storage_before` (legitimate — the method only inspects the shape of
+what it's given, never re-validates it was freshly fetched), and more-than-one-new-clip (two
+real clips recorded back-to-back sharing one before-snapshot, both ids named correctly in the
+raised error). **One branch remains genuinely real-hardware-unexercised, deliberately**:
+`bytes_written` staying `None` because the *live* second `storage_state()` call finds no
+active device — forcing it would need the SD card to report no active device at the exact
+moment right after a clip was written, and pulling the card would very likely fail the
+*first* `clips()` call instead of ever reaching this branch. See
+`tools/rest/verify_confirm_new_clip_edge_cases.py`'s own module docstring and
+`docs/rest/transport.md`'s matching section for the full reasoning and run write-up.
 
 ### `set_camera_format(codec, variant, resolution, fps)`
 
@@ -1682,6 +1771,45 @@ best-effort `clips()` check (`BMDStorageError`-swallowing, never raising) and lo
 that needs `/clips/list` to agree immediately should reconnect rather than poll within the
 same session.
 
+**The "no polling loop" call above was retracted one day later — `POCKET_6K_G2 v8.6`,
+2026-08-14, via `examples/rest_delete_clips_bulk.py`, both of its real runs.** Bulk-deleting
+three freshly-recorded clips in a loop hit `BMDVerificationError: still exists after DELETE`
+repeatedly — run 1: 1 of 3 clips failed (`clip_unique_id=4`, `3` and `5` succeeded); run 2: 2 of
+3 failed (`7` and `8`; only `6`, the first in the batch, succeeded). In both runs, **only the
+first clip deleted in the loop ever succeeded on the first immediate check** — every clip after
+it, deleted back-to-back with no natural gap between calls, hit a false "still exists" that had
+never appeared across either of this method's earlier *isolated* single-clip runs. This is the
+identical one-off camera-side propagation delay `delete_still()` had already been fixed for
+(above) — a tight loop with no inter-call gap exercises that same race far more reliably than a
+single standalone call ever did, which is exactly why two isolated real-hardware runs never
+caught it. **Fixed the same way**: the after-`DELETE` check now polls (`poll_interval_s`,
+default `0.5`s, bounded by `verify_timeout_s`) instead of checking once — the asymmetry this doc
+drew against `delete_still()`'s fix (`delete_clip()` "deliberately not changed... both
+real-hardware runs confirmed correctly on the first immediate check") no longer holds; that was
+correct given the evidence available at the time, and the new evidence changed it.
+
+**Third run, `POCKET_6K_G2 v8.6`, 2026-08-14 — the polling fix confirmed on real hardware.**
+`examples/rest_delete_clips_bulk.py`, rerun against the fix: all 3 clips (`clip_unique_id`
+`9`/`10`/`11`) deleted successfully — `delete_clips(): 3/3 deleted, 0 failed`, closing the gap
+the first two runs opened. The polling fix works in exactly the back-to-back-loop scenario that
+exposed the original race.
+
+**Bonus finding from the same run, closing a previously-open question**: the `/clips/list`
+same-session-staleness section above says clearing "within the same session without
+reconnecting... remains untested." This run tested it, incidentally. `clips()` immediately after
+deleting `clip_unique_id=9` still listed it (staleness, as expected); the equivalent check after
+`clip_unique_id=10` did *not* list it (no staleness that time); the check after `clip_unique_id=11`
+listed it again (staleness). The final "AFTER bulk deletion" inventory, printed under two seconds
+after the first `DELETE`, reported `3` clips — not `5` (all three stale, the pattern every earlier
+run showed) and not `2` (the true count). One stale entry had already cleared **within the same
+session, without reconnecting, in well under two seconds** — faster than the ~48-second
+reconnect-driven clearing observed earlier, and without a reconnect at all. This refines rather
+than contradicts the earlier finding: same-session staleness is real, but not fixed at "clears
+only via reconnect after ~48s" — it can also self-resolve within the same session, apparently on
+its own schedule, sometimes for one clip in a batch and not (yet) for another. Still purely
+informational; `delete_clip()`'s own file-level verification was and remains the authoritative
+signal throughout.
+
 ### `delete_still(path, *, confirm)` → `None`
 
 `DELETE`s one still's real `/mounts/.../Stills/...` path. **Real-hardware-confirmed
@@ -1741,10 +1869,11 @@ automated requests do not.
 
 **Fixed**: the after-`DELETE` check now polls (`poll_interval_s`, default `0.5`s, bounded by
 `verify_timeout_s`, mirroring `select_clip()`'s existing poll shape) instead of checking once.
-`delete_clip()` is deliberately **not** changed to match — both of its real-hardware runs
-confirmed correctly on the first immediate check, so widening it would be speculative rather
-than evidence-driven, the same asymmetry this codebase already keeps between `record_start`
-(single-shot, unchanged) and `record_stop` (widened, evidence-driven).
+`delete_clip()` was, at the time, deliberately left unchanged — both of its own real-hardware
+runs had confirmed correctly on the first immediate check, so widening it looked speculative
+rather than evidence-driven. **That reasoning was retracted one day later** — see
+`delete_clip()`'s own section below for the bulk-deletion run that found the identical race in
+that method too, and the same polling fix applied there.
 
 **Third run, `POCKET_6K_G2 v8.6`, 2026-08-13 — the polling fix confirmed on real hardware.** The
 same standalone script, rerun against the fix, deleted the still successfully with no
@@ -1764,6 +1893,196 @@ completed synchronously, the same shape `delete_clip()` showed for a clip file. 
 `/clips/list`-equivalent listing for stills to check for the kind of same-session staleness
 `delete_clip()` found and warns about — Stills can't be listed at all, confirmed or stale, so
 no analogous best-effort check is possible here.
+
+---
+
+## Downloading clips/stills to the PC (Phase 12)
+
+The mirror-image capability of Phase 11's deletion: copy a real clip or still off the camera's
+`/mounts/...` filesystem to local disk, instead of erasing it. Built on the same
+`resolve_active_mount()`/mount-path-construction machinery `delete_clip()`/`delete_still()`
+already use, so it inherits their single-confirmed-sample caveat about the real path shape
+unchanged (see `delete_clip()`'s docstring).
+
+**Status: both `download_clip()` and `download_still()` real-hardware-confirmed,
+`POCKET_6K_G2 v8.6`, 2026-08-14.** `examples/rest_download_still.py`'s first run
+(`examples/capture_photo.py`'s BLE-trigger + REST-confirm composition, then
+`guess_new_still_path()`, then the actual download) succeeded end to end: capture confirmed,
+guess matched (`A002_08141103_S010.braw`, trigger at PC wall-clock `11:04:17` — the guess's
+`minute_offsets` window found it on the first try, unlike the clock-skew failure `rest_delete_still.py`
+hit on 2026-08-13; the camera's clock now agrees with the operator's PC, closing that finding's
+practical impact for this session), and `download_still()` wrote `951400` bytes to
+`examples/downloads/A002_08141103_S010.braw` in well under a second (~106 MB/s over USB) with no
+`Content-Length` mismatch. `examples/rest_download_clip.py`'s first run also succeeded — reported
+by the operator as working with no defects found; see `download_clip()`'s own entry below.
+
+### `RestClient.download(path, dest, *, api_prefixed=False, chunk_size=1MiB, stall_timeout_s=30.0)` → `int`
+
+The new transport primitive underneath both methods below (`rest/client.py`). A real clip runs
+tens of GB (`rest_record_test_clip.py`'s real-hardware runs recorded a 600s clip whose
+`bytes_written` alone was ~35GB) — `get()`'s `.json()`/`.text()` body handling would either raise
+decoding binary content (the exact crash class `exists()` was built to avoid) or hold the whole
+file in memory trying not to. `download()` instead streams via `aiohttp`'s
+`resp.content.iter_chunked()`, writing each chunk with `asyncio.to_thread()` so a disk write
+never blocks the event loop (design principle 11).
+
+**Timeout is stall-based, not total-based** — the one place in this client that departs from
+`DEFAULT_TIMEOUT_S`'s flat 5s budget, because a 5s *total* cap is nonsensical for a multi-GB
+transfer whose total time is expected to be long. `stall_timeout_s` (default 30s) instead bounds
+*inactivity*: no data received for that long means genuinely stalled, implemented via
+`aiohttp.ClientTimeout(sock_connect=self.timeout_s, sock_read=stall_timeout_s)` with no `total`
+cap at all.
+
+Defaults to `api_prefixed=False` — the opposite of `get()`/`exists()`/`delete()` — since every
+real caller downloads a media file from the `/mounts/...` namespace, never a control-API JSON
+response.
+
+Returns the number of bytes written. Raises `BMDRestError` if the server's own `Content-Length`
+doesn't match what was actually received — a transport-level integrity check (design principle
+5's boundary: this is raw HTTP correctness, not camera semantics, so it lives in `client.py`
+rather than being layered on in `session.py` the way `delete_clip()`/`delete_still()`'s
+camera-semantic `exists()`-before/after checks are). `501`/non-2xx/connection-failure handling
+otherwise matches every other method's status contract.
+
+### `download_clip(clip_unique_id, dest_dir, *, overwrite=False)` → `Path`
+
+The mirror-image operation of `delete_clip()`, reusing its exact clip-resolution
+(`clips()`) and mount-path-construction logic — the same single-confirmed-sample "basename
+directly under the mount root, reel subdirectory dropped" rule applies unchanged here. Saves the
+file as `dest_dir/<remote filename>`.
+
+`dest_dir` must already exist (`ValueError` if not — this method never creates directories,
+matching `format_device()`/`delete_clip()`'s "do exactly what was asked, nothing implicit"
+discipline). If a file of that name already exists at the destination, raises `FileExistsError`
+unless `overwrite=True` — checked before any network request, so a naming collision never costs
+a wasted multi-GB transfer.
+
+This is a read from the camera plus a local write, not a camera-state write, so design principle
+3's dual-check discipline (echo/event primary, readback secondary) doesn't apply the same way it
+does to `record_start`/`set_camera_format`. `RestClient.download()`'s own `Content-Length`
+integrity check is this operation's verification.
+
+**Real-hardware-confirmed, `POCKET_6K_G2 v8.6`, 2026-08-14**, via `examples/rest_download_clip.py`:
+worked with no defects found.
+
+### `download_still(path, dest_dir, *, overwrite=False)` → `Path`
+
+The mirror-image operation of `delete_still()`: takes the full `/mounts/.../Stills/...` path
+directly rather than resolving one, for the identical reason `delete_still()` does — the Stills
+directory `500`s unconditionally on listing, so there is no `clips()`-equivalent to resolve
+against. Obtain `path` the same way `delete_still()`'s callers do — `guess_new_still_path()` or
+manual investigation. Same `dest_dir`/`overwrite` contract as `download_clip()`.
+
+**Real-hardware-confirmed, `POCKET_6K_G2 v8.6`, 2026-08-14**, via `examples/rest_download_still.py`:
+a real photo triggered over BLE, confirmed over REST, its path resolved by
+`guess_new_still_path()`, then downloaded — `951400` bytes written to a fresh local file, no
+`Content-Length` mismatch, `overwrite=True` path exercised (the example always passes it, so the
+`FileExistsError` branch specifically remains real-hardware-unexercised, though it's
+straightforward and unit-tested).
+
+---
+
+## Bulk clip deletion (Phase 13)
+
+### `delete_clips(clip_unique_ids, *, confirm)` → `BulkDeleteResult`
+
+Deletes multiple clips in one call. Adds no new HTTP surface — it's built entirely on top of
+`delete_clip()`, called once per id, so it inherits every one of that method's real-hardware-
+confirmed properties (the `GET`/`DELETE`/`GET` sequence, the single-confirmed-sample real-path
+construction, the known same-session `/clips/list` staleness and its best-effort `WARNING`)
+unchanged.
+
+**Status: real-hardware-confirmed end to end, `POCKET_6K_G2 v8.6`, 2026-08-14, three runs of
+`examples/rest_delete_clips_bulk.py`** — records several disposable throwaway clips first (the
+same self-contained safety pattern `rest_delete_clip.py` uses for one clip), so nothing it
+bulk-deletes is ever irreplaceable footage. `delete_clips()`'s own batching/validation/partial-
+failure logic worked exactly as designed across all three runs (bad-id-free batches, correct
+deduplication, every clip attempted regardless of an earlier one's outcome, an accurate
+`BulkDeleteResult` every time) — but the first two runs also surfaced a real defect **in
+`delete_clip()` itself**, not in `delete_clips()`: see `delete_clip()`'s own section above for
+the full write-up. In short, calling `delete_clip()` back-to-back in a loop (something no
+earlier real-hardware run of `delete_clip()` alone had ever done) exposed a false-negative
+verification race that a single isolated call had never hit, fixed by polling the after-`DELETE`
+check the same way `delete_still()` already was. **The third run confirmed the fix**: all 3
+clips deleted, `0` failed — see `delete_clip()`'s own section above for the full write-up,
+including a bonus finding about `/clips/list` staleness clearing faster than previously observed
+within that same run.
+
+`clip_unique_ids` is de-duplicated (order-preserving) before anything else — passing the same id
+twice can never attempt a second `DELETE` against an already-gone file.
+
+**Validated against a single fresh `clips()` call before any `DELETE` is sent.** Every id must be
+found, or `delete_clips()` raises `ValueError` naming every missing one and deletes nothing at
+all — deliberately stricter than looping `delete_clip()` yourself, where a bad id near the end of
+a large batch would only be discovered after everything before it was already, irreversibly,
+gone. This is `delete_clip()`'s own "resolve first, then act" discipline, applied to the whole
+batch atomically instead of one id.
+
+**After validation, one clip's failure does not stop the batch.** This is the one place this
+method's behavior diverges from every single-target write in this codebase: `delete_clip()`
+itself is binary (confirmed or raises), but a bulk operation's partial success is a real, expected
+outcome, not exceptional. Each id is deleted via `delete_clip(clip_unique_id, confirm=True)` in
+turn; a `BMDVerificationError`/`ValueError` from any one is caught, logged at `ERROR`, and
+recorded in `BulkDeleteResult.failed` (a `(clip_unique_id, exception)` pair) rather than raised.
+`delete_clips()` itself never raises once past the up-front validation — a caller that wants
+"raise if anything failed" checks `.failed` and raises itself.
+
+`confirm` has no default, mirroring `delete_clip()`'s exact gate, checked before the validating
+`clips()` call so an omitted/`False` value costs nothing.
+
+---
+
+## Bulk clip download (Phase 15)
+
+### `download_clips(clip_unique_ids, dest_dir, *, overwrite=False)` → `BulkDownloadResult`
+
+Downloads multiple clips in one call — the mirror-image of `delete_clips()` (Phase 13), same
+reasoning, built the same way: adds no new HTTP surface, entirely composed from `download_clip()`
+called once per id, so it inherits that method's real-hardware-confirmed clip-resolution/mount-
+path/`Content-Length`-integrity behavior unchanged. Unlike `delete_clips()`, downloading is
+non-destructive — nothing on the card changes, so there is no `confirm` gate here at all, matching
+`download_clip()`/`download_still()`'s own signatures.
+
+`clip_unique_ids` is de-duplicated (order-preserving) first, same as `delete_clips()`.
+
+**Validated up front, before any network request, in two parts:**
+
+1. `dest_dir` must already exist — `ValueError` if not, checked *before* the validating `clips()`
+   call, so a bad destination costs nothing, not even the read that resolves the ids.
+2. Every id must be found in a single fresh `clips()` call, or `download_clips()` raises
+   `ValueError` naming every missing one and downloads nothing at all — `delete_clip()`'s own
+   "resolve first, then act" discipline, applied to the whole batch atomically instead of one id,
+   extended here with the `dest_dir` check `delete_clips()` has no analogous need for.
+
+**After validation, one clip's failure does not stop the batch** — the same partial-success
+philosophy `delete_clips()` established: a bulk operation's partial success is a real, expected
+outcome, not exceptional, unlike a single `download_clip()` call's binary confirmed-or-raises
+contract. Each id is downloaded via `download_clip(clip_unique_id, dest_dir, overwrite=overwrite)`
+in turn; a `BMDRestError`/`BMDUnsupportedError`/`BMDConnectionError`/`FileExistsError`/`ValueError`
+from any one is caught, logged at `ERROR`, and recorded in `BulkDownloadResult.failed` (a
+`(clip_unique_id, exception)` pair) rather than raised. `download_clips()` itself never raises once
+past the up-front validation — a caller that wants "raise if anything failed" checks `.failed` and
+raises itself. The caught-exception set differs from `delete_clips()`'s
+`(BMDVerificationError, ValueError)` because it matches `download_clip()`'s own actual failure
+modes (transport/HTTP errors and local naming collisions), not camera-state verification errors.
+
+`BulkDownloadResult.downloaded` holds `(clip_unique_id, Path)` pairs rather than `Clip` objects the
+way `BulkDeleteResult.deleted` does — for a download, the new/interesting information is *where the
+file landed locally*, not clip metadata (which `download_clip()` doesn't return in the first
+place).
+
+**Status: real-hardware-confirmed, `POCKET_6K_G2 v8.6`, 2026-08-24**, first run of
+`examples/rest_download_clips_bulk.py` — an ordinary capability-demonstration script, not an
+edge-case-forcing one, so it lives under `examples/` rather than `tools/rest/`. The card had only
+two clips, so `clips[:MAX_CLIPS]` (default 3) naturally selected both: `clip_unique_id=4`
+(`A002_08120219_C002.braw`, `30931108` bytes) and `clip_unique_id=3`
+(`A002_08132258_C003.braw`, `85028752` bytes). `download_clips(): 2/2 downloaded, 0 failed` — no
+defects found, both files written correctly with no `Content-Length` mismatch. Aggregate:
+`115959860` bytes in `0.5s` (`248.5 MB/s`) — since the user's stated interest going forward is
+capabilities affecting SD card read/write speed, this script doubles as a rough real-world
+read-speed measurement, not just a correctness check; this first number is USB-transport-bound
+(both files together fit in half a second), not yet a measurement of a real multi-GB clip's
+sustained transfer rate.
 
 ---
 
@@ -1964,6 +2283,32 @@ asserting the `DELETE` target and its `api_prefixed=False`. No `clip_unique_id`-
 case (there's no id to look up) and no `/clips/list`-staleness case (there's no equivalent
 listing to check).
 
+`TestDeleteClips` (Phase 13) covers `delete_clips()` with a `_bulk_delete_client()` helper —
+`clips()` reporting every requested id, `storage_state()`/`mount_names()` for unambiguous mount
+resolution, and a stateful per-path `exists()` that toggles `True` -> `False` independently for
+each clip's own target path (so one clip's DELETE confirmation doesn't affect another's).
+Coverage: `ValueError` when `confirm=False`; `ValueError` when the id list is empty;
+de-duplication (`[1, 1, 2]` deletes each id exactly once); `ValueError` naming every missing id
+and sending zero `DELETE`s when any requested id isn't found; the full-success path (all
+requested clips returned in `.deleted`, `.failed` empty); a partial-failure path (one clip's
+`exists()` never returns `True`, so its `delete_clip()` call raises — confirming the batch still
+continues and deletes the clips after it, and that the failure is recorded in `.failed` as an
+exact `(clip_unique_id, exception)` pair rather than raised); and a `caplog`-based test
+confirming the `ERROR` log line for a failed clip.
+
+`TestDownloadClips` (Phase 15) covers `download_clips()` with a `_bulk_download_client()`
+helper — mirrors `_bulk_delete_client()` exactly, using `download_responses` (a per-path byte
+payload) in place of `exists_responses`. Coverage: `ValueError` when the id list is empty;
+`ValueError` when `dest_dir` doesn't exist — asserting `client.calls == []`, confirming
+`dest_dir` is checked before `clips()` is ever called, not just before the first `download()`;
+de-duplication (`[1, 1, 2]` downloads each id exactly once); `ValueError` naming every missing
+id and downloading zero clips when any requested id isn't found; the full-success path (every
+requested clip in `.downloaded` as a `(clip_unique_id, Path)` pair, `.failed` empty);
+a partial-failure path (`client.errors[path] = BMDRestError(...)` for one clip, confirming the
+batch still continues, downloads the rest, and records the failure in `.failed` rather than
+raising); `overwrite` passed through unchanged to every underlying `download_clip()` call; and a
+`caplog`-based test confirming the `ERROR` log line for a failed clip.
+
 ---
 
 ## What's deliberately out of scope
@@ -2025,7 +2370,14 @@ listing to check).
   `set_timeline(clip_unique_ids)` because there's nothing on this camera for it to mean;
   the playable set is always every clip sharing the current format, one format group at a
   time.
-- **No batch/bulk deletion.** `delete_clip()`/`delete_still()` (Phase 11, above) each take
-  exactly one target and require their own `confirm=True` — there is no "delete all clips
-  older than X" or similar convenience wrapper, deliberately: every deletion this codebase
-  performs is a single, individually-confirmed, irreversible act.
+- **No bulk still deletion, and no "delete by criteria."** `delete_clips()` (Phase 13, above)
+  covers explicit-list bulk deletion for clips only — `delete_still()` remains single-target
+  (stills have no `clips()`-equivalent listing to validate a batch against in the first place).
+  Neither takes a filter or predicate: there is no "delete all clips older than X" or similar
+  convenience wrapper, deliberately — every clip a caller wants deleted must be named by its own
+  `clip_unique_id`, explicitly, never inferred.
+- **No bulk still download, and no "download by criteria," for the identical reason.**
+  `download_clips()` (Phase 15, above) covers explicit-list bulk download for clips only —
+  `download_still()` remains single-target, same gap `delete_still()` already has. No filter or
+  predicate either: every clip a caller wants downloaded must be named by its own
+  `clip_unique_id`, explicitly, never inferred.

@@ -30,3 +30,10 @@ MOUNTS_PATH = "/mounts/"
 
 DEFAULT_TIMEOUT_S = 5.0
 DEFAULT_WS_TIMEOUT_S = 5.0
+
+# A real clip can run tens of GB (docs/rest/session.md's rest_record_test_clip.py
+# real-hardware runs) — DEFAULT_TIMEOUT_S is a total-request budget wholly
+# unsuited to streaming one, so RestClient.download() bounds the transfer by
+# per-chunk inactivity instead (aiohttp's ClientTimeout(sock_read=...)): no
+# data received for this many seconds means stalled, not merely slow.
+DEFAULT_DOWNLOAD_STALL_TIMEOUT_S = 30.0

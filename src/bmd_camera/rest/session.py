@@ -68,7 +68,9 @@ import asyncio
 import logging
 import re
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 try:
@@ -183,6 +185,40 @@ class RecordingResult:
 
     clip: Clip
     bytes_written: int | None
+
+
+@dataclass(frozen=True)
+class BulkDeleteResult:
+    """`delete_clips()`'s return value (Phase 13). A bulk operation's
+    partial-success outcome is a real, expected state, not exceptional —
+    unlike a single `delete_clip()`/`delete_still()` call, which is
+    binary (confirmed or raised), some clips in a batch can legitimately
+    fail (already gone, a transient network hiccup) while others succeed.
+    `delete_clips()` itself never raises once its up-front validation
+    passes; a caller that wants "raise if anything failed" checks
+    `.failed` and raises itself. `failed` entries are `(clip_unique_id,
+    exception)` pairs — the raw exception, not just its message, so a
+    caller with reason to care can inspect the real failure type."""
+
+    deleted: tuple[Clip, ...]
+    failed: tuple[tuple[int, Exception], ...]
+
+
+@dataclass(frozen=True)
+class BulkDownloadResult:
+    """`download_clips()`'s return value (Phase 15) — the mirror-image of
+    `BulkDeleteResult`, same reasoning: a bulk operation's partial-success
+    outcome is real and expected, not exceptional, unlike a single
+    `download_clip()` call. `download_clips()` itself never raises once
+    its up-front validation passes; a caller that wants "raise if
+    anything failed" checks `.failed` and raises itself. `downloaded`
+    entries are `(clip_unique_id, Path)` pairs rather than just a list of
+    paths, so a caller can tell which clip landed where without relying
+    on ordering; `failed` entries are `(clip_unique_id, exception)` pairs,
+    the same shape `BulkDeleteResult.failed` uses."""
+
+    downloaded: tuple[tuple[int, Path], ...]
+    failed: tuple[tuple[int, Exception], ...]
 
 
 @dataclass(frozen=True)
@@ -447,46 +483,14 @@ class RestCameraSession:
         self._client: RestClient | None = None
         self._router = RestEventRouter(on_event=self._on_event)
 
-        # `CameraState` (Phase 9) — every notification-driven field this
-        # session tracks continuously rather than fetching on demand,
-        # updated only from a real WS propertyValueChanged event (design
-        # principle 4), never inferred from a request this session itself
-        # made. See state.py's own module docstring for the full rationale;
-        # the properties immediately below expose each field under its
-        # original attribute name, so nothing outside this class needs to
-        # know `self.state` exists at all.
-        self.state = CameraState()
-        self._recording_stopped = asyncio.Event()
-
-        # wait_for_low_storage() arms _low_storage_min_* and waits on
-        # _low_storage_event, which _on_event() sets when a pushed
-        # last_known_storage value crosses the currently armed threshold.
-        # Ephemeral per-call arming, not camera state — stays here, not on
-        # CameraState.
-        self._low_storage_min_record_time_s: float | None = None
-        self._low_storage_min_space_bytes: int | None = None
-        self._low_storage_event = asyncio.Event()
-
-        # `_playback_write_in_flight`/`_transport_mode_write_in_flight` are
-        # the arm-adjacent guards _put_playback()/_set_transport_mode() hold
-        # True for the duration of their own dual-check — and,
-        # real-hardware-confirmed (POCKET_6K_G2 v8.6, 2026-08-05), _on_event
-        # checks *both* flags in *both* interrupt branches, not just the one
-        # matching a write's own property, since leaving "Output" mode was
-        # found to also push a side-effect PLAYBACK_PROPERTY speed=0 event a
-        # single-flag guard missed. See _on_event's own docstring for the
-        # full finding. `_expected_speed` is the speed value this session's
-        # own last confirmed enter_playback()/shuttle()/play()/pause() call
-        # actually set — _on_event flags any pushed speed that differs from
-        # it (not only a drop to 0), so a camera-initiated speed change that
-        # lands somewhere other than 0 is caught too. Set to 0.0 by
-        # enter_playback() (the camera opens paused) and updated by
-        # _put_playback() after each confirmed speed-changing write. All
-        # three are this session's own write-tracking bookkeeping, not
-        # camera-reported state — stay here, not on CameraState.
-        self._playback_write_in_flight = False
-        self._transport_mode_write_in_flight = False
-        self._expected_speed: float | None = None
+        # Every notification-driven/bookkeeping field this session tracks
+        # only from what's been observed on the current connection — never
+        # touched by connect()/disconnect() themselves, and never plain
+        # config. Initial values (and the full per-field rationale) live in
+        # _reset_connection_state(), shared by __init__ (this call) and
+        # reconnect() (Phase 14 — every connection after the first), so the
+        # literal initial-value list exists in exactly one place.
+        self._reset_connection_state()
 
     @property
     def base_url(self) -> str:
@@ -545,6 +549,56 @@ class RestCameraSession:
         `default_factory=asyncio.Event` gives every session its own Event
         instance; `enter_playback()` clears it, `_on_event` sets it."""
         return self.state.playback_interrupted
+
+    def _reset_connection_state(self) -> None:
+        """Every field `__init__` and `reconnect()` (Phase 14) share the
+        exact same initial value for — connection-scoped observation and
+        bookkeeping, never plain config (`host`/`profile`/the four
+        timeouts, none of which live here). Moved here unchanged from
+        `__init__` so `reconnect()` can reuse the identical literals
+        without duplicating this comment block.
+
+        `CameraState` — every notification-driven field this session
+        tracks continuously rather than fetching on demand, updated only
+        from a real WS `propertyValueChanged` event (design principle 4),
+        never inferred from a request this session itself made. See
+        `state.py`'s own module docstring for the full rationale; the
+        properties above expose each field under its original attribute
+        name, so nothing outside this class needs to know `self.state`
+        exists at all.
+        """
+        self.state = CameraState()
+        self._recording_stopped = asyncio.Event()
+
+        # wait_for_low_storage() arms _low_storage_min_* and waits on
+        # _low_storage_event, which _on_event() sets when a pushed
+        # last_known_storage value crosses the currently armed threshold.
+        # Ephemeral per-call arming, not camera state — stays here, not on
+        # CameraState.
+        self._low_storage_min_record_time_s: float | None = None
+        self._low_storage_min_space_bytes: int | None = None
+        self._low_storage_event = asyncio.Event()
+
+        # `_playback_write_in_flight`/`_transport_mode_write_in_flight` are
+        # the arm-adjacent guards _put_playback()/_set_transport_mode() hold
+        # True for the duration of their own dual-check — and,
+        # real-hardware-confirmed (POCKET_6K_G2 v8.6, 2026-08-05), _on_event
+        # checks *both* flags in *both* interrupt branches, not just the one
+        # matching a write's own property, since leaving "Output" mode was
+        # found to also push a side-effect PLAYBACK_PROPERTY speed=0 event a
+        # single-flag guard missed. See _on_event's own docstring for the
+        # full finding. `_expected_speed` is the speed value this session's
+        # own last confirmed enter_playback()/shuttle()/play()/pause() call
+        # actually set — _on_event flags any pushed speed that differs from
+        # it (not only a drop to 0), so a camera-initiated speed change that
+        # lands somewhere other than 0 is caught too. Set to 0.0 by
+        # enter_playback() (the camera opens paused) and updated by
+        # _put_playback() after each confirmed speed-changing write. All
+        # three are this session's own write-tracking bookkeeping, not
+        # camera-reported state — stay here, not on CameraState.
+        self._playback_write_in_flight = False
+        self._transport_mode_write_in_flight = False
+        self._expected_speed: float | None = None
 
     async def __aenter__(self) -> RestCameraSession:
         """Real-hardware-confirmed failure mode this guards against
@@ -635,6 +689,106 @@ class RestCameraSession:
             self._session = None
         self._client = None
         self._log.info("[%s] Disconnected", self.host)
+
+    async def reconnect(self) -> None:
+        """Force a fresh REST/WS connection on this same `RestCameraSession`
+        object (Phase 14) — tear down the current transport and rebuild
+        it, without a caller ever constructing or swapping to a second
+        session.
+
+        WHY THIS EXISTS: `GET /clips/list` (and
+        `storage_state().active_device.clip_count`) can go stale within
+        the same session immediately after `delete_clip()`/
+        `delete_clips()` — real-hardware-confirmed, `POCKET_6K_G2 v8.6`,
+        2026-08-13/14 (see `delete_clip()`'s own docstring for the full
+        trail). The only mechanism confirmed to *reliably* clear it is a
+        fresh reconnect — confirmed exactly **once**, via a genuinely
+        separate process (`examples/rest_read_state.py`, run standalone
+        roughly 48s after the deleting run's own process had already
+        exited — not twice, and not via this method). A later run also
+        found the staleness can sometimes self-clear within the same
+        session, unreconnected, in well under two seconds — one stale
+        entry out of three, a different and non-deterministic mechanism,
+        not something a caller can wait on with any confidence. Until
+        this method existed, "reconnect" meant discarding the whole
+        `RestCameraSession` object and starting a new script/process —
+        never exercised any other way anywhere in this repo.
+
+        NOT `/clips/list`-specific: any field this session tracks only
+        from notifications reflects only what arrived on the connection
+        that is about to be replaced. Design principle 4 requires state
+        to be updated only from a real observed notification, never
+        assumed — a reconnect is, definitionally, a gap where this
+        session observed nothing. Carrying pre-gap values across that gap
+        would silently break the same discipline that built them, so
+        every field `_reset_connection_state()` owns — `is_recording`,
+        `last_known_storage`, `_in_playback`, `last_known_play`,
+        `last_known_stop`, `playback_interrupted` (all on `CameraState`),
+        plus `_recording_stopped`, the low-storage arming trio, and the
+        playback/transport-mode write-in-flight trio — resets to its
+        `__init__` default *before* the new connection opens, so a
+        concurrent reader sees "unknown," never a stale value dressed up
+        as current. Plain config (`host`/`scheme`/`port`/`profile`/
+        `timeout_s`/`ws_timeout_s`/`verify_timeout_s`/
+        `stop_verify_timeout_s`) is untouched — none of it lives in
+        `_reset_connection_state()`.
+
+        MECHANICS: `await self.__aexit__()` then `await self.__aenter__()`
+        — reused verbatim, not duplicated. An injected (non-owned)
+        `aiohttp.ClientSession` is preserved and reused exactly as
+        `__aenter__`'s/`__aexit__`'s existing `_owns_session` contract
+        already dictates; only an owned session is closed and replaced.
+        `RestEventRouter.connect()` already auto-resubscribes every
+        property in its own `_subscribed` set on top of `__aenter__`'s
+        own 7 explicit `subscribe()` calls — 14 WS subscribe sends per
+        `reconnect()` instead of 7. Harmless (a duplicate subscribe is a
+        camera-side no-op) and bounded (does not compound across repeated
+        reconnects — `_subscribed` is a `set`) — left as-is rather than
+        reaching into the router's private `_subscribed` from here.
+        `RestEventRouter`'s own buffered event state (`_latest`/`_seq`/
+        `_armed_baseline`/`_armed_snapshot_value`) is also left untouched
+        for the same reason it's harmless: every write method's dual-check
+        calls `arm()` fresh, immediately before its own request, so a
+        leftover pre-reconnect buffered value is only ever a discarded
+        baseline, never surfaced to a caller directly.
+
+        CAVEATS:
+        - `playback_interrupted` becomes a brand-new `asyncio.Event`
+          instance (`CameraState()`'s own `default_factory`), not merely
+          cleared — a coroutine already blocked on the *old* Event object
+          (fetched from `session.playback_interrupted` before this call)
+          is not woken and never will be. Re-fetch the property after
+          `reconnect()` returns rather than holding a reference across it.
+        - This method takes no lock and does not check
+          `_playback_write_in_flight`/`_transport_mode_write_in_flight`
+          before tearing down the transport. Calling it concurrently with
+          any other in-flight write/wait on this same session is
+          undefined — the caller must serialize its own use of the
+          session around a `reconnect()` call, the same "no internal
+          locking, caller owns sequencing" discipline every write method
+          here already relies on. This is a genuinely new hazard:
+          previously, reconnecting always meant a separate process, so
+          nothing could ever race one.
+        - Safe to call before the first `__aenter__` — behaves like a
+          plain first connect.
+
+        STATUS: not yet real-hardware-run. Nothing in this repo has ever
+        constructed a second `RestCameraSession` or re-entered one within
+        a single process before this method — every existing example
+        script performs exactly one `async with RestCameraSession(...) as
+        session:` block. This method's mechanics were traced by hand
+        against `__aenter__`'s/`__aexit__`'s/`RestEventRouter.connect()`'s
+        actual behavior and covered by unit tests against a fake
+        transport, but the "reconnect clears `/clips/list` staleness"
+        claim itself remains only as strong as the separate-process
+        evidence above — confirming it through this exact method, in
+        process, on real hardware, is this method's own first
+        confirmation to close. See
+        `examples/rest_reconnect_after_delete.py`.
+        """
+        await self.__aexit__()
+        self._reset_connection_state()
+        await self.__aenter__()
 
     def _on_event(self, prop: str, value: Any) -> None:
         """Updates `is_recording`, `last_known_storage`,
@@ -2304,7 +2458,9 @@ class RestCameraSession:
 
     # ── Clip deletion (Phase 11) ────────────────────────────────────────────
 
-    async def delete_clip(self, clip_unique_id: int, *, confirm: bool) -> Clip:
+    async def delete_clip(
+        self, clip_unique_id: int, *, confirm: bool, poll_interval_s: float = 0.5
+    ) -> Clip:
         """Permanently delete one clip from the active storage device via
         `DELETE` on its real `/mounts/...` path — the capability
         `tools/rest/probe_endpoints.py`'s `--probe-mounts-delete`/
@@ -2361,20 +2517,34 @@ class RestCameraSession:
         (same honesty `resolve_mount_path()`'s own docstring already
         carries for the mount-selection side of this same problem).
 
-        Verification: `RestClient.exists()` before and after the `DELETE`
-        — never a plain `get()`, since a clip's body is binary
+        Verification: `RestClient.exists()` before, and polled after, the
+        `DELETE` — never a plain `get()`, since a clip's body is binary
         (`application/octet-stream`) and `exists()` is specifically built
         to never attempt to parse or decode it (see its docstring — the
         exact class of crash `probe_endpoints.py`'s `request()` hit on
         this same kind of file before being fixed). Raises
         `BMDVerificationError` before sending `DELETE` at all if the
         resolved path doesn't exist yet — the path assumption above was
-        wrong, or the clip is already gone — and raises
-        `BMDVerificationError` again if the path still exists immediately
-        after `DELETE`. No polling loop: the confirmed real sequence
-        completed synchronously (no observed "still processing"
-        intermediate state), unlike `format_device()`'s multi-second
-        full-card format.
+        wrong, or the clip is already gone.
+
+        **The after-check polls (`poll_interval_s`, default `0.5`s, up to
+        `verify_timeout_s`) rather than checking once — a real-hardware
+        finding, `POCKET_6K_G2 v8.6`, 2026-08-14** (`examples/
+        rest_delete_clips_bulk.py`, both of its real runs): this method's
+        own two earlier isolated real-hardware runs (below) never hit a
+        false "still exists" — but calling it back-to-back inside a bulk
+        loop did, repeatedly (1 of 3 clips in the first run, 2 of 3 in the
+        second, always the ones *not* first in the batch). This is the
+        exact same one-off camera-side propagation delay `delete_still()`
+        hit and was fixed for — an immediate single-shot check right
+        after `DELETE` can race it, and a tight loop with no natural gap
+        between calls hits that race far more often than a single
+        isolated call ever did. Fixed the same way: poll instead of check
+        once. This also **retracts this method's earlier claim that
+        widening `delete_clip()` to match `delete_still()`'s polling fix
+        would be "speculative rather than evidence-driven"** — the
+        evidence arrived, from `delete_clips()`'s own first real-hardware
+        exercise of this method in a loop.
 
         **Real-hardware-confirmed end to end, `POCKET_6K_G2 v8.6`,
         2026-08-13, twice** (`examples/rest_delete_clip.py`, `clip_unique_id`
@@ -2446,11 +2616,16 @@ class RestCameraSession:
         )
         await self._rest_client.delete(target, api_prefixed=False)
 
+        deadline = time.monotonic() + self.verify_timeout_s
         after = await self._rest_client.exists(target, api_prefixed=False)
+        while after and time.monotonic() < deadline:
+            await asyncio.sleep(poll_interval_s)
+            after = await self._rest_client.exists(target, api_prefixed=False)
         if after:
             raise BMDVerificationError(
                 f"[{self.host}] delete_clip(clip_unique_id={clip_unique_id}): {target!r} "
-                "still exists after DELETE — not confirmed deleted"
+                f"still exists after DELETE — not confirmed deleted within "
+                f"{self.verify_timeout_s}s"
             )
 
         self._log.info(
@@ -2575,3 +2750,300 @@ class RestCameraSession:
             )
 
         self._log.info("[%s] Still %s deleted and confirmed gone", self.host, path)
+
+    async def download_clip(
+        self, clip_unique_id: int, dest_dir: str | Path, *, overwrite: bool = False
+    ) -> Path:
+        """Download one clip's real `/mounts/...` file straight to a local
+        directory (Phase 12) — the mirror-image operation of `delete_clip()`,
+        reusing the same clip-resolution and mount-path-construction logic
+        (`clips()`, `resolve_active_mount()`, the single-confirmed-sample
+        "basename directly under the mount root, reel subdirectory dropped"
+        rule — see `delete_clip()`'s docstring for the full caveat, which
+        applies unchanged here).
+
+        `clip_unique_id` is resolved against a fresh `clips()` call, raising
+        `ValueError` if it isn't found — remember it is **not stable across
+        reconnects** (`docs/rest/session.md`'s `clips()` section).
+
+        The file is saved as `dest_dir/<remote filename>` — `dest_dir` must
+        already exist (`ValueError` if not) and be a directory; this method
+        never creates directories. If a file of that name already exists at
+        the destination, raises `FileExistsError` unless `overwrite=True` —
+        checked before any network request, so a naming collision never
+        costs a wasted multi-GB transfer.
+
+        The actual streaming and its integrity check (the downloaded byte
+        count must match the server's own `Content-Length`) are
+        `RestClient.download()`'s job — see that method's docstring. This
+        is a read from the camera plus a local write, not a camera-state
+        write, so design principle 3's dual-check discipline doesn't apply
+        the same way it does to `record_start`/`set_camera_format`/etc.;
+        the `Content-Length` check is this operation's equivalent
+        verification.
+
+        **Not yet real-hardware-run.** Unit-tested against a fake client
+        only — the first real run against an actual clip is what confirms
+        this, the same status every write capability in this codebase
+        carries before its first real-hardware pass.
+        """
+        matches = [clip for clip in await self.clips() if clip.clip_unique_id == clip_unique_id]
+        if not matches:
+            raise ValueError(
+                f"[{self.host}] No clip with clip_unique_id={clip_unique_id} in "
+                f"GET /clips/list on {self.profile.model_key} {self.profile.firmware}"
+            )
+        clip = matches[0]
+
+        mount_path = await resolve_active_mount(self)
+        filename = clip.file_path.rsplit("/", 1)[-1]
+        source = f"{mount_path}{filename}"
+
+        dest_dir = Path(dest_dir)
+        if not dest_dir.is_dir():
+            raise ValueError(f"dest_dir {dest_dir} does not exist or is not a directory")
+        dest = dest_dir / filename
+        if dest.exists() and not overwrite:
+            raise FileExistsError(f"{dest} already exists — pass overwrite=True to replace it")
+
+        self._log.info(
+            "[%s] Downloading clip %s (clip_unique_id=%s) -> %s",
+            self.host,
+            source,
+            clip_unique_id,
+            dest,
+        )
+        written = await self._rest_client.download(source, dest, api_prefixed=False)
+        self._log.info(
+            "[%s] Clip %s (clip_unique_id=%s) downloaded: %d bytes -> %s",
+            self.host,
+            source,
+            clip_unique_id,
+            written,
+            dest,
+        )
+        return dest
+
+    async def download_still(
+        self, path: str, dest_dir: str | Path, *, overwrite: bool = False
+    ) -> Path:
+        """Download one still's real `/mounts/.../Stills/...` file straight
+        to a local directory (Phase 12) — the mirror-image operation of
+        `delete_still()`.
+
+        **Unlike `download_clip()`, this method takes the full `/mounts/...`
+        path directly and never tries to resolve or guess one itself** — the
+        same reasoning `delete_still()`'s docstring gives in full: the
+        Stills directory `500`s unconditionally on listing, so there is no
+        `clips()`-equivalent to resolve a still against. Obtain `path` the
+        same way `delete_still()`'s callers do — `rest/media.py`'s
+        `guess_new_still_path()` or manual investigation.
+
+        The file is saved as `dest_dir/<basename of path>` — `dest_dir`
+        must already exist (`ValueError` if not); `FileExistsError` if the
+        destination filename is already taken, unless `overwrite=True`,
+        checked before any network request.
+
+        **Not yet real-hardware-run.** Unit-tested against a fake client
+        only.
+        """
+        dest_dir = Path(dest_dir)
+        if not dest_dir.is_dir():
+            raise ValueError(f"dest_dir {dest_dir} does not exist or is not a directory")
+        filename = path.rsplit("/", 1)[-1]
+        dest = dest_dir / filename
+        if dest.exists() and not overwrite:
+            raise FileExistsError(f"{dest} already exists — pass overwrite=True to replace it")
+
+        self._log.info("[%s] Downloading still %s -> %s", self.host, path, dest)
+        written = await self._rest_client.download(path, dest, api_prefixed=False)
+        self._log.info("[%s] Still %s downloaded: %d bytes -> %s", self.host, path, written, dest)
+        return dest
+
+    async def delete_clips(
+        self, clip_unique_ids: Sequence[int], *, confirm: bool
+    ) -> BulkDeleteResult:
+        """Permanently delete multiple clips (Phase 13) — built entirely
+        on top of `delete_clip()`, called once per id; adds no new HTTP
+        surface of its own.
+
+        `clip_unique_ids` is de-duplicated (order-preserving) before
+        anything else, so passing the same id twice can never attempt a
+        second `DELETE` against an already-gone file.
+
+        **Validated against a single fresh `clips()` call before any
+        `DELETE` is sent** — every id must be found, or this raises
+        `ValueError` naming every missing one and deletes nothing at all.
+        This is deliberately stricter than looping `delete_clip()`
+        yourself: a bad id at position 50 of a 50-clip batch must not be
+        discovered only after the first 49 are already, irreversibly,
+        gone. This is the same "resolve first, then act" discipline
+        `delete_clip()` itself uses, just applied to the whole batch
+        atomically instead of one id.
+
+        **After validation, one clip's failure does not stop the
+        batch.** Each id is deleted via `delete_clip(clip_unique_id,
+        confirm=True)` in turn; a `BMDVerificationError` or `ValueError`
+        from any single one is caught, logged at `ERROR`, and recorded in
+        the returned `BulkDeleteResult.failed` rather than raised —
+        deliberately, so one already-gone or transiently-unreachable clip
+        never silently prevents every clip after it in the same batch
+        from being attempted. This method itself never raises once past
+        the up-front validation; inspect `.failed` if you need to know
+        whether everything succeeded.
+
+        `confirm` has no default, mirroring `delete_clip()`'s exact
+        gate — checked before the validating `clips()` call, so an
+        omitted/`False` value costs nothing.
+
+        Inherits `delete_clip()`'s own caveats unchanged: the single-
+        confirmed-sample real-path construction, and the known
+        same-session `/clips/list` staleness (each `delete_clip()` call
+        still performs its own best-effort, non-raising staleness check
+        and `WARNING`).
+
+        **Not yet real-hardware-run.** Unit-tested against a fake client
+        only. `examples/rest_delete_clips_bulk.py` is the verification
+        script — records several disposable throwaway clips first, the
+        same self-contained safety pattern `rest_delete_clip.py` uses, so
+        nothing this script bulk-deletes is ever irreplaceable footage.
+        """
+        if not confirm:
+            raise ValueError(
+                "delete_clips() permanently erases these clips from the card — pass "
+                "confirm=True only once you are certain that is what you want."
+            )
+        deduped_ids = list(dict.fromkeys(clip_unique_ids))
+        if not deduped_ids:
+            raise ValueError("delete_clips() called with no clip_unique_ids")
+
+        all_clips = await self.clips()
+        by_id = {clip.clip_unique_id: clip for clip in all_clips}
+        missing = [cid for cid in deduped_ids if cid not in by_id]
+        if missing:
+            raise ValueError(
+                f"[{self.host}] No clip(s) with clip_unique_id in {missing} — found in "
+                f"GET /clips/list on {self.profile.model_key} {self.profile.firmware}. "
+                "Nothing was deleted."
+            )
+
+        deleted: list[Clip] = []
+        failed: list[tuple[int, Exception]] = []
+        for clip_unique_id in deduped_ids:
+            try:
+                deleted_clip = await self.delete_clip(clip_unique_id, confirm=True)
+            except (BMDVerificationError, ValueError) as exc:
+                self._log.error(
+                    "[%s] delete_clips(): clip_unique_id=%s failed: %s",
+                    self.host,
+                    clip_unique_id,
+                    exc,
+                )
+                failed.append((clip_unique_id, exc))
+            else:
+                deleted.append(deleted_clip)
+
+        self._log.info(
+            "[%s] delete_clips(): %d/%d deleted, %d failed",
+            self.host,
+            len(deleted),
+            len(deduped_ids),
+            len(failed),
+        )
+        return BulkDeleteResult(deleted=tuple(deleted), failed=tuple(failed))
+
+    async def download_clips(
+        self, clip_unique_ids: Sequence[int], dest_dir: str | Path, *, overwrite: bool = False
+    ) -> BulkDownloadResult:
+        """Download multiple clips (Phase 15) — the mirror-image of
+        `delete_clips()`, built entirely on top of `download_clip()`,
+        called once per id; adds no new HTTP surface of its own.
+
+        `clip_unique_ids` is de-duplicated (order-preserving) before
+        anything else, so passing the same id twice can never attempt a
+        second download of an already-downloaded file.
+
+        **Validated before any network request is sent**: `dest_dir` must
+        already exist (`ValueError` if not — checked once, up front,
+        rather than letting the first clip's own `download_clip()` call
+        discover it), and every id must be found in a single fresh
+        `clips()` call (`ValueError` naming every missing one, nothing
+        downloaded at all otherwise). This is `delete_clips()`'s own
+        "resolve first, then act" discipline, extended here to `dest_dir`
+        too — a bad id or a nonexistent destination directory should
+        never be discovered only after some of a large batch has already
+        downloaded, wasting real time and bandwidth on a doomed batch.
+
+        **After validation, one clip's failure does not stop the
+        batch** — the same reasoning `delete_clips()` uses: a bulk
+        operation's partial success is a real, expected outcome, not
+        exceptional. Each id is downloaded via
+        `download_clip(clip_unique_id, dest_dir, overwrite=overwrite)` in
+        turn; a `BMDRestError`, `BMDUnsupportedError`,
+        `BMDConnectionError`, `FileExistsError`, or `ValueError` from any
+        single one is caught, logged at `ERROR`, and recorded in the
+        returned `BulkDownloadResult.failed` rather than raised. This
+        method itself never raises once past the up-front validation;
+        inspect `.failed` if you need to know whether everything
+        succeeded.
+
+        Inherits `download_clip()`'s own caveats unchanged: the single-
+        confirmed-sample real-path construction, the `Content-Length`
+        integrity check as this operation's verification (design
+        principle 3's dual-check discipline doesn't apply the same way
+        here — this is a read from the camera plus a local write, not a
+        camera-state write), and `overwrite`'s exact per-file semantics.
+
+        **Not yet real-hardware-run.** Unit-tested against a fake client
+        only. `examples/rest_download_clips_bulk.py` is the verification
+        script — non-destructive, downloads whatever clips already
+        happen to be on the card.
+        """
+        deduped_ids = list(dict.fromkeys(clip_unique_ids))
+        if not deduped_ids:
+            raise ValueError("download_clips() called with no clip_unique_ids")
+
+        dest_dir = Path(dest_dir)
+        if not dest_dir.is_dir():
+            raise ValueError(f"dest_dir {dest_dir} does not exist or is not a directory")
+
+        all_clips = await self.clips()
+        by_id = {clip.clip_unique_id: clip for clip in all_clips}
+        missing = [cid for cid in deduped_ids if cid not in by_id]
+        if missing:
+            raise ValueError(
+                f"[{self.host}] No clip(s) with clip_unique_id in {missing} — found in "
+                f"GET /clips/list on {self.profile.model_key} {self.profile.firmware}. "
+                "Nothing was downloaded."
+            )
+
+        downloaded: list[tuple[int, Path]] = []
+        failed: list[tuple[int, Exception]] = []
+        for clip_unique_id in deduped_ids:
+            try:
+                dest = await self.download_clip(clip_unique_id, dest_dir, overwrite=overwrite)
+            except (
+                BMDRestError,
+                BMDUnsupportedError,
+                BMDConnectionError,
+                FileExistsError,
+                ValueError,
+            ) as exc:
+                self._log.error(
+                    "[%s] download_clips(): clip_unique_id=%s failed: %s",
+                    self.host,
+                    clip_unique_id,
+                    exc,
+                )
+                failed.append((clip_unique_id, exc))
+            else:
+                downloaded.append((clip_unique_id, dest))
+
+        self._log.info(
+            "[%s] download_clips(): %d/%d downloaded, %d failed",
+            self.host,
+            len(downloaded),
+            len(deduped_ids),
+            len(failed),
+        )
+        return BulkDownloadResult(downloaded=tuple(downloaded), failed=tuple(failed))

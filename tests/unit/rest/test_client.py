@@ -14,15 +14,61 @@ import pytest
 from bmd_camera.rest.client import RestClient
 from bmd_camera.rest.exceptions import BMDConnectionError, BMDRestError, BMDUnsupportedError
 
+_UNSET = object()  # distinguishes "content_length not passed" from an explicit None
+
+
+class FakeContent:
+    """Stands in for `aiohttp.ClientResponse.content` — just enough of the
+    streaming interface for `RestClient.download()`'s
+    `resp.content.iter_chunked()` call. `raises`, if given, is raised
+    partway through iteration (after `raise_after` chunks), simulating a
+    stalled transfer mid-download."""
+
+    def __init__(
+        self,
+        chunks: list[bytes] | None = None,
+        *,
+        raises: Exception | None = None,
+        raise_after: int = 0,
+    ):
+        self._chunks = chunks or []
+        self._raises = raises
+        self._raise_after = raise_after
+
+    def iter_chunked(self, chunk_size: int):
+        async def generator():
+            for i, chunk in enumerate(self._chunks):
+                if self._raises is not None and i == self._raise_after:
+                    raise self._raises
+                yield chunk
+            if self._raises is not None and self._raise_after >= len(self._chunks):
+                raise self._raises
+
+        return generator()
+
 
 class FakeResponse:
     """Stands in for `aiohttp.ClientResponse` as an async context manager."""
 
-    def __init__(self, status: int, *, json_body=None, text_body: str | None = None):
+    def __init__(
+        self,
+        status: int,
+        *,
+        json_body=None,
+        text_body: str | None = None,
+        chunks: list[bytes] | None = None,
+        content_length: int | None = _UNSET,
+        content_raises: Exception | None = None,
+        content_raise_after: int = 0,
+    ):
         self.status = status
         self._json_body = json_body
         self._text_body = text_body
-        self.content_length = 0 if json_body is None and not text_body else 1
+        if content_length is not _UNSET:
+            self.content_length = content_length  # may be None — "no header at all"
+        else:
+            self.content_length = 0 if json_body is None and not text_body else 1
+        self.content = FakeContent(chunks, raises=content_raises, raise_after=content_raise_after)
 
     async def json(self):
         if self._json_body is None:
@@ -301,6 +347,110 @@ class TestWriteVerbs:
         await client.delete("/mounts/A001-sd1/clip.braw", api_prefixed=False)
 
         assert session.calls[0]["url"] == "http://cam.local/mounts/A001-sd1/clip.braw"
+
+
+class TestDownload:
+    """RestClient.download() — streams a GET response body straight to
+    disk. Real clips run tens of GB, so this must never buffer the whole
+    body in memory the way get()'s .json()/.text() handling does."""
+
+    @pytest.mark.asyncio
+    async def test_streams_chunks_to_dest_file(self, tmp_path):
+        chunks = [b"hello ", b"world", b"!"]
+        session = FakeSession(FakeResponse(200, chunks=chunks, content_length=12))
+        client = RestClient("cam.local", session=session)
+        dest = tmp_path / "clip.braw"
+
+        written = await client.download("/mounts/A001-sd1/clip.braw", dest)
+
+        assert written == 12
+        assert dest.read_bytes() == b"hello world!"
+
+    @pytest.mark.asyncio
+    async def test_api_prefixed_false_is_the_default(self, tmp_path):
+        """Unlike get()/exists()/delete(), download() defaults to
+        api_prefixed=False — every real caller downloads a media file from
+        /mounts/..., never a control-API JSON response."""
+        session = FakeSession(FakeResponse(200, chunks=[b"x"], content_length=1))
+        client = RestClient("cam.local", session=session)
+
+        await client.download("/mounts/A001-sd1/clip.braw", tmp_path / "clip.braw")
+
+        assert session.calls[0]["url"] == "http://cam.local/mounts/A001-sd1/clip.braw"
+
+    @pytest.mark.asyncio
+    async def test_api_prefixed_true_can_be_requested(self, tmp_path):
+        session = FakeSession(FakeResponse(200, chunks=[b"x"], content_length=1))
+        client = RestClient("cam.local", session=session)
+
+        await client.download("/some/api/path", tmp_path / "out.bin", api_prefixed=True)
+
+        assert session.calls[0]["url"] == "http://cam.local/control/api/v1/some/api/path"
+
+    @pytest.mark.asyncio
+    async def test_no_content_length_skips_the_integrity_check(self, tmp_path):
+        session = FakeSession(FakeResponse(200, chunks=[b"abc"], content_length=None))
+        client = RestClient("cam.local", session=session)
+
+        written = await client.download("/mounts/A001-sd1/clip.braw", tmp_path / "clip.braw")
+
+        assert written == 3
+
+    @pytest.mark.asyncio
+    async def test_501_raises_bmd_unsupported_error(self, tmp_path):
+        session = FakeSession(FakeResponse(501, json_body={"error": "Not implemented"}))
+        client = RestClient("cam.local", session=session)
+
+        with pytest.raises(BMDUnsupportedError, match="501"):
+            await client.download("/mounts/A001-sd1/clip.braw", tmp_path / "clip.braw")
+
+    @pytest.mark.asyncio
+    async def test_404_raises_bmd_rest_error(self, tmp_path):
+        session = FakeSession(FakeResponse(404, json_body={"error": "not found"}))
+        client = RestClient("cam.local", session=session)
+
+        with pytest.raises(BMDRestError, match="404"):
+            await client.download("/mounts/A001-sd1/missing.braw", tmp_path / "clip.braw")
+
+    @pytest.mark.asyncio
+    async def test_content_length_mismatch_raises_bmd_rest_error(self, tmp_path):
+        session = FakeSession(FakeResponse(200, chunks=[b"abc"], content_length=999))
+        client = RestClient("cam.local", session=session)
+
+        with pytest.raises(BMDRestError, match="Content-Length=999"):
+            await client.download("/mounts/A001-sd1/clip.braw", tmp_path / "clip.braw")
+
+    @pytest.mark.asyncio
+    async def test_stall_raises_bmd_connection_error(self, tmp_path):
+        session = FakeSession(
+            FakeResponse(
+                200,
+                chunks=[b"abc", b"def"],
+                content_length=6,
+                content_raises=TimeoutError(),
+                content_raise_after=1,
+            )
+        )
+        client = RestClient("cam.local", session=session)
+
+        with pytest.raises(BMDConnectionError, match="stalled"):
+            await client.download("/mounts/A001-sd1/clip.braw", tmp_path / "clip.braw")
+
+    @pytest.mark.asyncio
+    async def test_no_session_raises_bmd_connection_error(self, tmp_path):
+        client = RestClient("cam.local", session=None)
+        client._session = None
+
+        with pytest.raises(BMDConnectionError, match="no open session"):
+            await client.download("/mounts/A001-sd1/clip.braw", tmp_path / "clip.braw")
+
+    @pytest.mark.asyncio
+    async def test_connection_error_raises_bmd_connection_error(self, tmp_path):
+        session = FakeSession(raises=aiohttp.ClientConnectionError("refused"))
+        client = RestClient("cam.local", session=session)
+
+        with pytest.raises(BMDConnectionError, match="cam.local"):
+            await client.download("/mounts/A001-sd1/clip.braw", tmp_path / "clip.braw")
 
 
 class TestSessionLifecycle:
