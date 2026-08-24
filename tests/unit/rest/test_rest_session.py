@@ -37,6 +37,7 @@ from bmd_camera.rest.session import (
     TRANSPORT_MODE_PROPERTY,
     WORKINGSET_PROPERTY,
     BulkDeleteResult,
+    BulkDownloadResult,
     Clip,
     Format,
     RestCameraSession,
@@ -3923,6 +3924,155 @@ class TestDeleteClips:
 
         with caplog.at_level(logging.ERROR):
             await session.delete_clips([1, 2], confirm=True)
+
+        messages = [record.message for record in caplog.records]
+        assert any("clip_unique_id=2" in m and "failed" in m for m in messages)
+
+
+BULK_DOWNLOAD_MOUNT_NAME = "A001-sd1"
+
+
+def _bulk_download_client(*clip_unique_ids: int, content: bytes = b"fake clip bytes"):
+    """Everything download_clips() needs for a multi-clip batch — clips()
+    reporting every requested id, storage_state()/mount_names() so
+    resolve_active_mount() resolves unambiguously, and a download_responses
+    entry (same content for every clip, by default) for each clip's real
+    target path. Mirrors _bulk_delete_client() exactly, swapping
+    exists_responses for download_responses."""
+    download_responses = {
+        f"/mounts/{BULK_DOWNLOAD_MOUNT_NAME}/clip_{cid}.braw": content for cid in clip_unique_ids
+    }
+    return FakeRestClient(
+        {
+            "/clips/list": _clip_list_body(*clip_unique_ids),
+            "/media/workingset": {
+                "size": 1,
+                "workingset": [
+                    {
+                        "activeDisk": True,
+                        "clipCount": len(clip_unique_ids),
+                        "deviceName": "sd0",
+                        "index": 0,
+                        "remainingRecordTime": 100,
+                        "remainingSpace": 123,
+                        "totalSpace": 456,
+                        "volume": "A001",
+                    }
+                ],
+            },
+            "/media/active": {"deviceName": "sd0", "workingsetIndex": 0},
+            "/mounts/": [{"name": BULK_DOWNLOAD_MOUNT_NAME, "type": "directory"}],
+        },
+        download_responses=download_responses,
+    )
+
+
+class TestDownloadClips:
+    """download_clips() — built entirely on download_clip(), called once
+    per id. Not yet real-hardware-run; unit-tested against a fake client
+    only."""
+
+    @pytest.mark.asyncio
+    async def test_raises_value_error_when_no_ids(self, tmp_path):
+        client = _bulk_download_client(1, 2)
+        session = make_session(make_profile(), client=client)
+
+        with pytest.raises(ValueError, match="no clip_unique_ids"):
+            await session.download_clips([], tmp_path)
+
+        assert client.download_calls == []
+
+    @pytest.mark.asyncio
+    async def test_raises_value_error_when_dest_dir_missing(self, tmp_path):
+        client = _bulk_download_client(1, 2)
+        session = make_session(make_profile(), client=client)
+
+        with pytest.raises(ValueError, match="does not exist"):
+            await session.download_clips([1, 2], tmp_path / "nonexistent")
+
+        assert client.download_calls == []
+        assert client.calls == []  # dest_dir checked before any clips() call
+
+    @pytest.mark.asyncio
+    async def test_deduplicates_ids(self, tmp_path):
+        client = _bulk_download_client(1, 2)
+        session = make_session(make_profile(), client=client)
+
+        result = await session.download_clips([1, 1, 2], tmp_path)
+
+        assert [cid for cid, _ in result.downloaded] == [1, 2]
+        assert client.download_calls == [
+            (f"/mounts/{BULK_DOWNLOAD_MOUNT_NAME}/clip_1.braw", str(tmp_path / "clip_1.braw")),
+            (f"/mounts/{BULK_DOWNLOAD_MOUNT_NAME}/clip_2.braw", str(tmp_path / "clip_2.braw")),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_raises_value_error_and_downloads_nothing_when_an_id_is_missing(self, tmp_path):
+        client = _bulk_download_client(1)  # only clip_unique_id=1 exists
+        session = make_session(make_profile(), client=client)
+
+        with pytest.raises(ValueError, match=r"\[2\]"):
+            await session.download_clips([1, 2], tmp_path)
+
+        assert client.download_calls == []
+
+    @pytest.mark.asyncio
+    async def test_full_flow_success_all_downloaded(self, tmp_path):
+        client = _bulk_download_client(1, 2, 3, content=b"clip bytes")
+        session = make_session(make_profile(), client=client)
+
+        result = await session.download_clips([1, 2, 3], tmp_path)
+
+        assert isinstance(result, BulkDownloadResult)
+        assert [cid for cid, _ in result.downloaded] == [1, 2, 3]
+        assert result.failed == ()
+        for cid, dest in result.downloaded:
+            assert dest == tmp_path / f"clip_{cid}.braw"
+            assert dest.read_bytes() == b"clip bytes"
+
+    @pytest.mark.asyncio
+    async def test_partial_failure_continues_and_is_reported(self, tmp_path):
+        client = _bulk_download_client(1, 2, 3)
+        client.errors[f"/mounts/{BULK_DOWNLOAD_MOUNT_NAME}/clip_2.braw"] = BMDRestError(
+            "simulated transfer failure", status=500, body=None
+        )
+        session = make_session(make_profile(), client=client)
+
+        result = await session.download_clips([1, 2, 3], tmp_path)
+
+        assert [cid for cid, _ in result.downloaded] == [1, 3]
+        assert len(result.failed) == 1
+        failed_id, failed_exc = result.failed[0]
+        assert failed_id == 2
+        assert isinstance(failed_exc, BMDRestError)
+        # clip 3 must still be attempted even though clip 2 failed first.
+        assert client.download_calls == [
+            (f"/mounts/{BULK_DOWNLOAD_MOUNT_NAME}/clip_1.braw", str(tmp_path / "clip_1.braw")),
+            (f"/mounts/{BULK_DOWNLOAD_MOUNT_NAME}/clip_2.braw", str(tmp_path / "clip_2.braw")),
+            (f"/mounts/{BULK_DOWNLOAD_MOUNT_NAME}/clip_3.braw", str(tmp_path / "clip_3.braw")),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_overwrite_passed_through_to_each_download_clip_call(self, tmp_path):
+        client = _bulk_download_client(1, content=b"fresh")
+        session = make_session(make_profile(), client=client)
+        (tmp_path / "clip_1.braw").write_bytes(b"stale")
+
+        result = await session.download_clips([1], tmp_path, overwrite=True)
+
+        assert (tmp_path / "clip_1.braw").read_bytes() == b"fresh"
+        assert result.failed == ()
+
+    @pytest.mark.asyncio
+    async def test_logs_error_for_each_failed_clip(self, caplog, tmp_path):
+        client = _bulk_download_client(1, 2)
+        client.errors[f"/mounts/{BULK_DOWNLOAD_MOUNT_NAME}/clip_2.braw"] = BMDRestError(
+            "simulated transfer failure", status=500, body=None
+        )
+        session = make_session(make_profile(), client=client)
+
+        with caplog.at_level(logging.ERROR):
+            await session.download_clips([1, 2], tmp_path)
 
         messages = [record.message for record in caplog.records]
         assert any("clip_unique_id=2" in m and "failed" in m for m in messages)

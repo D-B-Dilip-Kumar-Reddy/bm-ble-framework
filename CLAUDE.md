@@ -587,6 +587,35 @@ src/bmd_camera/
                               # happened to have — it's the act of reconnecting that clears the
                               # staleness, not elapsed time. See docs/rest/session.md's
                               # "Connection lifecycle" section.
+                              # download_clips(clip_unique_ids, dest_dir, *, overwrite=False) ->
+                              # BulkDownloadResult (Phase 15) — bulk clip download, the
+                              # mirror-image of delete_clips() (Phase 13), built the same way:
+                              # entirely on top of download_clip() called once per id, adds no
+                              # new HTTP surface. Non-destructive, so no confirm gate, unlike
+                              # delete_clips(). Validated up front in two parts: dest_dir must
+                              # already exist (ValueError if not, checked before the validating
+                              # clips() call so a bad destination costs nothing, not even a
+                              # network read) and every id must be found in one fresh clips()
+                              # call (ValueError naming every missing one, downloads nothing —
+                              # delete_clip()'s "resolve first, then act" discipline, applied to
+                              # the whole batch). clip_unique_ids is de-duplicated
+                              # (order-preserving) first. After validation, one clip's failure
+                              # does not stop the batch, same partial-success philosophy as
+                              # delete_clips(): each failure
+                              # (BMDRestError/BMDUnsupportedError/BMDConnectionError/
+                              # FileExistsError/ValueError, matching download_clip()'s own
+                              # failure modes rather than delete_clip()'s
+                              # BMDVerificationError/ValueError) is caught, logged at ERROR, and
+                              # recorded in BulkDownloadResult.failed rather than raised.
+                              # BulkDownloadResult.downloaded holds (clip_unique_id, Path) pairs
+                              # rather than Clip objects, since the new information for a
+                              # download is where the file landed locally, not clip metadata
+                              # (which download_clip() doesn't return either). No bulk
+                              # download_still() — stills have no clips()-equivalent listing to
+                              # validate a batch against, the same reason delete_clips() has no
+                              # bulk still-deletion counterpart. Not yet real-hardware-run — see
+                              # examples/rest_download_clips_bulk.py and docs/rest/session.md's
+                              # Phase 15 section.
     mapping.py                 # Codec name derivation between the BLE profile's vocabulary
                               # and REST's own spelling — confirmed strings always win
                               # (design principle 1); this is a fallback seed only.
@@ -1047,6 +1076,17 @@ examples/
                             # — the first time this codebase exercised an in-process,
                             # same-object reconnect at all. See docs/rest/session.md's
                             # "Connection lifecycle" section.
+  rest_download_clips_bulk.py  # Phase 15 — RestCameraSession.download_clips(). Non-destructive,
+                            # like rest_download_clip.py: downloads whatever clips already
+                            # happen to be on the card (the first MAX_CLIPS, default 3, or an
+                            # explicit CLIP_UNIQUE_IDS list) rather than recording disposable
+                            # ones first — there is nothing to protect against here the way
+                            # rest_delete_clips_bulk.py's self-recorded-clips design protects
+                            # against deleting real footage. Reports both per-clip and aggregate
+                            # (total bytes / total elapsed) throughput, doubling as a rough
+                            # real-world SD card read-speed measurement given the user's stated
+                            # interest in card read/write performance going forward. Not yet
+                            # real-hardware-run. See docs/rest/session.md's Phase 15 section.
   playback.py               # (planned)
 
 tests/

@@ -2032,6 +2032,55 @@ recorded in `BulkDeleteResult.failed` (a `(clip_unique_id, exception)` pair) rat
 
 ---
 
+## Bulk clip download (Phase 15)
+
+### `download_clips(clip_unique_ids, dest_dir, *, overwrite=False)` → `BulkDownloadResult`
+
+Downloads multiple clips in one call — the mirror-image of `delete_clips()` (Phase 13), same
+reasoning, built the same way: adds no new HTTP surface, entirely composed from `download_clip()`
+called once per id, so it inherits that method's real-hardware-confirmed clip-resolution/mount-
+path/`Content-Length`-integrity behavior unchanged. Unlike `delete_clips()`, downloading is
+non-destructive — nothing on the card changes, so there is no `confirm` gate here at all, matching
+`download_clip()`/`download_still()`'s own signatures.
+
+`clip_unique_ids` is de-duplicated (order-preserving) first, same as `delete_clips()`.
+
+**Validated up front, before any network request, in two parts:**
+
+1. `dest_dir` must already exist — `ValueError` if not, checked *before* the validating `clips()`
+   call, so a bad destination costs nothing, not even the read that resolves the ids.
+2. Every id must be found in a single fresh `clips()` call, or `download_clips()` raises
+   `ValueError` naming every missing one and downloads nothing at all — `delete_clip()`'s own
+   "resolve first, then act" discipline, applied to the whole batch atomically instead of one id,
+   extended here with the `dest_dir` check `delete_clips()` has no analogous need for.
+
+**After validation, one clip's failure does not stop the batch** — the same partial-success
+philosophy `delete_clips()` established: a bulk operation's partial success is a real, expected
+outcome, not exceptional, unlike a single `download_clip()` call's binary confirmed-or-raises
+contract. Each id is downloaded via `download_clip(clip_unique_id, dest_dir, overwrite=overwrite)`
+in turn; a `BMDRestError`/`BMDUnsupportedError`/`BMDConnectionError`/`FileExistsError`/`ValueError`
+from any one is caught, logged at `ERROR`, and recorded in `BulkDownloadResult.failed` (a
+`(clip_unique_id, exception)` pair) rather than raised. `download_clips()` itself never raises once
+past the up-front validation — a caller that wants "raise if anything failed" checks `.failed` and
+raises itself. The caught-exception set differs from `delete_clips()`'s
+`(BMDVerificationError, ValueError)` because it matches `download_clip()`'s own actual failure
+modes (transport/HTTP errors and local naming collisions), not camera-state verification errors.
+
+`BulkDownloadResult.downloaded` holds `(clip_unique_id, Path)` pairs rather than `Clip` objects the
+way `BulkDeleteResult.deleted` does — for a download, the new/interesting information is *where the
+file landed locally*, not clip metadata (which `download_clip()` doesn't return in the first
+place).
+
+**Status: not yet real-hardware-run.** The real-hardware verification script is
+`examples/rest_download_clips_bulk.py` — an ordinary capability-demonstration script, not an
+edge-case-forcing one, so it lives under `examples/` rather than `tools/rest/`. It downloads the
+first `MAX_CLIPS` (default 3) clips `clips()` reports (or an explicit `CLIP_UNIQUE_IDS` list) and
+reports both per-clip and aggregate throughput (total bytes / total elapsed time) — since the
+user's stated interest going forward is capabilities affecting SD card read/write speed, this
+script doubles as a rough real-world read-speed measurement, not just a correctness check.
+
+---
+
 ## Codec name mapping (`rest/mapping.py`)
 
 `RestCameraSession`'s write path (`set_camera_format`) takes profile *names* — the
@@ -2242,6 +2291,19 @@ continues and deletes the clips after it, and that the failure is recorded in `.
 exact `(clip_unique_id, exception)` pair rather than raised); and a `caplog`-based test
 confirming the `ERROR` log line for a failed clip.
 
+`TestDownloadClips` (Phase 15) covers `download_clips()` with a `_bulk_download_client()`
+helper — mirrors `_bulk_delete_client()` exactly, using `download_responses` (a per-path byte
+payload) in place of `exists_responses`. Coverage: `ValueError` when the id list is empty;
+`ValueError` when `dest_dir` doesn't exist — asserting `client.calls == []`, confirming
+`dest_dir` is checked before `clips()` is ever called, not just before the first `download()`;
+de-duplication (`[1, 1, 2]` downloads each id exactly once); `ValueError` naming every missing
+id and downloading zero clips when any requested id isn't found; the full-success path (every
+requested clip in `.downloaded` as a `(clip_unique_id, Path)` pair, `.failed` empty);
+a partial-failure path (`client.errors[path] = BMDRestError(...)` for one clip, confirming the
+batch still continues, downloads the rest, and records the failure in `.failed` rather than
+raising); `overwrite` passed through unchanged to every underlying `download_clip()` call; and a
+`caplog`-based test confirming the `ERROR` log line for a failed clip.
+
 ---
 
 ## What's deliberately out of scope
@@ -2308,4 +2370,9 @@ confirming the `ERROR` log line for a failed clip.
   (stills have no `clips()`-equivalent listing to validate a batch against in the first place).
   Neither takes a filter or predicate: there is no "delete all clips older than X" or similar
   convenience wrapper, deliberately — every clip a caller wants deleted must be named by its own
+  `clip_unique_id`, explicitly, never inferred.
+- **No bulk still download, and no "download by criteria," for the identical reason.**
+  `download_clips()` (Phase 15, above) covers explicit-list bulk download for clips only —
+  `download_still()` remains single-target, same gap `delete_still()` already has. No filter or
+  predicate either: every clip a caller wants downloaded must be named by its own
   `clip_unique_id`, explicitly, never inferred.

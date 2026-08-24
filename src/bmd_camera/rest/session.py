@@ -205,6 +205,23 @@ class BulkDeleteResult:
 
 
 @dataclass(frozen=True)
+class BulkDownloadResult:
+    """`download_clips()`'s return value (Phase 15) — the mirror-image of
+    `BulkDeleteResult`, same reasoning: a bulk operation's partial-success
+    outcome is real and expected, not exceptional, unlike a single
+    `download_clip()` call. `download_clips()` itself never raises once
+    its up-front validation passes; a caller that wants "raise if
+    anything failed" checks `.failed` and raises itself. `downloaded`
+    entries are `(clip_unique_id, Path)` pairs rather than just a list of
+    paths, so a caller can tell which clip landed where without relying
+    on ordering; `failed` entries are `(clip_unique_id, exception)` pairs,
+    the same shape `BulkDeleteResult.failed` uses."""
+
+    downloaded: tuple[tuple[int, Path], ...]
+    failed: tuple[tuple[int, Exception], ...]
+
+
+@dataclass(frozen=True)
 class DeviceInfo:
     """`GET /media/devices/{deviceName}`'s body (Phase 10) — per the
     official BMD REST spec (`MediaControl.yaml`), `state` is one of
@@ -2934,3 +2951,99 @@ class RestCameraSession:
             len(failed),
         )
         return BulkDeleteResult(deleted=tuple(deleted), failed=tuple(failed))
+
+    async def download_clips(
+        self, clip_unique_ids: Sequence[int], dest_dir: str | Path, *, overwrite: bool = False
+    ) -> BulkDownloadResult:
+        """Download multiple clips (Phase 15) — the mirror-image of
+        `delete_clips()`, built entirely on top of `download_clip()`,
+        called once per id; adds no new HTTP surface of its own.
+
+        `clip_unique_ids` is de-duplicated (order-preserving) before
+        anything else, so passing the same id twice can never attempt a
+        second download of an already-downloaded file.
+
+        **Validated before any network request is sent**: `dest_dir` must
+        already exist (`ValueError` if not — checked once, up front,
+        rather than letting the first clip's own `download_clip()` call
+        discover it), and every id must be found in a single fresh
+        `clips()` call (`ValueError` naming every missing one, nothing
+        downloaded at all otherwise). This is `delete_clips()`'s own
+        "resolve first, then act" discipline, extended here to `dest_dir`
+        too — a bad id or a nonexistent destination directory should
+        never be discovered only after some of a large batch has already
+        downloaded, wasting real time and bandwidth on a doomed batch.
+
+        **After validation, one clip's failure does not stop the
+        batch** — the same reasoning `delete_clips()` uses: a bulk
+        operation's partial success is a real, expected outcome, not
+        exceptional. Each id is downloaded via
+        `download_clip(clip_unique_id, dest_dir, overwrite=overwrite)` in
+        turn; a `BMDRestError`, `BMDUnsupportedError`,
+        `BMDConnectionError`, `FileExistsError`, or `ValueError` from any
+        single one is caught, logged at `ERROR`, and recorded in the
+        returned `BulkDownloadResult.failed` rather than raised. This
+        method itself never raises once past the up-front validation;
+        inspect `.failed` if you need to know whether everything
+        succeeded.
+
+        Inherits `download_clip()`'s own caveats unchanged: the single-
+        confirmed-sample real-path construction, the `Content-Length`
+        integrity check as this operation's verification (design
+        principle 3's dual-check discipline doesn't apply the same way
+        here — this is a read from the camera plus a local write, not a
+        camera-state write), and `overwrite`'s exact per-file semantics.
+
+        **Not yet real-hardware-run.** Unit-tested against a fake client
+        only. `examples/rest_download_clips_bulk.py` is the verification
+        script — non-destructive, downloads whatever clips already
+        happen to be on the card.
+        """
+        deduped_ids = list(dict.fromkeys(clip_unique_ids))
+        if not deduped_ids:
+            raise ValueError("download_clips() called with no clip_unique_ids")
+
+        dest_dir = Path(dest_dir)
+        if not dest_dir.is_dir():
+            raise ValueError(f"dest_dir {dest_dir} does not exist or is not a directory")
+
+        all_clips = await self.clips()
+        by_id = {clip.clip_unique_id: clip for clip in all_clips}
+        missing = [cid for cid in deduped_ids if cid not in by_id]
+        if missing:
+            raise ValueError(
+                f"[{self.host}] No clip(s) with clip_unique_id in {missing} — found in "
+                f"GET /clips/list on {self.profile.model_key} {self.profile.firmware}. "
+                "Nothing was downloaded."
+            )
+
+        downloaded: list[tuple[int, Path]] = []
+        failed: list[tuple[int, Exception]] = []
+        for clip_unique_id in deduped_ids:
+            try:
+                dest = await self.download_clip(clip_unique_id, dest_dir, overwrite=overwrite)
+            except (
+                BMDRestError,
+                BMDUnsupportedError,
+                BMDConnectionError,
+                FileExistsError,
+                ValueError,
+            ) as exc:
+                self._log.error(
+                    "[%s] download_clips(): clip_unique_id=%s failed: %s",
+                    self.host,
+                    clip_unique_id,
+                    exc,
+                )
+                failed.append((clip_unique_id, exc))
+            else:
+                downloaded.append((clip_unique_id, dest))
+
+        self._log.info(
+            "[%s] download_clips(): %d/%d downloaded, %d failed",
+            self.host,
+            len(downloaded),
+            len(deduped_ids),
+            len(failed),
+        )
+        return BulkDownloadResult(downloaded=tuple(downloaded), failed=tuple(failed))
