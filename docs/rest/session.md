@@ -1932,6 +1932,22 @@ successful still's consistent `~1MB` (matching `rest_download_still.py`'s own ea
 real-still size) — not addressed by this fix, and not understood; recorded rather than silently
 dropped.
 
+**Third run (`STILL_COUNT=10`, with `INTER_STILL_DELAY_S` in place) confirmed the cooldown fix
+completely** — 10/10 stills confirmed and guessed correctly, no more alternating failures. But
+the "secondary anomaly" from the second run turned out to be the dominant behavior, not a one-off:
+**9 of the 10 downloads came back as exactly `4096` bytes**, and only the one still whose guess
+happened to take measurably longer (an extra ~1s, from an index-search fallback landing) got a
+real, correctly-sized file (`988264` bytes). Working hypothesis: `wait_for_new_still()`'s `mtime`
+signal fires as soon as the Stills entry is *created*, not once the camera has finished *writing*
+the real payload into it — downloading immediately after confirmation, as this script always has,
+was catching a small placeholder/header allocation instead of the finished file, and only
+succeeded when something incidentally delayed the download long enough for the real write to land
+first. Fixed by retrying the download itself — `MIN_STILL_BYTES` (`100_000`),
+`DOWNLOAD_MAX_ATTEMPTS` (`5`), `DOWNLOAD_RETRY_DELAY_S` (`1.0`) — whenever the result is smaller
+than the threshold, chosen with an order-of-magnitude margin above the one observed placeholder
+size and below every observed real one, but from limited evidence (one resolution/codec only).
+Not yet confirmed itself.
+
 **Second run, same camera/firmware/day, closes the gap — with a real defect found and fixed.**
 A small standalone script (bypassing `guess_new_still_path()` entirely, calling `delete_still()`
 directly against the real path the operator had obtained by other means,

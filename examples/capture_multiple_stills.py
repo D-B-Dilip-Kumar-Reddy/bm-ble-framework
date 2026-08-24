@@ -74,8 +74,28 @@ down more precisely than that — not yet confirmed itself. A secondary,
 separate, unexplained anomaly from the same run: still 1's download was
 only 4096 bytes (every other successful still downloaded a consistent
 ~1MB, matching `rest_download_still.py`'s own earlier confirmed real-still
-size) — not addressed by this fix, and not understood; noted rather than
-silently dropped.
+size) — not addressed by this fix at the time, and not understood.
+
+THIRD REAL-HARDWARE RUN (2026-08-24, `STILL_COUNT=10`, with the delay
+above) confirmed `INTER_STILL_DELAY_S` fixed the confirm-timeout problem
+completely — 10/10 stills confirmed and guessed correctly, no more
+alternating failures. But the "secondary anomaly" from the second run
+turned out to be the dominant behavior, not a one-off: 9 of the 10
+downloads came back as exactly 4096 bytes, and only the one still whose
+guess happened to take measurably longer (an extra ~1s, from an
+index-search fallback) downloaded a real, correctly-sized file (`988264`
+bytes). Working hypothesis: `wait_for_new_still()`'s `mtime` signal fires
+as soon as the Stills entry is *created*, not once the camera has finished
+*writing* the real payload into it — downloading immediately after
+confirmation, as this script always has, was catching a small placeholder/
+header allocation instead of the finished file, and only succeeded when
+something incidentally delayed the download long enough for the real
+write to land first. Fixed by retrying the download itself, up to
+`DOWNLOAD_MAX_ATTEMPTS` times with `DOWNLOAD_RETRY_DELAY_S` between tries,
+whenever the result is smaller than `MIN_STILL_BYTES` — a threshold chosen
+with generous margin above the one observed placeholder size and below
+every observed real one, but from limited evidence (one resolution/codec
+only). Not yet confirmed itself.
 
 WHAT THIS SCRIPT CHANGES ON THE CAMERA: takes `STILL_COUNT` real photos,
 downloads each to `DEST_DIR`, then deletes each from the card. Net effect
@@ -98,10 +118,12 @@ guessed, downloaded, deleted, or where it stopped and why) is tracked and
 printed in a final summary — this is why the script is not just three
 single-still scripts pasted in a loop.
 
-STATUS: `exclude`, the held-open BLE connection, and the adaptive index
-search are real-hardware-confirmed working as designed (second run above).
-`INTER_STILL_DELAY_S` is new and unconfirmed — this script's first fully
-successful run (all `STILL_COUNT` stills completing) is that confirmation.
+STATUS: `exclude`, the held-open BLE connection, the adaptive index search,
+and `INTER_STILL_DELAY_S` are all real-hardware-confirmed working as
+designed (second and third runs above). The download-size retry
+(`MIN_STILL_BYTES`/`DOWNLOAD_MAX_ATTEMPTS`/`DOWNLOAD_RETRY_DELAY_S`) is new
+and unconfirmed — this script's first run downloading every still at a
+real, full size (not just 4096 bytes) is that confirmation.
 
 Usage:
     python examples/capture_multiple_stills.py
@@ -156,6 +178,29 @@ HINTED_INDEX_WINDOW = 5
 # ">1s (back-to-back failed), <15s (always recovers by the retry)" — not
 # pinned down more precisely than that. See module docstring.
 INTER_STILL_DELAY_S = 3.0
+
+# Third real-hardware run (2026-08-24, STILL_COUNT=10, with the delay
+# above): all 10 confirmed and guessed correctly, but 9 of 10 downloads
+# came back as exactly 4096 bytes — a suspiciously round, unvarying size,
+# against every previously-confirmed real still in this codebase landing
+# in the ~950KB-1MB range. Working hypothesis: `wait_for_new_still()`'s
+# mtime signal fires as soon as the file is *created* (a small placeholder/
+# header allocation), not once the camera has finished *writing* the real
+# payload into it — downloading immediately after confirmation, as this
+# script always has, can catch that placeholder instead of the finished
+# file. The one still that DID download a real size (988264 bytes) also
+# happened to be the one still whose guess took measurably longer (an
+# extra ~1s, likely from an index-search fallback) — consistent with "more
+# elapsed time before downloading -> more likely the write had finished."
+# MIN_STILL_BYTES gives an intentionally generous margin: an order of
+# magnitude above the observed placeholder size and an order of magnitude
+# below every observed real one, so it should not mistake a genuinely
+# smaller real still (a resolution/codec this session hasn't seen) for a
+# placeholder — but this is a threshold chosen from limited evidence
+# (`.braw` stills at one resolution/codec only), not a confirmed rule.
+MIN_STILL_BYTES = 100_000
+DOWNLOAD_MAX_ATTEMPTS = 5
+DOWNLOAD_RETRY_DELAY_S = 1.0
 
 
 def _format_bytes(num_bytes: int) -> str:
@@ -259,14 +304,32 @@ async def capture_one_still(
     guessed_paths.append(guessed_path)
     print(f"  [{index}] Guessed: {guessed_path}")
 
-    try:
-        dest = await rest_session.download_still(guessed_path, DEST_DIR, overwrite=True)
-    except (ValueError, FileExistsError, BMDVerificationError) as exc:
+    dest: Path | None = None
+    size = 0
+    for attempt in range(1, DOWNLOAD_MAX_ATTEMPTS + 1):
+        try:
+            dest = await rest_session.download_still(guessed_path, DEST_DIR, overwrite=True)
+        except (ValueError, FileExistsError, BMDVerificationError) as exc:
+            outcome.stopped_at = "download"
+            outcome.error = str(exc)
+            return outcome
+        size = dest.stat().st_size
+        if size >= MIN_STILL_BYTES:
+            break
+        print(
+            f"  [{index}] Download suspiciously small ({size} bytes) on attempt "
+            f"{attempt}/{DOWNLOAD_MAX_ATTEMPTS} — camera may still be writing the file, "
+            f"retrying …"
+        )
+        if attempt < DOWNLOAD_MAX_ATTEMPTS:
+            await asyncio.sleep(DOWNLOAD_RETRY_DELAY_S)
+    else:
         outcome.stopped_at = "download"
-        outcome.error = str(exc)
+        outcome.error = (
+            f"file stayed suspiciously small ({size} bytes) after {DOWNLOAD_MAX_ATTEMPTS} attempts"
+        )
         return outcome
     outcome.downloaded_to = dest
-    size = dest.stat().st_size
     print(f"  [{index}] Downloaded: {dest} ({_format_bytes(size)})")
 
     try:

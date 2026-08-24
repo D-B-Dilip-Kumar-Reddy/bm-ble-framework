@@ -1167,7 +1167,23 @@ examples/
                             # 1's download was only 4096 bytes against every other successful
                             # still's consistent ~1MB (matching rest_download_still.py's own
                             # earlier confirmed size) -- not addressed by this fix, noted
-                            # rather than silently dropped.
+                            # rather than silently dropped. THIRD RUN (STILL_COUNT=10, with
+                            # the delay) confirmed the cooldown fix completely -- 10/10
+                            # confirmed and guessed -- but the "secondary anomaly" turned out
+                            # to be the dominant behavior: 9/10 downloads came back as exactly
+                            # 4096 bytes, and only the one still whose guess happened to take
+                            # measurably longer (an index-search fallback, ~1s extra) got a
+                            # real, correctly-sized file. Working hypothesis:
+                            # wait_for_new_still()'s mtime signal fires on file *creation*, not
+                            # once the camera finishes *writing* the real payload -- downloading
+                            # immediately after confirmation was catching a placeholder/header
+                            # allocation instead of the finished file. Fixed by retrying the
+                            # download itself (MIN_STILL_BYTES=100_000,
+                            # DOWNLOAD_MAX_ATTEMPTS=5, DOWNLOAD_RETRY_DELAY_S=1.0) whenever the
+                            # result is suspiciously small, an order of magnitude of margin
+                            # above the one observed placeholder size and below every observed
+                            # real one -- but from limited evidence (one resolution/codec
+                            # only). Not yet confirmed itself.
   playback.py               # (planned)
 
 tests/
