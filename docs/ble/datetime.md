@@ -1,10 +1,12 @@
 # BLE Date/Time (Category 7 — Real Time Clock)
 
-**Status: UNCONFIRMED — investigation just opened, no real-hardware capture
-taken yet.** Nothing in this document beyond §1 is anything more than [spec]
-transcription. Design principle 6 forbids trusting a category/parameter/
-payload encoding until a real sniffer capture confirms it on the specific
-camera and firmware — that capture is the next concrete step, not yet taken.
+**Status: UNCONFIRMED.** One real-hardware capture taken (§4) but inconclusive
+by construction — no value was actually committed on the camera during that
+run, so it produced no Category 7 signal either way. Nothing in this document
+beyond §1 is anything more than [spec] transcription. Design principle 6
+forbids trusting a category/parameter/payload encoding until a real sniffer
+capture confirms it on the specific camera and firmware, with an actual
+committed change on the wire — that capture is the next concrete step.
 
 ## 1. Why this category, and why now
 
@@ -104,7 +106,36 @@ before/after values so the payload can be decoded against known ground
 truth, the same way every other settings family in this codebase was
 transcribed.
 
-## 4. Planned shape once confirmed
+## 4. Run 1 — inconclusive by construction, `POCKET_6K_G2 v8.6`, 2026-08-24
+
+First real-hardware run of `tools/sniffers/sniffer_datetime.py`. All four
+windows captured cleanly, but the operator deliberately did **not** press the
+SETUP menu's "Update" button after adjusting on-screen values — a correct,
+cautious call given this is the first real-hardware exercise of a category
+this codebase has never touched, but it means no `ASSIGN` was ever actually
+sent to the camera in any window. Every window shows only
+`(INCOMING_CONTROL, category=0x09, parameter=0x00)` — the already-documented
+ambient ~1/s telemetry (`docs/ble/protocol.md`, Category 9, "mostly ambient
+~1/s telemetry, meaning unknown") whose payload jitters constantly regardless
+of operator action, unrelated to Category 7. **Zero Category 7 activity in
+any window.**
+
+This is not evidence against Category 7 reporting — it's the expected result
+of nothing having actually changed. A `CAMERA_REPORT` announces a *changed*
+value; scrolling the on-screen wheels without confirming never committed
+anything for the camera to report. As a secondary data point, the operator's
+screenshot at capture time showed the camera's own manually-set clock reading
+`2026-08-24 11:19, UTC+05:30` — close to real time, unlike the earlier
+`~37h`-skew case (`rest/media.py`'s module docstring) — so this specific unit
+is not currently a live skew case, though that's incidental to this
+investigation, not something this run set out to test.
+
+**Next step**: repeat with one real committed change (press "Update" after
+adjusting a field, e.g. bump the minute by one) so a genuine `ASSIGN`
+actually lands on the camera — reversible, non-destructive, only affects the
+camera's own clock display and future media timestamps.
+
+## 5. Planned shape once confirmed
 
 Not yet built — recorded here so the plan is visible before any code exists,
 per this project's practice of documenting design intent honestly rather than
