@@ -5,9 +5,9 @@ date/time/timezone changes (run 2) and a full connect-time state burst (run
 3, 48 notifications across 7 categories, 16 Lens parameters alone) — and
 none observed any Category 7 activity on `INCOMING_CONTROL` at all. Nothing
 in this document beyond §1 is anything more than [spec] transcription. Every
-passive avenue tried so far has come back empty; the one thing not yet
-tried is an active controller-initiated write (§6), which is the current
-next step.
+passive avenue is exhausted; `tools/control/send_datetime_command.py` (§7)
+is the active write probe built as the next step — not yet run against real
+hardware.
 
 ## 1. Why this category, and why now
 
@@ -221,7 +221,42 @@ only, never a controller-initiated write.
 
 **Next step, per the plan recorded in §5: the active `ASSIGN` write probe.**
 
-## 7. Planned shape once confirmed
+## 7. `tools/control/send_datetime_command.py` — the active write probe
+
+Built after run 3 exhausted every passive avenue. Sends a Category 7
+`ASSIGN` write directly — `--parameter timezone` (plain `int32` minutes
+offset, the least ambiguous target, recommended first) or `--parameter rtc`
+(`int32 x2`, time+date, both BCD per [spec]; date is packed unambiguously as
+`YYYYMMDD`, but the [spec] doesn't specify time's exact BCD shape beyond
+"BCD" — this tool's own hypothesis is `HHMMSS00`, by analogy with this
+codebase's confirmed `TIMECODE` `HH:MM:SS:FF` shape with the frame digits
+zeroed; `--raw-elements` bypasses the guess entirely). `--parameter
+language` is not implemented — no string-payload encoder exists in this
+codebase yet, and the other two targets are lower-ambiguity first
+candidates.
+
+**This tool's payload encoding has zero real capture evidence behind it —
+unlike every other active-write tool in this codebase**, which builds
+CANDIDATE writes from a profile transcribed off an external RE document.
+Nothing it sends should be copied into a profile without independent
+real-hardware confirmation (its own module docstring says this explicitly).
+A generous `--connect-settle-seconds` default (`12.0`, over the ~8.6s burst
+duration §6 observed) avoids the write and its capture window landing inside
+the connect-time state dump.
+
+Ground truth is the camera's own SETUP > Date/Time screen, watched by the
+operator before and after the send — not any BLE echo, matching
+`send_settings_command.py`'s established stance for a write with no
+reliable confirmation channel. If the screen changes to match what was sent
+but `category=0x07` still never appears in the capture (as in every prior
+run), that would show this category is write-only with no BLE-observable
+echo at all — the same shape as the photo-capture trigger
+(`docs/ble/photo_capture.md`): a real, working write with no way to confirm
+it over the wire.
+
+**Status: not yet run against real hardware.**
+
+## 8. Planned shape once confirmed
 
 Not yet built — recorded here so the plan is visible before any code exists,
 per this project's practice of documenting design intent honestly rather than
